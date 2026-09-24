@@ -1,0 +1,26 @@
+/*
+ * "Inter 92" is Inter with size-adjust: 92%. Declared sizes render 8%
+ * smaller; the type scale in tokens.css is tuned against that. Roboto Mono
+ * and the display serif have no size-adjust, so mono text sitting next to
+ * Inter body copy is declared 1px smaller to match optically.
+ *
+ * The display face, "Martina Plantijn", is a licensed webfont the hosted
+ * edition declares in its own stylesheet; this edition's --font-display
+ * stack falls back to Georgia.
+ */
+@font-face {
+  font-family: "Inter 92";
+  src: url("/fonts/Inter-400-700.woff2") format("woff2");
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+  size-adjust: 92%;
+}
+
+@font-face {
+  font-family: "Roboto Mono";
+  src: url("/fonts/RobotoMono-400-500.woff2") format("woff2");
+  font-weight: 400 500;
+  font-style: normal;
+  font-display: swap;
+}

@@ -1,0 +1,3 @@
+/* Single stylesheet entry: the design system owns every screen. */
+@layer theme, base, components, utilities;
+@import "./ds/styles/index.css";

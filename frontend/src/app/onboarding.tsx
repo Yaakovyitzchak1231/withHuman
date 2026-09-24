@@ -1,0 +1,1946 @@
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useNavigate, useRouter } from "@tanstack/react-router";
+import { Badge } from "@/ds/components/badge";
+import { Button } from "@/ds/components/button";
+import { Callout } from "@/ds/components/callout";
+import {
+  Card,
+  CardBody,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/ds/components/card";
+import { Checkbox } from "@/ds/components/checkbox";
+import { useCopyToClipboard } from "@/ds/components/copy-button";
+import { CodeBlock } from "@/ds/components/code-block";
+import {
+  CONDITION_OPERATORS,
+  describeField,
+  summarizeCondition,
+  type ConditionNode,
+} from "@/ds/components/condition-builder";
+import { ConfirmDialog } from "@/ds/components/confirm-dialog";
+import { EmptyState } from "@/ds/components/empty-state";
+import { HoverCard, HoverCardBody, HoverCardTitle } from "@/ds/components/hover-card";
+import { List, ListRowContent } from "@/ds/components/list";
+import { LoadingDots } from "@/ds/components/loading-dots";
+import { Markdown } from "@/ds/components/markdown";
+import { RadioCard, RadioGroup } from "@/ds/components/radio-group";
+import { Spinner } from "@/ds/components/spinner";
+import { Table } from "@/ds/components/table";
+import { TextArea } from "@/ds/components/text-area";
+import { TextField } from "@/ds/components/text-field";
+import { Stepper, type Step } from "@/ds/components/stepper";
+import { useSidebar } from "@/ds/components/sidebar-reopen";
+import { useToast } from "@/ds/components/toast";
+import { Page } from "@/ds/components/page";
+import {
+  AgentIcon,
+  AlertIcon,
+  CheckIcon,
+  ChevronDownIcon,
+  CopyIcon,
+  MessageIcon,
+  MonitorIcon,
+  ToolIcon,
+  XCircleIcon,
+} from "@/ds/icons";
+import { cn } from "@/ds/lib/cn";
+import { api, RequestError } from "../api";
+import type {
+  OnboardingAssistantAction,
+  OnboardingAssistantMessage,
+  OnboardingBegin,
+  OnboardingDetection,
+  OnboardingDiscoveryError,
+  OnboardingInstallResult,
+  OnboardingMCPServer,
+  OnboardingOutcome,
+  OnboardingSession,
+  OnboardingStatus,
+  OnboardingTool,
+  RequestApprovalPipelineRevision,
+} from "../types";
+import type { ChannelsPage } from "./contact-channels";
+import { ladderLines } from "./notification-rules";
+import { OnboardingApprovals, useTestActivity, type TestActivity } from "./onboarding-approvals";
+import { OnboardingContactStep, OnboardingRulesStep } from "./onboarding-contacts";
+import { useOnboardingSession } from "./use-onboarding-session";
+import { useRuntimeConfig } from "./use-runtime-config";
+import { useTitle } from "./use-title";
+
+/* Display names for the runtime keys the CLI reports. */
+const RUNTIME_NAMES: Record<string, string> = {
+  "claude-code": "Claude Code",
+  codex: "Codex",
+  openclaw: "OpenClaw",
+  pi: "Pi",
+  hermes: "Hermes Agent",
+  deepseek: "DeepSeek Harness",
+};
+
+export function runtimeName(key: string): string {
+  return RUNTIME_NAMES[key] ?? key;
+}
+
+/* A dev server has no release to download, so the one command builds
+ * the CLI from the checkout and runs its setup instead. */
+function devSetupCommand(origin: string, code: string): string {
+  /* ~/.local/bin needs no sudo, and the hooks the CLI installs carry its
+   * absolute path, so it does not need to be on PATH. */
+  return `cd withhuman_core && mkdir -p ~/.local/bin && sh scripts/private-go-modules.sh go build -o ~/.local/bin/withhuman ./cmd/withhuman-cli && ~/.local/bin/withhuman onboard --url ${origin} --code ${code}`;
+}
+
+const STEPS: Array<Pick<Step, "title" | "description">> = [
+  {
+    title: "Install the CLI",
+    description: "One command on the machine the agent runs on.",
+  },
+  { title: "Choose agents", description: "Pick the runtimes the CLI found." },
+  { title: "Get notified", description: "Choose where withHuman reaches you." },
+  { title: "Set rules", description: "Decide how each request reaches you." },
+  {
+    title: "Choose tools",
+    description: "Say which calls wait for you, in your own words.",
+  },
+  { title: "Test it", description: "Trigger a gated call and decide it here." },
+];
+
+/* Which step a session sits on; 6 is past the end. The CLI's phases
+ * map straight to steps; the person's own steps are the stamps on the
+ * session: the notification pair (steps 2 and 3) until channels_set_at,
+ * the rules step (4) from then until rules_set_at once the hooks are in,
+ * then the test. Provisioning and enrolment take a few seconds and stay
+ * on the rules step, behind its connection line, rather than being a
+ * step of their own. */
+function stepIndex(session: OnboardingSession | null): number {
+  switch (session?.status ?? null) {
+    case null:
+    case "awaiting_cli":
+      return 0;
+    case "connected":
+    case "detected":
+      return 1;
+    case "agents_selected":
+    case "tools_discovered":
+      return session?.channels_set_at ? 4 : 2;
+    case "provisioning":
+    case "enrolled":
+      return 4;
+    case "installed":
+      return session?.rules_set_at ? 5 : 4;
+    case "tested":
+      return 5;
+    case "completed":
+    case "skipped":
+      return 6;
+  }
+}
+
+/* The notification step the person is on, when the session alone does
+ * not say: see the pane selection in OnboardingFlow. */
+type SettingsStage = "channels" | "rules" | null;
+
+function errorMessage(reason: unknown, fallback: string): string {
+  return reason instanceof Error && reason.message ? reason.message : fallback;
+}
+
+function isTerminal(status: OnboardingStatus | null): boolean {
+  return status === "completed" || status === "skipped";
+}
+
+/* The statuses in which the person's own steps (channels, rules, the
+ * assistant) are open: agents chosen, session not over. */
+function inPersonalSteps(status: OnboardingStatus | null): boolean {
+  return (
+    status === "agents_selected" ||
+    status === "tools_discovered" ||
+    status === "provisioning" ||
+    status === "enrolled" ||
+    status === "installed" ||
+    status === "tested"
+  );
+}
+
+export function OnboardingScreen({
+  canOnboard,
+  page,
+}: {
+  canOnboard: boolean;
+  /* The person's channels and ladders, from the route loader. */
+  page: ChannelsPage;
+}) {
+  useTitle("Welcome");
+  return (
+    <Page width="narrow">
+      {canOnboard ? (
+        <OnboardingFlow page={page} />
+      ) : (
+        <Card>
+          <EmptyState
+            icon={<AgentIcon width={18} height={18} />}
+            title="Onboarding needs an owner who can connect agents and review requests"
+            description="The guided setup connects agents, writes a pipeline and an escalation path, and ends with a request you decide. Ask an owner to run it, or to give you those permissions."
+          />
+        </Card>
+      )}
+    </Page>
+  );
+}
+
+function OnboardingFlow({ page }: { page: ChannelsPage }) {
+  const navigate = useNavigate();
+  const router = useRouter();
+  const toast = useToast();
+  const { session, loading, error, setSession } = useOnboardingSession();
+  const { config } = useRuntimeConfig();
+  const [begin, setBegin] = useState<OnboardingBegin | null>(null);
+  const [beginError, setBeginError] = useState("");
+  const [beginning, setBeginning] = useState(false);
+  const [closing, setClosing] = useState<OnboardingOutcome | null>(null);
+  /* Going back from the notification steps to re-pick agents, while the
+   * session itself stays where it is until the person saves. */
+  const [reviewingAgents, setReviewingAgents] = useState(false);
+  /* Which of the two notification steps is open. Before channels_set_at
+   * null and "channels" are the channels step and "rules" the one after
+   * it; from then on null is whatever comes next (the rules step, the
+   * test) and either name a way back. They change nothing about the
+   * session, so they are open from anywhere past the agent choice. */
+  const [settingsStage, setSettingsStage] = useState<SettingsStage>(null);
+  /* Back from the test to the assistant, to change the rules after
+   * seeing what a call looks like. */
+  const [reviewingRules, setReviewingRules] = useState(false);
+  /* Once the agents are provisioned there is no way back but a fresh
+   * session, which the CLI has to be run for again; that deserves a
+   * confirmation. */
+  const [confirmRestart, setConfirmRestart] = useState(false);
+
+  const status = session?.status ?? null;
+  const terminal = isTerminal(status);
+  const hostname = session?.machine.hostname || "this machine";
+
+  /* What the test step has seen from the agents just enrolled: the
+   * calls since the person left the rules step. Once a gated call has
+   * arrived, deciding it is the way out and skipping no longer means
+   * anything. */
+  const activity = useTestActivity(
+    session?.enrollments.map((enrollment) => enrollment.agent_slug) ?? [],
+    session?.rules_set_at ?? session?.created_at ?? null,
+  );
+  const tested = (status === "installed" || status === "tested") && activity.tested;
+
+  /* The writes that are the person's alone: passing their notification
+   * steps, leaving the rules step, recording the request they decided. */
+  const [advancing, setAdvancing] = useState(false);
+  const [advanceError, setAdvanceError] = useState("");
+  async function advance(write: () => Promise<OnboardingSession>, failure: string) {
+    setAdvancing(true);
+    setAdvanceError("");
+    try {
+      setSession(await write());
+      setSettingsStage(null);
+      setReviewingRules(false);
+    } catch (reason) {
+      const message = errorMessage(reason, "");
+      setAdvanceError(message || failure);
+      toast.add({ type: "deny", title: failure, description: message });
+    } finally {
+      setAdvancing(false);
+    }
+  }
+
+  /* The setup wants the pane to itself: the sidebar is held closed
+   * while the flow is open and released when the person leaves. Showing
+   * it in between is theirs to do and ends the hold. */
+  const sidebar = useSidebar();
+  const hold = sidebar?.hold;
+  useEffect(() => {
+    if (!hold) return;
+    hold(true);
+    return () => hold(false);
+  }, [hold]);
+
+  /* Starting a session is the only way to get the setup command: with
+   * no session, or one still waiting for the CLI from an earlier load,
+   * begin a fresh one (which supersedes the old). Once per mount on its
+   * own; the retry button and the done card call it again by hand. */
+  const autoBegun = useRef(false);
+  const start = useCallback(async () => {
+    /* A session begun by hand is the one begun for this mount: the
+     * effect below must not open a second one and supersede it. */
+    autoBegun.current = true;
+    setBeginning(true);
+    setBeginError("");
+    try {
+      const result = await api.onboardingBegin();
+      setBegin(result);
+      setSession(result.session);
+      setReviewingAgents(false);
+      setReviewingRules(false);
+      setSettingsStage(null);
+    } catch (reason) {
+      setBeginError(errorMessage(reason, "Could not start a setup session."));
+    } finally {
+      setBeginning(false);
+    }
+  }, [setSession]);
+
+  useEffect(() => {
+    if (loading || error || autoBegun.current) return;
+    if (session !== null && session.status !== "awaiting_cli") return;
+    autoBegun.current = true;
+    void start();
+  }, [loading, error, session, start]);
+
+  useEffect(() => {
+    setReviewingAgents(false);
+  }, [status]);
+
+  async function complete(outcome: OnboardingOutcome) {
+    setClosing(outcome);
+    try {
+      await api.onboardingComplete(outcome);
+      /* Finished or skipped, the workspace is theirs: open the sidebar
+       * so the queue arrives with its navigation, whatever they had
+       * before the setup held it closed. */
+      sidebar?.reopen();
+      void navigate({ to: "/queue" });
+    } catch (reason) {
+      toast.add({
+        type: "deny",
+        title: outcome === "skipped" ? "Could not skip the setup" : "Could not finish the setup",
+        description: errorMessage(reason, ""),
+      });
+      setClosing(null);
+    }
+  }
+
+  /* The test's way out: record the request decided here, then finish.
+   * A finish that fails after the record leaves the session in tested,
+   * where finishing alone is what is left. */
+  async function finish(requestId: string) {
+    setClosing("finished");
+    try {
+      if (status === "installed") setSession(await api.onboardingRecordTest(requestId));
+      await api.onboardingComplete("finished");
+      sidebar?.reopen();
+      void navigate({ to: "/queue" });
+    } catch (reason) {
+      toast.add({
+        type: "deny",
+        title: "Could not finish the setup",
+        description: errorMessage(reason, ""),
+      });
+      setClosing(null);
+    }
+  }
+
+  const expired = session !== null && !terminal && Date.parse(session.expires_at) <= Date.now();
+  const personal = inPersonalSteps(status);
+  const channelsDone = Boolean(session?.channels_set_at);
+  const rulesDone =
+    Boolean(session?.rules_set_at) && (status === "installed" || status === "tested");
+  const onChannels =
+    personal && (settingsStage === "channels" || (!channelsDone && settingsStage === null));
+  const onRules = personal && !onChannels && settingsStage === "rules";
+  const onTools = personal && !onChannels && !onRules && (!rulesDone || reviewingRules);
+  const current = onChannels
+    ? 2
+    : onRules
+      ? 3
+      : onTools
+        ? 4
+        : reviewingAgents
+          ? 1
+          : stepIndex(session);
+  /* Which done steps offer a way back. Before provisioning the agents
+   * can be re-picked (the CLI discovers again); from provisioning on,
+   * that means starting over. The notification steps and the rules
+   * step are the person's own and stay open from wherever they are: a
+   * prompt that did not arrive is usually a channel or a rule to fix,
+   * and a test that surprised them is a rule to change. */
+  const beforeProvisioning = status === "agents_selected" || status === "tools_discovered";
+  function wayBack(index: number): (() => void) | undefined {
+    if (session === null || terminal || expired || index >= current) return undefined;
+    switch (index) {
+      case 0:
+        return () => setConfirmRestart(true);
+      case 1:
+        return beforeProvisioning ? () => setReviewingAgents(true) : () => setConfirmRestart(true);
+      case 2:
+        return personal ? () => setSettingsStage("channels") : undefined;
+      case 3:
+        return personal && channelsDone ? () => setSettingsStage("rules") : undefined;
+      case 4:
+        return () => {
+          setSettingsStage(null);
+          setReviewingRules(true);
+        };
+      default:
+        return undefined;
+    }
+  }
+  const steps: Step[] = STEPS.map((step, index) => ({
+    ...step,
+    status: index < current ? "done" : index === current ? "current" : "upcoming",
+    onSelect: wayBack(index),
+  }));
+
+  let pane: ReactNode;
+  if (loading) {
+    pane = (
+      <Card>
+        <CardBody>
+          <Waiting label="Loading your setup" />
+        </CardBody>
+      </Card>
+    );
+  } else if (error) {
+    pane = (
+      <Callout tone="warn" title="Could not load the setup session">
+        {error}
+      </Callout>
+    );
+  } else if (expired) {
+    pane = (
+      <Card>
+        <CardHeader>
+          <div>
+            <CardTitle>This setup session expired</CardTitle>
+            <CardDescription>
+              A session lives one hour. Nothing was lost: start again and the CLI picks up from the
+              new code.
+            </CardDescription>
+          </div>
+        </CardHeader>
+        <CardFooter>
+          <Button variant="primary" loading={beginning} onClick={() => void start()}>
+            Start again
+          </Button>
+        </CardFooter>
+      </Card>
+    );
+  } else if (session === null || status === "awaiting_cli") {
+    /* A session begun from another tab or machine supersedes this one;
+     * the code this page holds then belongs to a closed session. */
+    const staleBegin = begin !== null && session !== null && begin.session.id !== session.id;
+    pane = (
+      <InstallStep
+        begin={staleBegin ? null : begin}
+        error={
+          staleBegin
+            ? "A newer setup session was started from another tab or machine, so this code no longer works. Start again to get a fresh one."
+            : beginError
+        }
+        beginning={beginning}
+        onRetry={() => void start()}
+        devBuild={config?.version === "dev" || config?.version === "single-binary"}
+        origin={config?.public_origin ?? window.location.origin}
+      />
+    );
+  } else if (status === "connected") {
+    pane = (
+      <WaitingCard
+        title="Choose agents"
+        description="The CLI is connected and looking for supported agent runtimes."
+        label={
+          <>
+            Detecting agents on <MachineBadge name={hostname} />
+          </>
+        }
+      />
+    );
+  } else if (status === "detected" || (reviewingAgents && beforeProvisioning)) {
+    pane = (
+      <ChooseAgentsStep
+        session={session}
+        onSaved={(next) => {
+          setSession(next);
+          setReviewingAgents(false);
+        }}
+      />
+    );
+  } else if (terminal) {
+    pane = (
+      <DoneCard
+        status={status}
+        enrolled={session.enrollments.length > 0}
+        restarting={beginning}
+        onRestart={() => void start()}
+        onQueue={() => void navigate({ to: "/queue" })}
+        onAgents={() => void navigate({ to: "/agents" })}
+      />
+    );
+  } else if (onChannels) {
+    pane = (
+      <OnboardingContactStep
+        page={page}
+        onChanged={() => router.invalidate()}
+        onContinue={() => setSettingsStage("rules")}
+      />
+    );
+  } else if (onRules) {
+    pane = (
+      <OnboardingRulesStep
+        page={page}
+        onChanged={() => router.invalidate()}
+        error={channelsDone ? "" : advanceError}
+        continuing={advancing}
+        onContinue={
+          channelsDone
+            ? () => setSettingsStage(null)
+            : () =>
+                void advance(() => api.onboardingConfirmChannels(), "Could not save the step")
+        }
+      />
+    );
+  } else if (onTools) {
+    pane = (
+      <ChooseToolsStep
+        session={session}
+        origin={config?.public_origin || window.location.origin}
+        assistantEnabled={config?.setup_assistant_enabled ?? false}
+        onSession={setSession}
+        onBack={beforeProvisioning ? () => setReviewingAgents(true) : () => setSettingsStage("rules")}
+        backLabel={beforeProvisioning ? "Back to agents" : "Back"}
+        returning={reviewingRules && rulesDone}
+        continuing={advancing}
+        error={advanceError}
+        onContinue={
+          reviewingRules && rulesDone
+            ? () => setReviewingRules(false)
+            : () => void advance(() => api.onboardingRecordRules(), "Could not continue")
+        }
+      />
+    );
+  } else {
+    pane = (
+      <TestStep
+        session={session}
+        page={page}
+        activity={activity}
+        finishing={closing === "finished"}
+        onFinish={finish}
+        onChannels={() => setSettingsStage("channels")}
+      />
+    );
+  }
+
+  return (
+    <>
+      <div className="flex flex-col items-center text-center">
+        <h1 className="text-title-lg text-ink">Set up your first agent</h1>
+        <p className="mt-1.5 max-w-[560px] text-body text-ink-muted">
+          Get started withHuman. Connect your local agents.
+        </p>
+      </div>
+      <Stepper orientation="horizontal" steps={steps} />
+
+      <ConfirmDialog
+        open={confirmRestart}
+        onOpenChange={setConfirmRestart}
+        title="Start the setup over?"
+        description={
+          beforeProvisioning
+            ? "This closes the current session. You will get a fresh code and run the setup command on the machine again; nothing has been written yet."
+            : "This closes the current session and issues a fresh code to run on the machine again."
+        }
+        confirmLabel="Start over"
+        tone="approve"
+        onConfirm={() => start()}
+      />
+      <div className="flex min-w-0 flex-col gap-4">
+        {session?.last_error && !terminal ? (
+          <Callout
+            tone="warn"
+            icon={<AlertIcon width={15} height={15} />}
+            title={
+              session.last_error.source === "cli"
+                ? "The CLI reported a problem"
+                : "Setup reported a problem"
+            }
+          >
+            {session.last_error.message}
+            {session.last_error.code ? (
+              <span className="ml-1.5 font-mono text-[11px] text-ink-muted">
+                {session.last_error.code}
+              </span>
+            ) : null}
+          </Callout>
+        ) : null}
+        {pane}
+      </div>
+      {!terminal && !loading && !tested ? (
+        <div className="flex justify-center">
+          <Button
+            variant="ghost"
+            loading={closing === "skipped"}
+            disabled={closing !== null}
+            onClick={() => void complete("skipped")}
+          >
+            Skip for now
+          </Button>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+/* The spinner line. The label can carry Badges inline (the runtimes
+ * being worked on, the machine), which wrap with the words. */
+function Waiting({ label }: { label: ReactNode }) {
+  return (
+    <div className="flex items-center gap-2.5 text-body text-ink-muted">
+      <Spinner size={16} className="shrink-0" />
+      <span className="flex flex-wrap items-center gap-x-1.5 gap-y-1">{label}</span>
+    </div>
+  );
+}
+
+/* The machine the CLI runs on, as machine content. */
+function MachineBadge({ name }: { name: string }) {
+  return (
+    <Badge
+      tone="neutral"
+      icon={<MonitorIcon width={14} height={14} />}
+      className="align-middle font-mono"
+    >
+      {name}
+    </Badge>
+  );
+}
+
+/* A step card whose turn it is not: the CLI is working. */
+function WaitingCard({
+  title,
+  description,
+  label,
+  children,
+}: {
+  title: string;
+  description: string;
+  label: ReactNode;
+  children?: ReactNode;
+}) {
+  return (
+    <Card>
+      <CardHeader>
+        <div>
+          <CardTitle>{title}</CardTitle>
+          <CardDescription>{description}</CardDescription>
+        </div>
+      </CardHeader>
+      <CardBody className="flex flex-col gap-3">
+        <Waiting label={label} />
+        {children}
+      </CardBody>
+    </Card>
+  );
+}
+
+function InstallStep({
+  begin,
+  error,
+  beginning,
+  onRetry,
+  devBuild,
+  origin,
+}: {
+  begin: OnboardingBegin | null;
+  error: string;
+  beginning: boolean;
+  onRetry: () => void;
+  devBuild: boolean;
+  origin: string;
+}) {
+  return (
+    <Card>
+      <CardHeader>
+        <div>
+          <CardTitle>Connect your first agent</CardTitle>
+          <CardDescription>Install the withHuman CLI. It will detect your agents.</CardDescription>
+        </div>
+      </CardHeader>
+      <CardBody className="flex flex-col gap-4">
+        {error ? (
+          <Callout tone="warn" title="Could not start a setup session">
+            <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <span>{error}</span>
+              <Button size="sm" loading={beginning} onClick={onRetry}>
+                Try again
+              </Button>
+            </span>
+          </Callout>
+        ) : begin === null ? (
+          <Waiting label="Preparing your setup code" />
+        ) : (
+          <>
+            <CodeBlock
+              label="Run this on the machine your agent runs on"
+              code={devBuild ? devSetupCommand(origin, begin.setup_code) : begin.setup_command}
+            />
+          </>
+        )}
+      </CardBody>
+      <CardFooter className="justify-start">
+        <Badge tone="neutral" icon={<Spinner size={14} />}>
+          Waiting for the CLI
+        </Badge>
+      </CardFooter>
+    </Card>
+  );
+}
+
+function ChooseAgentsStep({
+  session,
+  onSaved,
+}: {
+  session: OnboardingSession;
+  onSaved: (next: OnboardingSession) => void;
+}) {
+  const installed = session.detections.filter((detection) => detection.installed);
+  const [selected, setSelected] = useState<Set<string>>(
+    () =>
+      new Set(
+        session.selected_runtimes.filter((runtime) =>
+          installed.some((detection) => detection.runtime === runtime),
+        ),
+      ),
+  );
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const hostname = session.machine.hostname || "this machine";
+
+  function toggle(runtime: string, checked: boolean) {
+    setSelected((current) => {
+      const next = new Set(current);
+      if (checked) next.add(runtime);
+      else next.delete(runtime);
+      return next;
+    });
+  }
+
+  async function save() {
+    setSaving(true);
+    setError("");
+    try {
+      onSaved(await api.onboardingSelectAgents(Array.from(selected)));
+    } catch (reason) {
+      setError(errorMessage(reason, "Could not save the selection."));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <div>
+          <CardTitle>Choose agents</CardTitle>
+          <CardDescription>
+            {installed.length > 0 ? (
+              <>
+                We found {installed.length} {installed.length === 1 ? "agent" : "agents"} on{" "}
+                <MachineBadge name={hostname} />. Pick the ones you want to hook up to withHuman.
+              </>
+            ) : (
+              <>
+                We found no agents on <MachineBadge name={hostname} />.
+              </>
+            )}
+          </CardDescription>
+        </div>
+      </CardHeader>
+      <CardBody className="flex flex-col gap-2">
+        {session.detections.map((detection) => (
+          <DetectionOption
+            key={detection.runtime}
+            detection={detection}
+            checked={selected.has(detection.runtime)}
+            onCheckedChange={(checked) => toggle(detection.runtime, checked)}
+          />
+        ))}
+        {installed.length === 0 ? (
+          <Callout tone="neutral" title="Nothing to protect yet">
+            Install one of the agents above on this machine and run the setup command again, or skip
+            for now and connect agents by hand later.
+          </Callout>
+        ) : null}
+        {error ? <Callout tone="warn">{error}</Callout> : null}
+      </CardBody>
+      <CardFooter>
+        <Button
+          variant="primary"
+          loading={saving}
+          disabled={selected.size === 0}
+          onClick={() => void save()}
+        >
+          Continue
+        </Button>
+      </CardFooter>
+    </Card>
+  );
+}
+
+function DetectionOption({
+  detection,
+  checked,
+  onCheckedChange,
+}: {
+  detection: OnboardingDetection;
+  checked: boolean;
+  onCheckedChange: (checked: boolean) => void;
+}) {
+  const servers = detection.mcp_servers?.length ?? 0;
+  const where = [detection.version, detection.binary_path].filter(Boolean).join("  ");
+  return (
+    <label
+      className={cn(
+        /* A well inside the step card: canvas on surface, no shadow, the
+         * platform's nesting rule (see escalation-tree's wellClass). */
+        "flex items-start gap-3 rounded-lg border-hairline border-edge bg-canvas px-4 py-3.5",
+        detection.installed
+          ? "cursor-pointer has-data-checked:border-accent has-data-checked:ring-1 has-data-checked:ring-accent"
+          : /* The platform's disabled look, as on a button or checkbox:
+             * the whole row steps back, not only the title. */
+            "pointer-events-none opacity-50",
+      )}
+      aria-disabled={!detection.installed || undefined}
+    >
+      <span className="flex h-5 shrink-0 items-center">
+        <Checkbox
+          checked={checked}
+          disabled={!detection.installed}
+          onCheckedChange={(next) => onCheckedChange(next === true)}
+          aria-label={runtimeName(detection.runtime)}
+        />
+      </span>
+      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <span className="flex items-center justify-between gap-3">
+          <span
+            className={cn(
+              "text-body font-medium",
+              detection.installed ? "text-ink" : "text-ink-muted",
+            )}
+          >
+            {runtimeName(detection.runtime)}
+          </span>
+          {!detection.installed ? (
+            <Badge tone="neutral" className="-mr-2">
+              Not found
+            </Badge>
+          ) : detection.already_hooked ? (
+            <Badge tone="accent" icon={<CheckIcon width={14} height={14} />} className="-mr-2">
+              Already connected
+            </Badge>
+          ) : null}
+        </span>
+        {detection.installed && where ? (
+          <span className="truncate font-mono text-[11px] text-ink-muted">{where}</span>
+        ) : null}
+        {detection.installed && servers > 0 ? (
+          <span className="text-label font-normal text-ink-muted">
+            {servers} MCP {servers === 1 ? "server" : "servers"} configured
+          </span>
+        ) : null}
+      </span>
+    </label>
+  );
+}
+
+const NO_TOOLS: ReadonlySet<string> = new Set();
+
+/* One badge per MCP server the runtime is configured with. A server
+ * the CLI could not list is red with an alert, and every badge opens a
+ * card on hover: where the server comes from, how many tools it gave,
+ * and for a failure the CLI's message verbatim. */
+function ServerBadges({
+  servers,
+  tools,
+  errors,
+}: {
+  servers: OnboardingMCPServer[];
+  tools: OnboardingTool[];
+  errors: OnboardingDiscoveryError[];
+}) {
+  const failures = new Map(errors.map((failure) => [failure.server, failure.message]));
+  /* Failures first, so what needs attention is where the eye lands;
+   * within each group the CLI's order stands. */
+  const ordered = [
+    ...servers.filter((server) => failures.has(server.name)),
+    ...servers.filter((server) => !failures.has(server.name)),
+  ];
+  return (
+    <div className="flex flex-wrap items-center gap-1.5" aria-label="MCP servers">
+      {ordered.map((server) => {
+        const failure = failures.get(server.name);
+        const listed = tools.filter((tool) => tool.server === server.name);
+        const count = listed.length;
+
+        return (
+          <HoverCard
+            key={server.name}
+            content={
+              <>
+                <HoverCardTitle>
+                  <span className="flex min-w-0 items-center gap-1.5">
+                    <span className="min-w-0 truncate font-mono text-[12px]">{server.name}</span>
+                    {server.transport ? (
+                      <Badge fill icon={false} className="font-mono">
+                        {server.transport}
+                      </Badge>
+                    ) : null}
+                  </span>
+                  {failure !== undefined ? (
+                    <Badge tone="deny" icon={<AlertIcon width={14} height={14} />}>
+                      Not listed
+                    </Badge>
+                  ) : (
+                    <Badge tone="neutral">
+                      {count} {count === 1 ? "tool" : "tools"}
+                    </Badge>
+                  )}
+                </HoverCardTitle>
+                {failure !== undefined ? (
+                  <HoverCardBody>
+                    <CodeBlock label="error" code={failure} wrap />
+                  </HoverCardBody>
+                ) : count > 0 ? (
+                  <HoverCardBody>
+                    <ToolNames server={server.name} tools={listed} />
+                  </HoverCardBody>
+                ) : null}
+              </>
+            }
+          >
+            <Badge
+              tone={failure !== undefined ? "deny" : "approve"}
+              icon={
+                failure !== undefined ? (
+                  <AlertIcon width={14} height={14} />
+                ) : (
+                  <CheckIcon width={14} height={14} />
+                )
+              }
+              className="font-mono"
+            >
+              {server.name}
+            </Badge>
+          </HoverCard>
+        );
+      })}
+    </div>
+  );
+}
+
+/* Every tool a server gave, as a read-only scrolling list; the list
+ * below the badges is where they are chosen. */
+function ToolNames({ server, tools }: { server: string; tools: OnboardingTool[] }) {
+  return (
+    <div className="-mx-2 max-h-[240px] overflow-y-auto">
+      <List
+        items={tools}
+        getId={(tool) => tool.name}
+        selected={NO_TOOLS}
+        onSelectedChange={() => undefined}
+        selectable={false}
+        openButton={false}
+        aria-label={`${server} tools`}
+      >
+        {(tool) => (
+          <ListRowContent
+            title={<span className="font-mono text-[12px]">{tool.name}</span>}
+            description={tool.description}
+          />
+        )}
+      </List>
+    </div>
+  );
+}
+
+
+/* The statuses in which the runtimes' agents exist, so their rules can
+ * be read and written. */
+function agentsExist(status: OnboardingStatus): boolean {
+  return (
+    status === "provisioning" || status === "enrolled" || status === "installed" || status === "tested"
+  );
+}
+
+/* Starters for a person who has not put it in words yet: each adds
+ * a phrase to the box. */
+const ASSISTANT_EXAMPLES = [
+  "Deleting files",
+  "Pushing to git",
+  "Deploys and rollbacks",
+  "Sending emails",
+  "Payments and refunds",
+];
+
+/* The three ways to answer the step's one question. */
+type Way = "agent" | "describe" | "manual";
+
+/* Where a coding agent's MCP client reaches withHuman's own settings. */
+const MCP_PATH = "/api/mcp/v1";
+
+/* What to paste into a coding agent so it writes the rules through
+ * withHuman's MCP server: connect, learn the grammar, ask, write,
+ * check. Names the agents and the setup's escalation path so it
+ * touches nothing else. */
+function agentPrompt(origin: string, agents: { slug: string; name: string }[], pathKey: string): string {
+  const endpoint = `${origin}${MCP_PATH}`;
+  const list = agents.map((agent) => `${agent.name} (slug: ${agent.slug})`).join(", ");
+  return [
+    "Help me decide which of my AI agents' tool calls should wait for my approval in withHuman, then write those rules.",
+    "",
+    "1. Connect the withHuman MCP server if it is not connected yet, and sign in when asked:",
+    `   Claude Code: claude mcp add --transport http withhuman ${endpoint}`,
+    `   Codex: codex mcp add withhuman --url ${endpoint}`,
+    "2. Call read_reference to learn how pipeline blocks and conditions are written.",
+    `3. Read the current rules with get_pipeline for these agents: ${list}.`,
+    "4. Ask me what should wait for me, suggesting a few risky calls these agents can make. Keep reading, searching and tests running without me.",
+    `5. Write the rules with update_pipeline for those agents only. Send calls that need me to the escalation path "${pathKey}" and end each pipeline with an always block that approves the rest.`,
+    "6. Try two or three sample calls with preview_pipeline, one that should wait and one that should not, and tell me what happened.",
+  ].join("\n");
+}
+
+/* Names joined the way a sentence wants them: "Codex and Pi". */
+function joinNames(names: string[]): string {
+  if (names.length <= 1) return names[0] ?? "";
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
+/*
+ * The rules step: one question and three ways to answer it, as tiles
+ * that each open their panel below: a prompt for the person's own
+ * coding agent, a box to describe the rules in words for the setup
+ * assistant, or a table per agent to tick tools by hand. Nothing is
+ * chosen at first and the starting rules stand until something is
+ * written. The agents are connected behind the question (provisioning,
+ * enrolment, the hooks) and Continue opens once the hooks are installed.
+ */
+function ChooseToolsStep({
+  session,
+  origin,
+  assistantEnabled,
+  onSession,
+  onBack,
+  backLabel,
+  returning,
+  continuing,
+  error,
+  onContinue,
+}: {
+  session: OnboardingSession;
+  origin: string;
+  assistantEnabled: boolean;
+  onSession: (next: OnboardingSession) => void;
+  onBack: () => void;
+  backLabel: string;
+  /* Back from the test: Continue returns there without a write. */
+  returning: boolean;
+  continuing: boolean;
+  error: string;
+  onContinue: () => void;
+}) {
+  const runtimes = session.selected_runtimes;
+  const status = session.status;
+  const hostname = session.machine.hostname || "this machine";
+  const names = joinNames(runtimes.map(runtimeName));
+  const toast = useToast();
+
+  /* Arriving here with the channels set and the tools discovered is
+   * what provisions the agents: the choice of agents was made two steps
+   * ago and every way of answering needs them to exist. Once per
+   * session; a failure shows with a retry. */
+  const [provisionError, setProvisionError] = useState("");
+  const [provisioning, setProvisioning] = useState(false);
+  const provisionedFor = useRef<string | null>(null);
+  const provision = useCallback(async () => {
+    setProvisioning(true);
+    setProvisionError("");
+    try {
+      onSession(await api.onboardingProvision());
+    } catch (reason) {
+      setProvisionError(errorMessage(reason, "The agents could not be set up."));
+      provisionedFor.current = null;
+    } finally {
+      setProvisioning(false);
+    }
+  }, [onSession]);
+  useEffect(() => {
+    if (status !== "tools_discovered" || !session.channels_set_at) return;
+    if (provisionedFor.current === session.id) return;
+    provisionedFor.current = session.id;
+    void provision();
+  }, [status, session.channels_set_at, session.id, provision]);
+
+  /* The rules as they stand, read from each agent's active pipeline
+   * and re-read whenever the session moves, which every write does. */
+  const exist = agentsExist(status);
+  const [pipelineTick, setPipelineTick] = useState(0);
+  const [pipelines, setPipelines] = useState<Record<string, RequestApprovalPipelineRevision | null>>({});
+  useEffect(() => {
+    if (!exist) return;
+    let cancelled = false;
+    void Promise.all(
+      runtimes.map((runtime) =>
+        api
+          .activeRequestApprovalPipeline(runtime)
+          .then((revision) => [runtime, revision] as const)
+          .catch(() => [runtime, null] as const),
+      ),
+    ).then((entries) => {
+      if (!cancelled) setPipelines(Object.fromEntries(entries));
+    });
+    return () => {
+      cancelled = true;
+    };
+    /* runtimes is fixed once the agents exist; version and the coding
+     * agent's poll are the triggers. */
+  }, [exist, session.version, pipelineTick]);
+
+  /* The conversation with the assistant. Sending blocks the composer
+   * until the answer is back; the session stream shows the steps in
+   * between. A turn the server recorded as failed also arrives through
+   * the stream, so the toast only names what the stream cannot. */
+  const transcript = session.assistant;
+  const lastRunning =
+    transcript.length > 0 && transcript[transcript.length - 1].status === "running";
+  const [sending, setSending] = useState(false);
+  const [clearing, setClearing] = useState(false);
+  const busy = sending || lastRunning || clearing;
+  async function send(message: string) {
+    const trimmed = message.trim();
+    if (!trimmed || busy) return;
+    setSending(true);
+    try {
+      onSession(await api.onboardingAsk(trimmed));
+    } catch (reason) {
+      if (!(reason instanceof RequestError && reason.code === "onboarding_assistant_failed")) {
+        toast.add({
+          type: "deny",
+          title: "The assistant could not answer",
+          description: errorMessage(reason, ""),
+        });
+      }
+    } finally {
+      setSending(false);
+    }
+  }
+  async function clear() {
+    setClearing(true);
+    try {
+      onSession(await api.onboardingClearAssistant());
+    } catch (reason) {
+      toast.add({ type: "deny", title: "Could not start over", description: errorMessage(reason, "") });
+    } finally {
+      setClearing(false);
+    }
+  }
+
+  const installed = status === "installed" || status === "tested";
+  const latest = latestTurn(transcript);
+  const attention = session.install_results.filter((result) => !result.ok || result.manual);
+  /* Nothing is chosen until the person picks a way, unless they
+   * already talked to the assistant. */
+  const [way, setWay] = useState<Way | null>(transcript.length > 0 ? "describe" : null);
+
+  /* A coding agent writes through the MCP server, which the session
+   * never hears about, so the rules are re-read while that way is open. */
+  useEffect(() => {
+    if (way !== "agent" || !exist) return;
+    const timer = window.setInterval(() => setPipelineTick((tick) => tick + 1), 4000);
+    return () => window.clearInterval(timer);
+  }, [way, exist]);
+
+  const agents = runtimes.map((runtime) => {
+    const enrollment = session.enrollments.find((entry) => entry.runtime === runtime);
+    return { runtime, slug: enrollment?.agent_slug ?? runtime, name: enrollment?.agent_name ?? runtimeName(runtime) };
+  });
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex flex-col gap-2">
+          <CardTitle>How would you like to set up your rules?</CardTitle>
+          <ConnectionStatus
+            session={session}
+            names={names}
+            hostname={hostname}
+            provisioning={provisioning}
+            error={provisionError}
+            onRetry={() => void provision()}
+          />
+        </div>
+      </CardHeader>
+      <CardBody className="flex flex-col gap-5">
+        {attention.map((result) => (
+          <InstallCallout key={result.runtime} result={result} />
+        ))}
+        <RadioGroup
+          aria-label="How to set up your rules"
+          value={way}
+          onValueChange={(next) => setWay(next as Way)}
+          className="grid grid-cols-1 gap-3 sm:grid-cols-3"
+        >
+          <RadioCard
+            value="agent"
+            icon={<AgentIcon width={16} height={16} />}
+            label="With my coding agent"
+            description="Paste a prompt into your coding agent and it writes the rules with you."
+          />
+          <RadioCard
+            value="describe"
+            icon={<MessageIcon width={16} height={16} />}
+            label="Describe it in words"
+            description={
+              assistantEnabled
+                ? "Say what should wait for you and withHuman writes the rules."
+                : "This deployment has no setup assistant model configured."
+            }
+            disabled={!assistantEnabled}
+          />
+          <RadioCard
+            value="manual"
+            icon={<ToolIcon width={16} height={16} />}
+            label="Pick tools myself"
+            description="Tick the tools that should wait for your approval."
+          />
+        </RadioGroup>
+        {way === "agent" ? (
+          <AgentWay
+            prompt={agentPrompt(origin, agents, session.generated.escalation_path_key)}
+            agents={agents}
+            ready={exist}
+            pipelines={pipelines}
+          />
+        ) : way === "describe" ? (
+          <WayPanel title="Describe it in your own words">
+            <DescribeWay
+              transcript={transcript}
+              latest={latest}
+              ready={exist}
+              busy={busy}
+              clearing={clearing}
+              onSend={(message) => void send(message)}
+              onClear={() => void clear()}
+            />
+          </WayPanel>
+        ) : way === "manual" ? (
+          <WayPanel title="Choose the tools that wait for you">
+            <div className="flex flex-col gap-6">
+              {runtimes.map((runtime) => (
+                <GatedToolsTable
+                  key={runtime}
+                  runtime={runtime}
+                  servers={
+                    session.detections.find((detection) => detection.runtime === runtime)
+                      ?.mcp_servers ?? []
+                  }
+                  tools={session.tools[runtime] ?? []}
+                  errors={session.discovery_errors[runtime] ?? []}
+                  gated={gatedToolsOf(exist ? (pipelines[runtime] ?? null) : null)}
+                  ready={exist && runtime in pipelines && !busy}
+                  onSession={onSession}
+                />
+              ))}
+            </div>
+          </WayPanel>
+        ) : null}
+        {error ? (
+          <Callout tone="warn" title="Could not continue">
+            {error}
+          </Callout>
+        ) : null}
+      </CardBody>
+      <CardFooter className="justify-between gap-4">
+        <Button variant="ghost" onClick={onBack} disabled={continuing}>
+          {backLabel}
+        </Button>
+        <div className="flex items-center gap-3">
+          <span className="text-label font-normal text-ink-muted">You can change this later.</span>
+          <Button variant="primary" loading={continuing} disabled={!installed || busy} onClick={onContinue}>
+            {returning ? "Back to the test" : "Continue"}
+          </Button>
+        </div>
+      </CardFooter>
+    </Card>
+  );
+}
+
+/* The panel a chosen way opens under the tiles: a recessed well with
+ * a heading, so the tiles read as the question and this as the answer. */
+function WayPanel({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="flex flex-col gap-4 rounded-xl border-hairline border-edge bg-canvas p-5">
+      <h3 className="text-body font-medium text-ink">{title}</h3>
+      {children}
+    </section>
+  );
+}
+
+/* The coding-agent way: the prompt to paste, and a line per agent that
+ * turns into a tick once its rules change, read by polling because the
+ * agent writes through the MCP server, not this session. */
+function AgentWay({
+  prompt,
+  agents,
+  ready,
+  pipelines,
+}: {
+  prompt: string;
+  agents: { runtime: string; slug: string; name: string }[];
+  ready: boolean;
+  pipelines: Record<string, RequestApprovalPipelineRevision | null>;
+}) {
+  const { copy, copied } = useCopyToClipboard(prompt);
+  /* The active revision per agent when this way opened; a newer one
+   * is the coding agent's work. */
+  const baseline = useRef<Record<string, number>>({});
+  for (const agent of agents) {
+    const revision = pipelines[agent.runtime]?.revision;
+    if (revision !== undefined && !(agent.runtime in baseline.current)) {
+      baseline.current[agent.runtime] = revision;
+    }
+  }
+  return (
+    <WayPanel title="Paste this into your coding agent">
+      <p className="max-h-[400px] overflow-y-auto rounded-lg border-hairline border-edge bg-surface p-4 text-body leading-[21px] whitespace-pre-wrap text-ink-secondary [overflow-wrap:anywhere]">
+        {prompt}
+      </p>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <ul className="flex flex-col gap-1.5">
+          {agents.map((agent) => {
+            const now = pipelines[agent.runtime]?.revision;
+            const before = baseline.current[agent.runtime];
+            const changed = now !== undefined && before !== undefined && now > before;
+            return (
+              <li key={agent.runtime} className="flex items-center gap-2 text-label font-normal text-ink-muted">
+                {changed ? (
+                  <CheckIcon width={14} height={14} className="shrink-0 text-approve" aria-hidden />
+                ) : (
+                  <LoadingDots aria-label="Waiting" />
+                )}
+                <span>
+                  {changed ? (
+                    <>
+                      <span className="text-ink">{agent.name}</span>'s rules were updated
+                    </>
+                  ) : ready ? (
+                    `Waiting for new rules for ${agent.name}`
+                  ) : (
+                    `Connecting ${agent.name} first`
+                  )}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+        <Button variant="primary" size="sm" onClick={() => void copy()}>
+          {copied ? (
+            <CheckIcon width={14} height={14} aria-hidden />
+          ) : (
+            <CopyIcon width={14} height={14} aria-hidden />
+          )}
+          {copied ? "Copied" : "Copy prompt"}
+        </Button>
+      </div>
+    </WayPanel>
+  );
+}
+
+/* The one line under the question while the agents are still being
+ * connected, or why connecting failed; nothing once they are. */
+function ConnectionStatus({
+  session,
+  names,
+  hostname,
+  provisioning,
+  error,
+  onRetry,
+}: {
+  session: OnboardingSession;
+  names: string;
+  hostname: string;
+  provisioning: boolean;
+  error: string;
+  onRetry: () => void;
+}) {
+  if (error) {
+    return (
+      <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-body text-deny">
+        <span>{error}</span>
+        <Button size="sm" loading={provisioning} onClick={onRetry}>
+          Try again
+        </Button>
+      </span>
+    );
+  }
+  let text: string;
+  switch (session.status) {
+    case "agents_selected":
+      text = `Still discovering what ${names} can call.`;
+      break;
+    case "tools_discovered":
+    case "provisioning":
+      text = `Connecting ${names} on ${hostname}.`;
+      break;
+    case "enrolled":
+      text = `Installing hooks for ${names} on ${hostname}.`;
+      break;
+    default:
+      /* Connected: nothing to say, the question stands alone. */
+      return null;
+  }
+  return (
+    <CardDescription>
+      <span className="flex items-center gap-2">
+        <Spinner size={14} className="shrink-0" />
+        <span>{text}</span>
+      </span>
+    </CardDescription>
+  );
+}
+
+/* The latest exchange with the assistant: what the person said and the
+ * reply, running, done, or failed. */
+function latestTurn(
+  transcript: OnboardingAssistantMessage[],
+): { ask: OnboardingAssistantMessage; reply: OnboardingAssistantMessage | null; earlier: number } | null {
+  let start = transcript.length - 1;
+  while (start >= 0 && transcript[start].role !== "user") start -= 1;
+  if (start < 0) return null;
+  const reply = transcript.slice(start + 1).find((message) => message.role === "assistant") ?? null;
+  return { ask: transcript[start], reply, earlier: transcript.slice(0, start).filter((m) => m.role === "user").length };
+}
+
+/* Inside the describe tile: the composer before the first message,
+ * then what came of it and a box to refine. The rules themselves are
+ * read in the third tile; the answer says what changed. */
+function DescribeWay({
+  transcript,
+  latest,
+  ready,
+  busy,
+  clearing,
+  onSend,
+  onClear,
+}: {
+  transcript: OnboardingAssistantMessage[];
+  latest: ReturnType<typeof latestTurn>;
+  ready: boolean;
+  busy: boolean;
+  clearing: boolean;
+  onSend: (message: string) => void;
+  onClear: () => void;
+}) {
+  const [draft, setDraft] = useState("");
+  const [stepsOpen, setStepsOpen] = useState(false);
+  useEffect(() => {
+    if (!busy) setDraft("");
+  }, [transcript.length, busy]);
+  function onKey(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault();
+      onSend(draft);
+    }
+  }
+  const composer = (placeholder: string, label: string, rows: number, aside: ReactNode) => (
+    <div className="flex flex-col gap-2.5">
+      <TextArea
+        aria-label="What should wait for you"
+        placeholder={ready ? placeholder : "Available once your agents are connected."}
+        value={draft}
+        rows={rows}
+        className={rows > 2 ? "min-h-[84px]" : undefined}
+        disabled={!ready || busy}
+        onChange={(event) => setDraft(event.target.value)}
+        onKeyDown={onKey}
+      />
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        {aside}
+        <Button variant="primary" size="sm" loading={busy && !clearing} disabled={!ready || !draft.trim()} onClick={() => onSend(draft)}>
+          {label}
+        </Button>
+      </div>
+    </div>
+  );
+
+  if (latest === null) {
+    return composer(
+      "Only kubectl commands that change the cluster should wait for my approval. Reading and tests can run.",
+      "Write the rules for me",
+      3,
+      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
+        {ASSISTANT_EXAMPLES.map((example) => (
+          <Button key={example} size="sm" variant="neutral" disabled={!ready || busy} onClick={() => setDraft((current) => addExample(current, example))}>
+            {example}
+          </Button>
+        ))}
+      </div>,
+    );
+  }
+
+  const reply = latest.reply;
+  const outcome = reply ? turnOutcome(reply) : null;
+  const actions = reply?.actions ?? [];
+  const refused = actions.filter((action) => !action.ok).length;
+  return (
+    <div className="flex flex-col gap-4">
+      <p className="text-body text-ink-muted">
+        You said: <span className="text-ink">&ldquo;{latest.ask.text}&rdquo;</span>
+      </p>
+      {reply === null || reply.status === "running" ? (
+        <div className="flex flex-col gap-2">
+          <span className="flex items-center gap-2 text-body text-ink-muted">
+            <LoadingDots aria-label="The assistant is working" />
+            Writing the rules
+          </span>
+          {actions.length > 0 ? <StepList actions={actions} /> : null}
+        </div>
+      ) : reply.status === "failed" ? (
+        <Callout tone="warn" title="The assistant could not finish">
+          {reply.error || "Try again, or say what to change."}
+        </Callout>
+      ) : (
+        <>
+          <div className="flex flex-col gap-2.5">
+            {outcome ? (
+              <Badge tone={outcome.tone} icon={false} className="self-start">
+                {outcome.label}
+              </Badge>
+            ) : null}
+            <Markdown className="text-body text-ink">{reply.text}</Markdown>
+          </div>
+          {actions.length > 0 ? (
+            <div className="flex flex-col gap-1.5">
+              <button
+                type="button"
+                className="flex items-center gap-1 self-start text-label text-ink-muted hover:text-ink"
+                aria-expanded={stepsOpen}
+                onClick={() => setStepsOpen((open) => !open)}
+              >
+                <ChevronDownIcon
+                  width={13}
+                  height={13}
+                  aria-hidden
+                  className={cn("transition-transform duration-150", !stepsOpen && "-rotate-90")}
+                />
+                {refused > 0
+                  ? `${actions.length} steps, ${refused} refused`
+                  : `Checked in ${actions.length} ${actions.length === 1 ? "step" : "steps"}`}
+              </button>
+              {stepsOpen ? <StepList actions={actions} /> : null}
+            </div>
+          ) : null}
+        </>
+      )}
+      {reply?.status !== "running"
+        ? composer(
+            "Change something? For example: also wait on git push.",
+            "Send",
+            2,
+            <Button size="sm" variant="ghost" loading={clearing} disabled={busy} onClick={onClear}>
+              Start over
+            </Button>,
+          )
+        : null}
+    </div>
+  );
+}
+
+/* A starter added to what the person has typed: the first opens a
+ * sentence, later ones join its list while it is still the starters'
+ * sentence, and anything else gets the starter appended. */
+const STARTER_SENTENCE = /^(.+?) should wait for my approval\.$/;
+function addExample(draft: string, example: string): string {
+  const trimmed = draft.trim();
+  if (!trimmed) return `${example} should wait for my approval.`;
+  if (trimmed.toLowerCase().includes(example.toLowerCase())) return draft;
+  const match = STARTER_SENTENCE.exec(trimmed);
+  if (!match) return `${trimmed} ${example} should wait too.`;
+  const items = match[1].split(/, | and /).map((item, index) => (index === 0 ? item : item.toLowerCase()));
+  items.push(example.toLowerCase());
+  return `${joinNames(items)} should wait for my approval.`;
+}
+
+/* The steps a turn took, one line each. */
+function StepList({ actions }: { actions: OnboardingAssistantAction[] }) {
+  return (
+    <ul className="flex flex-col gap-1">
+      {actions.map((action, index) => (
+        <li key={index} className="flex items-start gap-1.5 font-mono text-[11px] text-ink-secondary">
+          {action.ok ? (
+            <CheckIcon width={13} height={13} className="mt-[2px] shrink-0 text-approve" aria-hidden />
+          ) : (
+            <XCircleIcon width={13} height={13} className="mt-[2px] shrink-0 text-deny" aria-hidden />
+          )}
+          <span className={cn(!action.ok && "text-ink-muted")}>{action.summary}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+const LIST_PREVIEW = 3;
+
+/* summarizeCondition with long list values shortened to the first few
+ * and a count, recursing through groups the same way it does. */
+function describeCondition(node: ConditionNode, depth = 0): string {
+  const children = node.all ?? node.any;
+  if (children) {
+    const inner = children.map((child) => describeCondition(child, depth + 1)).join(node.all ? " and " : " or ");
+    return children.length <= 1 || depth === 0 ? inner : `(${inner})`;
+  }
+  if (Array.isArray(node.value) && node.value.length > LIST_PREVIEW + 1) {
+    const operator = CONDITION_OPERATORS.find((entry) => entry.value === node.operator);
+    const shown = node.value.slice(0, LIST_PREVIEW).map(String).join(", ");
+    return `${describeField(node.field ?? "").label} ${operator?.label ?? node.operator ?? ""} ${shown} and ${node.value.length - LIST_PREVIEW} more`;
+  }
+  return summarizeCondition(node, depth);
+}
+
+/* The tools a pipeline's first block gates, when that block is the
+ * starting rule's shape (tool name is one of a list); nothing otherwise,
+ * because rules the assistant wrote do not reduce to a list. */
+function gatedToolsOf(revision: RequestApprovalPipelineRevision | null): Set<string> | null {
+  const first = revision?.blocks[0];
+  if (!first || first.type !== "cel") return revision ? new Set() : null;
+  const when = first.config.when as { field?: string; operator?: string; value?: unknown };
+  if (when.field !== "/request/tool" || when.operator !== "in" || !Array.isArray(when.value)) {
+    return new Set();
+  }
+  return new Set(when.value.map(String));
+}
+
+/* Every tool one runtime can call, as a table with a checkbox per row:
+ * the by-hand way to say what waits. The selection starts from what the
+ * agent's rules gate now and is written when applied. */
+function GatedToolsTable({
+  runtime,
+  servers,
+  tools,
+  errors,
+  gated,
+  ready,
+  onSession,
+}: {
+  runtime: string;
+  servers: OnboardingMCPServer[];
+  tools: OnboardingTool[];
+  errors: OnboardingDiscoveryError[];
+  /* What the active rules gate, or null while unknown. */
+  gated: Set<string> | null;
+  ready: boolean;
+  onSession: (next: OnboardingSession) => void;
+}) {
+  const name = runtimeName(runtime);
+  const toast = useToast();
+  /* One row per tool name: the pipeline gates by name, so two servers'
+   * identically named tools are one choice. */
+  const rows = tools.filter((tool, index) => tools.findIndex((other) => other.name === tool.name) === index);
+  const gatedKey = gated ? Array.from(gated).sort().join("\n") : null;
+  const [selected, setSelected] = useState<Set<string>>(() => new Set(gated ?? []));
+  const [query, setQuery] = useState("");
+  const [applying, setApplying] = useState(false);
+  useEffect(() => {
+    setSelected(new Set(gatedKey === null ? [] : gatedKey.split("\n").filter(Boolean)));
+  }, [gatedKey]);
+  const changed = gatedKey !== null && Array.from(selected).sort().join("\n") !== gatedKey;
+  const needle = query.trim().toLowerCase();
+  const shown = needle
+    ? rows.filter((tool) =>
+        [tool.name, tool.description ?? "", tool.server ?? ""].some((text) => text.toLowerCase().includes(needle)),
+      )
+    : rows;
+
+  async function apply() {
+    setApplying(true);
+    try {
+      onSession(await api.onboardingSetGatedTools(runtime, Array.from(selected)));
+    } catch (reason) {
+      toast.add({ type: "deny", title: `Could not change ${name}'s rules`, description: errorMessage(reason, "") });
+    } finally {
+      setApplying(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <span className="text-body font-medium text-ink">{name}</span>
+          <span className="text-label font-normal text-ink-muted">
+            {selected.size} of {rows.length} wait
+            {errors.length > 0
+              ? `, ${errors.length} of ${servers.length} MCP ${servers.length === 1 ? "server" : "servers"} could not be listed`
+              : null}
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <TextField
+            aria-label={`Search ${name} tools`}
+            placeholder="Search tools"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            className="w-[200px]"
+          />
+          <Button size="sm" variant="primary" loading={applying} disabled={!ready || !changed} onClick={() => void apply()}>
+            Apply
+          </Button>
+        </div>
+      </div>
+      {servers.length > 0 ? <ServerBadges servers={servers} tools={tools} errors={errors} /> : null}
+      {rows.length === 0 ? (
+        <p className="text-label font-normal text-ink-muted">The CLI found no tools.</p>
+      ) : (
+        <div className="max-h-[320px] overflow-y-auto rounded-lg border-hairline border-edge bg-canvas">
+          <Table<OnboardingTool>
+            aria-label={`${name} tools`}
+            items={shown}
+            getId={(tool) => tool.name}
+            selected={new Set(shown.filter((tool) => selected.has(tool.name)).map((tool) => tool.name))}
+            onSelectedChange={(ids) => {
+              const next = new Set(selected);
+              for (const tool of shown) {
+                if (ids.has(tool.name)) next.add(tool.name);
+                else next.delete(tool.name);
+              }
+              setSelected(next);
+            }}
+            columns={[
+              {
+                id: "tool",
+                label: "Tool",
+                width: 260,
+                cell: (tool) => (
+                  <span className="flex min-w-0 items-center gap-2">
+                    <span className="truncate font-mono text-[12px] text-ink">{tool.name}</span>
+                    <ToolSourceBadge tool={tool} />
+                  </span>
+                ),
+              },
+              {
+                id: "description",
+                label: "What it does",
+                grow: true,
+                cell: (tool) => (
+                  <span className="block truncate text-label font-normal text-ink-muted" title={tool.description}>
+                    {tool.description || (tool.suggested ? "Suggested for review" : "")}
+                  </span>
+                ),
+              },
+            ]}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* Where a tool comes from: the MCP server's name in mono so two servers'
+ * identically named tools tell apart, or "Built-in" for the runtime's own. */
+function ToolSourceBadge({ tool }: { tool: OnboardingTool }) {
+  return tool.server ? (
+    <Badge fill icon={false} className="max-w-[140px] font-mono">
+      <span className="truncate">{tool.server}</span>
+    </Badge>
+  ) : (
+    <Badge fill icon={false}>
+      Built-in
+    </Badge>
+  );
+}
+
+/* The conversation, latest exchange first in view: what the person just
+ * asked and what came of it. Earlier exchanges fold away behind one
+ * line, so the step never grows into a log. */
+function turnOutcome(message: OnboardingAssistantMessage): { tone: "approve" | "warn" | "neutral"; label: string } | null {
+  const actions = message.actions ?? [];
+  if (message.status !== "done" || actions.length === 0) return null;
+  const written = actions
+    .filter((action) => action.ok && action.tool === "update_pipeline")
+    .map((action) => /^Wrote (.+?)'s rules/.exec(action.summary)?.[1] ?? "")
+    .filter(Boolean);
+  if (written.length > 0) {
+    return { tone: "approve", label: `Rules updated for ${Array.from(new Set(written)).join(", ")}` };
+  }
+  const refused = actions.filter((action) => !action.ok).length;
+  return { tone: refused > 0 ? "warn" : "neutral", label: "No rules changed" };
+}
+
+/* One message of the conversation: the person's as plain text, the
+ * assistant's as its outcome and answer, with the steps it took folded
+ * behind one line (open while it works, so progress shows). */
+function InstallCallout({ result }: { result: OnboardingInstallResult }) {
+  const name = runtimeName(result.runtime);
+  return (
+    <Callout
+      tone="warn"
+      icon={<AlertIcon width={15} height={15} />}
+      title={result.manual ? `${name} needs a manual step` : `Hooks for ${name} were not installed`}
+    >
+      <div className="flex flex-col gap-2">
+        {result.message ? <span>{result.message}</span> : null}
+        {result.snippet ? <CodeBlock code={result.snippet} className="bg-surface" /> : null}
+      </div>
+    </Callout>
+  );
+}
+
+/* The commands that make each enrolled runtime call a gated tool. */
+function TestCommands({ session }: { session: OnboardingSession }) {
+  const runtimes = session.selected_runtimes.filter((runtime) => session.test_commands[runtime]);
+  return (
+    <>
+      {runtimes.map((runtime) => {
+        const test = session.test_commands[runtime];
+        return (
+          <div key={runtime} className="flex flex-col gap-1.5">
+            <CodeBlock label={runtimeName(runtime)} code={test.command} />
+            {test.note ? <p className="text-label font-normal text-ink-muted">{test.note}</p> : null}
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
+/* The last step: a gated call, decided here, whose prompt also went
+ * out through the channels and rules set two steps ago. The card says
+ * where the prompt goes, and the way out asks whether it arrived:
+ * Finish if it did, back to the channels if it did not. Only the
+ * arrival is verified; delivery is the person's word. */
+function TestStep({
+  session,
+  page,
+  activity,
+  finishing,
+  onFinish,
+  onChannels,
+}: {
+  session: OnboardingSession;
+  page: ChannelsPage;
+  activity: TestActivity;
+  finishing: boolean;
+  /* Records the decided request and finishes; offered once a loop has
+   * closed, since the step is deciding it here, not watching it arrive. */
+  onFinish: (requestId: string) => void;
+  onChannels: () => void;
+}) {
+  const hostname = session.machine.hostname || "this machine";
+  const attention = session.install_results.filter((result) => !result.ok || result.manual);
+  const lines = page.rules ? ladderLines(page.rules.standard, page.methods) : [];
+  const decided = activity.closed[0] ?? null;
+  return (
+    <div className="flex flex-col gap-4">
+      <Card>
+        <CardHeader>
+          <div>
+            <CardTitle>Try it</CardTitle>
+            <CardDescription>
+              Run this on <MachineBadge name={hostname} />, then approve or deny the request below.
+            </CardDescription>
+          </div>
+        </CardHeader>
+        <CardBody className="flex flex-col gap-4">
+          {attention.map((result) => (
+            <InstallCallout key={result.runtime} result={result} />
+          ))}
+          <TestCommands session={session} />
+          <div className="flex flex-col gap-2">
+            <div className="flex h-[26px] items-center gap-2 text-label text-ink-muted select-none">
+              <span>Where the notifications go</span>
+              <span className="flex-1 border-t-hairline border-edge" />
+            </div>
+            {lines.length > 0 ? (
+              <ul className="flex flex-col gap-1 rounded-lg border-hairline border-edge bg-canvas px-4 py-3">
+                {lines.map((line) => (
+                  <li key={line} className="text-body text-ink">
+                    {line}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <Callout tone="neutral">
+                Your standard ladder could not be loaded. The prompt still goes to your account
+                email.
+              </Callout>
+            )}
+          </div>
+        </CardBody>
+      </Card>
+
+      <OnboardingApprovals
+        activity={activity}
+        waitingDescription="Run the command above. The agent will wait for you to approve it before continuing; check your phone, inbox, or chat app for the prompt too."
+        next={
+          decided ? (
+            /* One row: the question and its "no" on the left, Finish on the right. */
+            <div className="flex flex-1 flex-wrap items-center justify-between gap-2.5">
+              <div className="flex flex-wrap items-center gap-2.5">
+                <span className="text-label font-normal text-ink-muted">
+                  Did the prompt reach you?
+                </span>
+                <Button variant="ghost" onClick={onChannels}>
+                  No, check my channels
+                </Button>
+              </div>
+              <Button variant="primary" loading={finishing} onClick={() => onFinish(decided.id)}>
+                Yes, finish
+              </Button>
+            </div>
+          ) : null
+        }
+      />
+    </div>
+  );
+}
+
+function DoneCard({
+  status,
+  enrolled,
+  restarting,
+  onRestart,
+  onQueue,
+  onAgents,
+}: {
+  status: OnboardingStatus | null;
+  /* Agents were connected before the flow ended, so a skip left only
+   * the notification steps undone. */
+  enrolled: boolean;
+  restarting: boolean;
+  onRestart: () => void;
+  onQueue: () => void;
+  onAgents: () => void;
+}) {
+  const skipped = status === "skipped";
+  return (
+    <Card>
+      <EmptyState
+        icon={<CheckIcon width={18} height={18} />}
+        title={skipped ? "Setup skipped" : "Setup complete"}
+        description={
+          !skipped
+            ? "Gated calls from your agents now wait in the review queue, the escalation path notifies you when one waits too long, and prompts reach you through your channels."
+            : enrolled
+              ? "Your agents are connected and gated calls wait in the review queue. Choose how withHuman reaches you any time under Settings, Notifications."
+              : "You can run the guided setup any time from the command palette, or connect agents by hand from the agents page."
+        }
+        action={
+          <div className="flex flex-wrap items-center justify-center gap-2.5">
+            <Button variant="primary" onClick={onQueue}>
+              Open the review queue
+            </Button>
+            <Button onClick={onAgents}>See your agents</Button>
+            <Button variant="ghost" loading={restarting} onClick={onRestart}>
+              Set up another machine
+            </Button>
+          </div>
+        }
+      />
+    </Card>
+  );
+}

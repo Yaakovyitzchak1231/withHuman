@@ -1,0 +1,105 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    # BuildKit builds both target architectures concurrently.
+    runs-on: ubicloud-standard-8
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Derive image version
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: quay.io
+          username: ${{ secrets.QUAY_RELEASE_USERNAME }}
+          password: ${{ secrets.QUAY_RELEASE_TOKEN }}
+
+      # The single binary is the one image this repository ships.
+      - name: Build and push bundle
+        uses: docker/build-push-action@v6
+        with:
+          secrets: |
+            github_token=${{ secrets.AAP_MODULE_TOKEN }}
+          context: .
+          target: bundle
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: false
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+          tags: |
+            quay.io/withhuman/bundle:${{ steps.version.outputs.version }}
+            quay.io/withhuman/bundle:latest
+          cache-from: type=gha,scope=bundle
+          cache-to: type=gha,scope=bundle,mode=max
+
+  # The withhuman CLI is a standalone binary people install on the machines
+  # their agents run on. It is cross-compiled here and published, with the
+  # install script, to the R2 bucket behind downloads.withhuman.ai; see
+  # deployment/cli/README.md for the bucket setup.
+  cli:
+    # CLI targets compile sequentially without a frontend or image build.
+    runs-on: ubicloud-standard-2
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Derive version
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          CGO_ENABLED: "0"
+          AAP_MODULE_TOKEN: ${{ secrets.AAP_MODULE_TOKEN }}
+        run: |
+          set -eu
+          for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do
+            os="${target%/*}"
+            arch="${target#*/}"
+            GOOS="$os" GOARCH="$arch" sh scripts/private-go-modules.sh go build -trimpath \
+              -ldflags "-s -w -X main.version=$VERSION" \
+              -o "dist/cli/$VERSION/withhuman-$os-$arch" ./cmd/withhuman-cli
+          done
+          (cd "dist/cli/$VERSION" && sha256sum withhuman-* > SHA256SUMS && cat SHA256SUMS)
+          cp -r "dist/cli/$VERSION" dist/cli/latest
+          printf '%s\n' "$VERSION" > dist/cli/latest/version
+          cp deployment/cli/install.sh dist/install.sh
+
+      - name: Upload to R2
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          AWS_ENDPOINT_URL: https://${{ vars.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+          BUCKET: ${{ vars.R2_PUBLIC_BUCKET }}
+        run: |
+          set -eu
+          aws s3 cp --recursive --endpoint-url "$AWS_ENDPOINT_URL" \
+            --cache-control "public, max-age=31536000, immutable" \
+            "dist/cli/$VERSION" "s3://$BUCKET/cli/$VERSION"
+          aws s3 cp --recursive --endpoint-url "$AWS_ENDPOINT_URL" \
+            --cache-control "public, max-age=300" \
+            dist/cli/latest "s3://$BUCKET/cli/latest"
+          aws s3 cp --endpoint-url "$AWS_ENDPOINT_URL" \
+            --cache-control "public, max-age=300" --content-type "text/x-shellscript" \
+            dist/install.sh "s3://$BUCKET/install.sh"

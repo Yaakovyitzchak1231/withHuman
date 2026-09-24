@@ -1,0 +1,107 @@
+/*
+ * Scoped baseline for design-system surfaces. There is no global preflight:
+ * .ds-root is the boundary, and components style themselves explicitly
+ * rather than relying on inheritance.
+ */
+
+/* Global groundwork: the design system owns the document. Border-box
+ * sizing keeps w-full controls inside their containers, and the
+ * browser's default body margin would make full-height screens scroll. */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+}
+.ds-root {
+  font-family: var(--font-sans);
+  font-size: var(--text-body);
+  line-height: 1.45;
+  letter-spacing: -0.008em;
+  color: var(--ds-ink);
+  background-color: var(--ds-canvas);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Border utilities set only the width; without a global preflight the
+ * default border-style of none would collapse them to zero. Mirror
+ * preflight's border groundwork, scoped. */
+.ds-root :where(*, ::before, ::after) {
+  border-width: 0;
+  border-style: solid;
+  border-color: var(--ds-edge);
+}
+
+/* Neutralize legacy element styles (Martina h1/h2, button chrome, 100%-width
+ * inputs) inside design-system surfaces. :where keeps specificity at zero so
+ * component classes always win. */
+.ds-root :where(button) {
+  font: inherit;
+  letter-spacing: inherit;
+  background: none;
+  border-width: 0;
+  padding: 0;
+  margin: 0;
+  color: inherit;
+  text-align: inherit;
+}
+.ds-root :where(input, textarea, select) {
+  font: inherit;
+  letter-spacing: inherit;
+  width: auto;
+  border-width: 0;
+  margin: 0;
+  background: none;
+  color: inherit;
+  box-shadow: none;
+}
+.ds-root :where(h1, h2, h3, h4, h5, h6, p, figure, blockquote, pre) {
+  margin: 0;
+  font: inherit;
+  letter-spacing: inherit;
+}
+.ds-root :where(nav) {
+  display: block;
+  border-width: 0;
+  border-radius: 0;
+  padding: 0;
+  gap: 0;
+}
+.ds-root :where(ul, ol) {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ds-root :where(a) {
+  color: inherit;
+  text-decoration: none;
+}
+.ds-root :where(code, pre, kbd) {
+  font-family: var(--font-mono);
+}
+.ds-root :where(label) {
+  display: inline;
+  flex-direction: row;
+  gap: 0;
+  font: inherit;
+  font-weight: inherit;
+}
+.ds-root :where(svg) {
+  display: block;
+  flex-shrink: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ds-root *,
+  .ds-root *::before,
+  .ds-root *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

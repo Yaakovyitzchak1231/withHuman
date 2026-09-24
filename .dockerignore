@@ -1,0 +1,15 @@
+.git
+.gitignore
+**/.DS_Store
+**/node_modules
+**/.next
+**/dist
+frontend/tsconfig.app.tsbuildinfo
+webapp/assets
+*.md
+.env.example
+redocly.yaml
+Makefile
+deployment/
+scripts/*
+!scripts/private-go-modules.sh

@@ -1,0 +1,54 @@
+# Slack app manifest for a self-hosted withHuman.
+#
+# Create the app at https://api.slack.com/apps from this manifest, then
+# set WITHHUMAN_SLACK_APP_ID, WITHHUMAN_SLACK_SIGNING_SECRET,
+# WITHHUMAN_SLACK_CLIENT_ID and WITHHUMAN_SLACK_CLIENT_SECRET from its
+# Basic Information page, and WITHHUMAN_SECRETS_KEY to at least 32 random
+# characters that seal the bot tokens installs produce. Replace the
+# redirect, event and interactivity URLs' origin with your WITHHUMAN_PUBLIC_ORIGIN.
+# Slack requires HTTPS for redirect URLs with no exception for localhost.
+# Use a separate Slack app per deployment: each app has one Events API URL
+# and one interactivity Request URL.
+# A local install needs an HTTPS tunnel (ngrok, cloudflared) as the public origin.
+#
+# Each hosted environment uses an app owned by withHuman; this file is
+# for deployments that run their own.
+#
+# For an existing app, deploy the /auth/slack/interactions endpoint first.
+# Then open Interactivity & Shortcuts in the Slack app settings, enable
+# Interactivity, set Request URL to <WITHHUMAN_PUBLIC_ORIGIN>/auth/slack/interactions
+# and save. The Open in withHuman button needs this acknowledgment even though
+# it only opens a link. Decisions are still made in withHuman.
+display_information:
+  name: withHuman
+  description: Approvals for AI agents, reviewed by humans
+  background_color: "#14161C"
+features:
+  bot_user:
+    display_name: withHuman
+    always_online: true
+oauth_config:
+  redirect_urls:
+    - https://approvals.example.com/auth/slack/callback
+  scopes:
+    bot:
+      # Send approval prompts as direct messages.
+      - chat:write
+      # Find members' Slack accounts by the email on their withHuman
+      # account, so their Slack contact method appears without setup.
+      - users:read
+      - users:read.email
+      # Open the direct message a prompt is delivered into.
+      - im:write
+settings:
+  interactivity:
+    is_enabled: true
+    request_url: https://approvals.example.com/auth/slack/interactions
+  event_subscriptions:
+    request_url: https://approvals.example.com/auth/slack/events
+    bot_events:
+      - app_uninstalled
+      - tokens_revoked
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false

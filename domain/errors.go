@@ -1,0 +1,207 @@
+package domain
+
+import (
+	"errors"
+	"fmt"
+)
+
+var (
+	ErrNotFound             = errors.New("not found")
+	ErrUnauthenticated      = errors.New("unauthenticated")
+	ErrForbidden            = errors.New("forbidden")
+	ErrIdempotencyConflict  = errors.New("idempotency key was already used for a different request")
+	ErrConflict             = errors.New("conflict")
+	ErrPreconditionFailed   = errors.New("precondition failed")
+	ErrPreconditionRequired = errors.New("precondition required")
+	ErrInvalid              = errors.New("invalid")
+	ErrMembershipInactive   = errors.New("membership is not active")
+	ErrAgentInactive        = errors.New("agent or agent instance is not active")
+	// ErrAgentArchived refuses every write to an archived agent: the
+	// status switch, new instances and provisioners, and archiving it
+	// again. Archived agents are read only.
+	ErrAgentArchived = errors.New("agent is archived")
+	// ErrAgentNotArchived refuses restoring an agent that is live.
+	ErrAgentNotArchived = errors.New("agent is not archived")
+	// ErrAgentSlugTaken refuses a slug another agent of the organization
+	// holds, live or archived: slugs are never reused.
+	ErrAgentSlugTaken error = conflictError{"agent slug is already taken"}
+	// ErrAgentNameTaken refuses a display name a live agent of the
+	// organization already carries.
+	ErrAgentNameTaken error = conflictError{"agent name is already taken"}
+	// ErrRequestApprovalPipelineArchived refuses appending to or
+	// activating within the pipeline of an archived agent.
+	ErrRequestApprovalPipelineArchived = errors.New("request approval pipeline is archived")
+	ErrAuthenticationStale             = errors.New("authentication is too old")
+	ErrAuthenticationWeak              = errors.New("authentication assurance is insufficient")
+	ErrSelfApproval                    = errors.New("self-approval is disabled")
+	ErrEmailMismatch                   = errors.New("authenticated email does not match the invitation")
+	// ErrUserExists refuses an unauthenticated admission that would attach
+	// an existing global account by email alone: the person must sign in
+	// to that account and accept from there.
+	ErrUserExists      = errors.New("an account with this email already exists")
+	ErrNotTargeted     = errors.New("reviewer is not targeted by this request's routing")
+	ErrAlreadyTerminal = errors.New("approval request is already terminal")
+	ErrLimitExceeded   = errors.New("plan limit exceeded")
+	// ErrWebhookUnconfigured means the deployment has no secrets key, so
+	// webhook endpoints cannot be stored and webhook blocks cannot compile.
+	ErrWebhookUnconfigured = errors.New("webhook runtime is not configured")
+	// ErrWebhookEndpointInUse refuses archiving an endpoint a webhook block
+	// in an active pipeline revision still references.
+	ErrWebhookEndpointInUse = errors.New("webhook endpoint is in use")
+	// ErrWebhookEndpointNotFound rejects a block that references an
+	// endpoint key with no revision in the organization.
+	ErrWebhookEndpointNotFound = errors.New("webhook endpoint not found")
+	// ErrWebhookEndpointInactive refuses activating a pipeline revision
+	// that posts to an endpoint with no active revision.
+	ErrWebhookEndpointInactive = errors.New("webhook endpoint has no active revision")
+	// ErrEscalationPathInUse refuses archiving a path an active
+	// pipeline revision still names, as a block's path or as its default.
+	ErrEscalationPathInUse = errors.New("escalation path is in use")
+	// ErrEscalationPathExists refuses creating a path whose key was ever
+	// used, archived keys included; post a revision to a live one instead.
+	ErrEscalationPathExists = errors.New("escalation path already exists")
+	// ErrEscalationPathArchived refuses appending to, activating, or
+	// archiving again a path that was archived. Archived paths are read
+	// only.
+	ErrEscalationPathArchived = errors.New("escalation path is archived")
+	// ErrEscalationPathInactive refuses activating a pipeline revision that
+	// names a path with no active revision.
+	ErrEscalationPathInactive = errors.New("escalation path has no active revision")
+	// ErrGatewayServerExists refuses registering a gateway server whose
+	// slug was ever used, archived servers included; post a revision to a
+	// live one instead.
+	ErrGatewayServerExists = errors.New("gateway server already exists")
+	// ErrGatewayServerArchived refuses revising, activating, connecting,
+	// or archiving again a gateway server that was archived. Archived
+	// servers are read only.
+	ErrGatewayServerArchived = errors.New("gateway server is archived")
+	// ErrGatewayDownstreamUnreachable reports that a downstream MCP server
+	// could not be dialled or refused to list its tools with the stored
+	// credential; the wrapped message says why.
+	ErrGatewayDownstreamUnreachable = errors.New("downstream server unreachable")
+	// ErrMembershipInEscalationPath refuses suspending or deprovisioning a
+	// member an active escalation path revision still targets, unless the
+	// caller forces it and accepts the dangling target.
+	ErrMembershipInEscalationPath = errors.New("membership is targeted by an active escalation path")
+	// ErrTeamMemberInEscalationPolicy refuses removing a member from a team
+	// while the team's active escalation policy still names them, unless
+	// the caller forces it and accepts that the level skips them.
+	ErrTeamMemberInEscalationPolicy = errors.New("team member is targeted by the team's active escalation policy")
+	// ErrOnboardingState refuses an onboarding write the session's status
+	// does not allow: the other side has not taken its turn yet, or the
+	// session already moved on.
+	ErrOnboardingState = errors.New("onboarding session is not in a status that allows this step")
+	// ErrOnboardingExpired refuses every write to a session past its
+	// expiry; the person starts a new one from the page.
+	ErrOnboardingExpired = errors.New("onboarding session has expired")
+	// ErrRoleBuiltIn refuses editing or deleting a built-in role row;
+	// those are reconciled from code.
+	// ErrPlanRequired refuses a capability the organization's plan does
+	// not include; the wrapping message names the capability and plan.
+	ErrPlanRequired = errors.New("plan does not include this capability")
+	ErrRoleBuiltIn  = errors.New("built-in roles cannot be changed")
+	// ErrAPIKeysDisabled refuses minting or resolving a personal API key
+	// while the organization's policy switch is off. Existing keys are
+	// kept and come back when the switch is turned on.
+	ErrAPIKeysDisabled = errors.New("personal API keys are disabled for this organization")
+	// ErrAPIKeyScopingUnavailable refuses a permission list on a key in
+	// the open edition, whose keys inherit the member's role unchanged.
+	ErrAPIKeyScopingUnavailable = errors.New("API key permission scoping is not available in this edition")
+	// ErrAPIKeyNotAllowed refuses a browser-only operation (issuing keys,
+	// changing a password, browser hand-offs) presented with an API key.
+	ErrAPIKeyNotAllowed = errors.New("this operation cannot be performed with an API key")
+	// ErrRoleAssigned refuses deleting a role while assignments still
+	// reference it.
+	ErrRoleAssigned = errors.New("role is still assigned")
+)
+
+// EscalationPathInUseError carries the uses that refused an archive.
+type EscalationPathInUseError struct {
+	PathKey string
+	Uses    []PipelineUse
+}
+
+func (err EscalationPathInUseError) Error() string {
+	return fmt.Sprintf("%d active pipeline revision reference(s) name escalation path %q: %v", len(err.Uses), err.PathKey, ErrEscalationPathInUse)
+}
+
+func (err EscalationPathInUseError) Unwrap() error { return ErrEscalationPathInUse }
+
+// EscalationPathsInactiveError names the paths that refused a pipeline
+// activation: each exists without an active revision or not at all.
+type EscalationPathsInactiveError struct {
+	PathKeys []string
+}
+
+func (err EscalationPathsInactiveError) Error() string {
+	return fmt.Sprintf("escalation paths %v: %v", err.PathKeys, ErrEscalationPathInactive)
+}
+
+func (err EscalationPathsInactiveError) Unwrap() error { return ErrEscalationPathInactive }
+
+// MembershipInEscalationPathError carries the active path revisions that
+// refused a suspension or deprovision, so the caller can name them and
+// decide whether to force the change.
+type MembershipInEscalationPathError struct {
+	MembershipID ID
+	Paths        []EscalationPathReference
+	// TeamPolicies are the active team escalation policies that name the
+	// membership as a user target.
+	TeamPolicies []TeamEscalationPolicyReference
+}
+
+func (err MembershipInEscalationPathError) Error() string {
+	return fmt.Sprintf("%d active escalation path(s) and %d team policy(ies) target membership %s: %v", len(err.Paths), len(err.TeamPolicies), err.MembershipID, ErrMembershipInEscalationPath)
+}
+
+func (err MembershipInEscalationPathError) Unwrap() error { return ErrMembershipInEscalationPath }
+
+// TeamMemberInEscalationPolicyError carries which members of a team its
+// active policy still names, so the caller can decide whether to force
+// the removal.
+type TeamMemberInEscalationPolicyError struct {
+	TeamID        ID
+	Revision      int64
+	MembershipIDs []ID
+}
+
+func (err TeamMemberInEscalationPolicyError) Error() string {
+	return fmt.Sprintf("team %s escalation policy revision %d targets %d member(s) being removed: %v", err.TeamID, err.Revision, len(err.MembershipIDs), ErrTeamMemberInEscalationPolicy)
+}
+
+func (err TeamMemberInEscalationPolicyError) Unwrap() error { return ErrTeamMemberInEscalationPolicy }
+
+// WebhookEndpointInUseError carries the uses that refused archiving an
+// endpoint.
+type WebhookEndpointInUseError struct {
+	EndpointKey string
+	Uses        []PipelineUse
+}
+
+func (err WebhookEndpointInUseError) Error() string {
+	return fmt.Sprintf("%d active pipeline revision reference(s) post to webhook endpoint %q: %v", len(err.Uses), err.EndpointKey, ErrWebhookEndpointInUse)
+}
+
+func (err WebhookEndpointInUseError) Unwrap() error { return ErrWebhookEndpointInUse }
+
+// WebhookEndpointsInactiveError names the endpoints that refused a
+// pipeline activation: each exists without an active revision or not at
+// all.
+type WebhookEndpointsInactiveError struct {
+	EndpointKeys []string
+}
+
+func (err WebhookEndpointsInactiveError) Error() string {
+	return fmt.Sprintf("webhook endpoints %v: %v", err.EndpointKeys, ErrWebhookEndpointInactive)
+}
+
+func (err WebhookEndpointsInactiveError) Unwrap() error { return ErrWebhookEndpointInactive }
+
+// conflictError is a specific conflict that still satisfies
+// errors.Is(err, ErrConflict), so generic conflict handling keeps working
+// while callers that care can tell the cases apart.
+type conflictError struct{ message string }
+
+func (e conflictError) Error() string { return e.message }
+
+func (conflictError) Is(target error) bool { return target == ErrConflict }

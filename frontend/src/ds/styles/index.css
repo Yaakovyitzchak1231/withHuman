@@ -1,0 +1,18 @@
+/*
+ * Design system stylesheet. No Tailwind preflight: it would restyle the
+ * legacy screens. Element defaults live in the .ds-root scoped reset in
+ * base.css instead, and components style themselves explicitly.
+ */
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+@import "./fonts.css";
+@import "./tokens.css";
+@import "./base.css" layer(base);
+@import "./logo.css" layer(components);
+
+/*
+ * The shell marks its content pane with data-sidebar="collapsed" while
+ * the sidebar is hidden. Screens use this variant to keep their header
+ * clear of the floating "Show sidebar" control in the top-left corner.
+ */
+@custom-variant sidebar-collapsed (&:where([data-sidebar="collapsed"], [data-sidebar="collapsed"] *));

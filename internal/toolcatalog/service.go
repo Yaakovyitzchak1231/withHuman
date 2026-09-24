@@ -1,0 +1,181 @@
+// Package toolcatalog owns descriptive tool inventory. It never grants access
+// or participates in approval execution.
+package toolcatalog
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"regexp"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/withHumanAI/withHuman/application"
+	"github.com/withHumanAI/withHuman/domain"
+	"github.com/withHumanAI/withHuman/internal/authorization"
+)
+
+type Service struct {
+	repo application.ToolCatalogRepository
+	// source is the edition's external tool source, nil in an edition
+	// without one.
+	source    application.ToolSource
+	clock     application.Clock
+	logger    *slog.Logger
+	mu        sync.Mutex
+	refreshes map[string]*refreshState
+}
+type refreshState struct {
+	mu      sync.Mutex
+	version string
+	at      time.Time
+}
+
+func NewService(repo application.ToolCatalogRepository, source application.ToolSource, clock application.Clock, logger *slog.Logger) *Service {
+	return &Service{repo: repo, source: source, clock: clock, logger: logger, refreshes: map[string]*refreshState{}}
+}
+
+// RegisterSource installs the edition's external tool source. The hosted
+// edition's gateway registers itself once its own services exist, after
+// core's server is composed.
+func (s *Service) RegisterSource(source application.ToolSource) { s.source = source }
+func (s *Service) Report(ctx context.Context, p domain.Principal, report domain.ToolCatalogReport) error {
+	if p.ActorType != domain.ActorAgent || p.AgentInstanceID == "" {
+		return domain.ErrForbidden
+	}
+	if err := report.Validate(); err != nil {
+		return err
+	}
+	for _, source := range report.Sources {
+		if !domain.RuntimeToolSource(source.Source) {
+			return fmt.Errorf("instances report only the runtime's own sources: %w", domain.ErrInvalid)
+		}
+	}
+	return s.repo.SaveToolCatalog(ctx, application.SaveToolCatalogInput{OrganizationID: p.OrganizationID, AgentInstanceID: p.AgentInstanceID, Report: report, Now: s.clock.Now()})
+}
+
+type Query struct {
+	AgentSlug              domain.AgentSlug
+	Search, Source, Status string
+	Limit, Offset          int
+	Refresh                bool
+	ID                     domain.ID
+}
+
+func (s *Service) List(ctx context.Context, p domain.Principal, q Query) (domain.ToolCatalogPage, error) {
+	empty := domain.ToolCatalogPage{Tools: []domain.ToolCatalogEntry{}, Sources: []domain.ToolCatalogSource{}}
+	scope := authorization.Scope(p, domain.PermissionAgentRead)
+	if scope.Empty() {
+		return empty, domain.ErrForbidden
+	}
+	if q.AgentSlug != "" {
+		if err := authorization.Check(p, domain.PermissionAgentRead, domain.AgentResource(q.AgentSlug)); err != nil {
+			return empty, err
+		}
+	}
+	if q.Offset < 0 || q.Limit < 0 || q.Limit > 500 || len(q.Search) > 200 || (q.Source != "" && !sourceFilterPattern.MatchString(q.Source)) || (q.Status != "" && q.Status != "available" && q.Status != "unavailable" && q.Status != "stale") {
+		return empty, domain.ErrInvalid
+	}
+	in := application.ReadToolCatalogInput{OrganizationID: p.OrganizationID, Scope: scope, AgentSlug: q.AgentSlug, Now: s.clock.Now()}
+	if s.source != nil {
+		sourceScope := application.ToolSourceScope{OrganizationID: p.OrganizationID, Scope: scope, AgentSlug: q.AgentSlug}
+		targets, err := s.source.Targets(ctx, sourceScope)
+		if err != nil {
+			return empty, err
+		}
+		var wg sync.WaitGroup
+		slots := make(chan struct{}, 4)
+		for _, target := range targets {
+			wg.Add(1)
+			go func(target application.ToolSourceTarget) {
+				defer wg.Done()
+				select {
+				case slots <- struct{}{}:
+					defer func() { <-slots }()
+				case <-ctx.Done():
+					return
+				}
+				if err := s.refresh(ctx, target, q.Refresh); err != nil {
+					s.logger.WarnContext(ctx, "external tool catalogue refresh failed; last successful definitions retained", "source_ref", target.SourceRef, "error", err)
+				}
+			}(target)
+		}
+		wg.Wait()
+		if in.External, err = s.source.Visibility(ctx, sourceScope); err != nil {
+			return empty, err
+		}
+	}
+	page, err := s.repo.ReadToolCatalog(ctx, in)
+	if err != nil {
+		return empty, err
+	}
+	filtered := []domain.ToolCatalogEntry{}
+	for _, t := range page.Tools {
+		if q.ID != "" && t.ID != q.ID {
+			continue
+		}
+		if q.Source != "" && t.Source != q.Source {
+			continue
+		}
+		if q.Status == "available" && !t.Available || q.Status == "unavailable" && t.Available || q.Status == "stale" && !t.Stale {
+			continue
+		}
+		if q.Search != "" && !strings.Contains(strings.ToLower(t.Name+" "+t.DisplayName+" "+t.Description+" "+t.Server), strings.ToLower(q.Search)) {
+			continue
+		}
+		filtered = append(filtered, t)
+	}
+	sort.Slice(filtered, func(i, j int) bool {
+		a, b := filtered[i], filtered[j]
+		return a.Name+"\x00"+string(a.AgentSlug)+"\x00"+string(a.ID) < b.Name+"\x00"+string(b.AgentSlug)+"\x00"+string(b.ID)
+	})
+	page.Total = len(filtered)
+	start := min(q.Offset, len(filtered))
+	limit := q.Limit
+	if limit == 0 {
+		limit = 50
+	}
+	end := min(start+limit, len(filtered))
+	page.Tools = filtered[start:end]
+	if end < len(filtered) {
+		page.NextOffset = &end
+	}
+	return page, nil
+}
+
+var sourceFilterPattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
+
+// refresh discovers one external owner's tools unless its version is the
+// one discovered less than five minutes ago. Every owner has its own
+// lock so one slow listing never blocks another.
+func (s *Service) refresh(ctx context.Context, target application.ToolSourceTarget, force bool) error {
+	key := string(target.OrganizationID) + ":" + target.SourceRef
+	s.mu.Lock()
+	state := s.refreshes[key]
+	if state == nil {
+		state = &refreshState{}
+		s.refreshes[key] = state
+	}
+	s.mu.Unlock()
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	version, err := s.source.State(ctx, target)
+	if err != nil {
+		return err
+	}
+	if !force && state.version == version && s.clock.Now().Sub(state.at) < 5*time.Minute {
+		return nil
+	}
+	snapshot, discoveryErr := s.source.Discover(ctx, target)
+	if snapshot.OrganizationID == "" {
+		return discoveryErr
+	}
+	if err := s.repo.SaveToolCatalog(ctx, snapshot); err != nil {
+		return err
+	}
+	state.version = version
+	state.at = s.clock.Now()
+	return discoveryErr
+}

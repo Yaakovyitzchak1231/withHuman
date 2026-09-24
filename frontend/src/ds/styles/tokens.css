@@ -1,0 +1,281 @@
+/*
+ * Design system tokens.
+ *
+ * Two layers:
+ *   1. Semantic vars (--ds-*) on :root, overridden under [data-theme="dark"].
+ *      Prefixed so they can never collide with legacy styles.css vars.
+ *   2. An @theme inline block mapping semantic vars into Tailwind utility
+ *      names (bg-canvas, text-ink-muted, border-edge, ...). The default
+ *      Tailwind palette is wiped: components can only reach semantic tokens.
+ */
+
+:root {
+  color-scheme: light;
+
+  /* Surfaces */
+  --ds-canvas: #f9f9f8;
+  --ds-surface: #ffffff;
+  --ds-surface-raised: #ffffff;
+  --ds-surface-overlay: #ffffff;
+  /* Raised interactive faces (neutral buttons): must contrast with
+   * surface, which dark mode cannot get from shadows alone. */
+  --ds-control: #ffffff;
+
+  /* Ink */
+  --ds-ink: #0a0d17;
+  --ds-ink-secondary: #40434e;
+  --ds-ink-muted: #6e7180;
+  --ds-ink-faint: #9b9ea9;
+
+  /* Edges (alpha inks so they sit on any surface) */
+  --ds-edge: rgba(10, 13, 23, 0.12);
+  --ds-edge-strong: rgba(10, 13, 23, 0.24);
+
+  /* Interaction washes */
+  --ds-fill-hover: rgba(10, 13, 23, 0.04);
+  --ds-fill-active: rgba(10, 13, 23, 0.07);
+  --ds-fill-selected: rgba(61, 58, 240, 0.08);
+
+  /* Accent (ultramarine) */
+  --ds-accent: #3d3af0;
+  --ds-accent-hover: #302dd8;
+  --ds-accent-subtle: rgba(61, 58, 240, 0.09);
+  --ds-ink-on-accent: #ffffff;
+
+  /* Product semantics */
+  --ds-approve: #148a44;
+  --ds-approve-subtle: rgba(20, 138, 68, 0.1);
+  --ds-deny: #d5303e;
+  --ds-deny-subtle: rgba(213, 48, 62, 0.09);
+  --ds-warn: #b25e09;
+  --ds-warn-subtle: rgba(178, 94, 9, 0.1);
+
+  --ds-focus: rgba(61, 58, 240, 0.65);
+
+  /* Control knobs (switch thumbs, slider handles): light in both themes. */
+  --ds-knob: #ffffff;
+
+  /* Dialog backdrop scrim */
+  --ds-scrim: rgba(10, 13, 23, 0.4);
+
+  /* Shadows */
+  --ds-shadow-sm: 0 1px 2px rgba(10, 13, 23, 0.06);
+  --ds-shadow-md:
+    0 2px 8px rgba(10, 13, 23, 0.08), 0 0 0 0.5px rgba(10, 13, 23, 0.05);
+  --ds-shadow-overlay:
+    0 12px 32px rgba(10, 13, 23, 0.16), 0 0 0 0.5px rgba(10, 13, 23, 0.06);
+
+  /* Motion */
+  --ds-duration-fast: 100ms;
+  --ds-duration-base: 160ms;
+  --ds-duration-slow: 240ms;
+  --ds-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ds-ease-standard: cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* A page that sets a theme owns the root background. Scroll locking
+ * (open menus and dialogs) removes the scrollbar and its gutter shows
+ * the root, which must not flash the legacy page color. The scrollbar
+ * thumb is drawn from the edge tokens: the browser default disappears
+ * against the dark canvas. */
+:root[data-theme] {
+  background-color: var(--ds-canvas);
+  scrollbar-color: var(--ds-edge-strong) transparent;
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --ds-canvas: #0e1015;
+  --ds-surface: #16181f;
+  --ds-surface-raised: #1b1e26;
+  --ds-surface-overlay: #1f232c;
+  --ds-control: #262b37;
+
+  --ds-ink: #e9eaef;
+  --ds-ink-secondary: #b4b8c3;
+  --ds-ink-muted: #858a99;
+  --ds-ink-faint: #5b6070;
+
+  --ds-edge: rgba(255, 255, 255, 0.09);
+  --ds-edge-strong: rgba(255, 255, 255, 0.18);
+
+  --ds-fill-hover: rgba(255, 255, 255, 0.05);
+  --ds-fill-active: rgba(255, 255, 255, 0.08);
+  --ds-fill-selected: rgba(94, 134, 255, 0.14);
+
+  --ds-accent: #5e86ff;
+  --ds-accent-hover: #7597ff;
+  --ds-accent-subtle: rgba(94, 134, 255, 0.15);
+  --ds-ink-on-accent: #0b1020;
+
+  --ds-approve: #34c274;
+  --ds-approve-subtle: rgba(52, 194, 116, 0.14);
+  --ds-deny: #f2555f;
+  --ds-deny-subtle: rgba(242, 85, 95, 0.13);
+  --ds-warn: #dfa03c;
+  --ds-warn-subtle: rgba(223, 160, 60, 0.13);
+
+  --ds-focus: rgba(94, 134, 255, 0.75);
+
+  --ds-knob: #e9eaef;
+
+  --ds-scrim: rgba(0, 0, 0, 0.6);
+
+  --ds-shadow-sm:
+    0 0 0 0.5px rgba(255, 255, 255, 0.06), 0 1px 2px rgba(0, 0, 0, 0.4);
+  --ds-shadow-md:
+    0 0 0 0.5px rgba(255, 255, 255, 0.08), 0 4px 12px rgba(0, 0, 0, 0.5);
+  --ds-shadow-overlay:
+    0 0 0 0.5px rgba(255, 255, 255, 0.1), 0 16px 40px rgba(0, 0, 0, 0.6);
+}
+
+@theme inline {
+  /* Semantic colors only: the default Tailwind palette does not exist. */
+  --color-*: initial;
+  --color-canvas: var(--ds-canvas);
+  --color-surface: var(--ds-surface);
+  --color-surface-raised: var(--ds-surface-raised);
+  --color-surface-overlay: var(--ds-surface-overlay);
+  --color-control: var(--ds-control);
+  --color-ink: var(--ds-ink);
+  --color-ink-secondary: var(--ds-ink-secondary);
+  --color-ink-muted: var(--ds-ink-muted);
+  --color-ink-faint: var(--ds-ink-faint);
+  --color-edge: var(--ds-edge);
+  --color-edge-strong: var(--ds-edge-strong);
+  --color-fill-hover: var(--ds-fill-hover);
+  --color-fill-active: var(--ds-fill-active);
+  --color-fill-selected: var(--ds-fill-selected);
+  --color-accent: var(--ds-accent);
+  --color-accent-hover: var(--ds-accent-hover);
+  --color-accent-subtle: var(--ds-accent-subtle);
+  --color-ink-on-accent: var(--ds-ink-on-accent);
+  --color-approve: var(--ds-approve);
+  --color-approve-subtle: var(--ds-approve-subtle);
+  --color-deny: var(--ds-deny);
+  --color-deny-subtle: var(--ds-deny-subtle);
+  --color-warn: var(--ds-warn);
+  --color-warn-subtle: var(--ds-warn-subtle);
+  --color-focus: var(--ds-focus);
+  --color-knob: var(--ds-knob);
+  --color-scrim: var(--ds-scrim);
+  --color-transparent: transparent;
+  --color-current: currentColor;
+
+  /* Families. Inter 92 carries size-adjust: 92%; see fonts.css. */
+  --font-*: initial;
+  --font-sans: "Inter 92", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Roboto Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-display: "Martina Plantijn", Georgia, serif;
+
+  /*
+   * Type scale (semantic roles, not t-shirt sizes). Sizes are declared px;
+   * Inter 92 renders them 8% smaller. Mono content next to Inter body text
+   * should be declared 1px smaller to match optically.
+   */
+  --text-*: initial;
+  --text-micro: 11px;
+  --text-micro--line-height: 16px;
+  --text-micro--letter-spacing: 0.005em;
+  --text-micro--font-weight: 500;
+  --text-label: 12px;
+  --text-label--line-height: 16px;
+  --text-label--letter-spacing: 0em;
+  --text-label--font-weight: 500;
+  --text-body: 13px;
+  --text-body--line-height: 20px;
+  --text-body--letter-spacing: -0.008em;
+  --text-body-lg: 14px;
+  --text-body-lg--line-height: 21px;
+  --text-body-lg--letter-spacing: -0.01em;
+  --text-title: 16px;
+  --text-title--line-height: 24px;
+  --text-title--letter-spacing: -0.014em;
+  --text-title--font-weight: 600;
+  --text-title-lg: 20px;
+  --text-title-lg--line-height: 28px;
+  --text-title-lg--letter-spacing: -0.017em;
+  --text-title-lg--font-weight: 600;
+  --text-display: 28px;
+  --text-display--line-height: 34px;
+  --text-display--letter-spacing: -0.021em;
+  --text-display--font-weight: 300;
+
+  /* Radii: denser than the marketing site's 20px cards. */
+  --radius-*: initial;
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
+
+  /* Shadows flip with the theme through the --ds-* indirection. */
+  --shadow-*: initial;
+  --shadow-sm: var(--ds-shadow-sm);
+  --shadow-md: var(--ds-shadow-md);
+  --shadow-overlay: var(--ds-shadow-overlay);
+
+  /* Easing: decisive settle, no bounce. */
+  --ease-*: initial;
+  --ease-out: var(--ds-ease-out);
+  --ease-standard: var(--ds-ease-standard);
+}
+
+/* Loading indicator dots (Button and LoadingDots). */
+@keyframes ds-dot {
+  0%,
+  80%,
+  100% {
+    opacity: 0.25;
+  }
+  40% {
+    opacity: 1;
+  }
+}
+
+/* Entrance for floating chrome (SelectionBar). */
+@keyframes ds-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Hairline edges: true 0.5px on 2x displays; on 1dppx screens browsers
+ * round up to 1px and the low-alpha edge tokens keep the line light. */
+@utility border-hairline {
+  border-width: 0.5px;
+}
+@utility border-t-hairline {
+  border-top-width: 0.5px;
+}
+@utility border-b-hairline {
+  border-bottom-width: 0.5px;
+}
+@utility border-l-hairline {
+  border-left-width: 0.5px;
+}
+@utility border-r-hairline {
+  border-right-width: 0.5px;
+}
+@utility border-x-hairline {
+  border-left-width: 0.5px;
+  border-right-width: 0.5px;
+}
+@utility border-y-hairline {
+  border-top-width: 0.5px;
+  border-bottom-width: 0.5px;
+}
+@utility ring-hairline {
+  /* Composes with shadow-* through Tailwind's shadow pipeline instead
+   * of clobbering box-shadow. */
+  --tw-ring-shadow: 0 0 0 0.5px var(--ds-edge);
+  box-shadow:
+    var(--tw-inset-shadow), var(--tw-inset-ring-shadow),
+    var(--tw-ring-offset-shadow), var(--tw-ring-shadow), var(--tw-shadow);
+}

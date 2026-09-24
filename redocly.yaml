@@ -1,0 +1,15 @@
+extends:
+  - recommended
+
+rules:
+  # The repository does not yet declare a software license, so the API
+  # contract must not invent one merely to satisfy a documentation rule.
+  info-license: off
+  # Every operation names the permission the router gates it on, or marks
+  # itself public or self-service. The httpapi conformance test checks the
+  # key against the registry and against the router's own labels.
+  rule/operation-permission:
+    subject: { type: Operation, property: x-withhuman-permission }
+    assertions: { defined: true, pattern: "^(public|self|[a-z_]+(\\.[a-z_]+){1,2})$" }
+    severity: error
+    message: Every operation names a registry permission, public, or self.

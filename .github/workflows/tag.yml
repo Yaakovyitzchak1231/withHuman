@@ -1,0 +1,22 @@
+name: Tag release on main commit
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  tag:
+    runs-on: ubicloud-standard-2
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Bump version and push tag
+        uses: anothrNick/github-tag-action@1.61.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_CREATION_TOKEN }}
+          WITH_V: true
+          DEFAULT_BUMP: patch
+          RELEASE_BRANCHES: main

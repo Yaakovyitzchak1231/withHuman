@@ -1,0 +1,71 @@
+// @vitest-environment jsdom
+import type { ComponentType, ReactNode } from "react";
+import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ContactMethod } from "../types";
+import { ChannelRows, isChannelKind } from "./contact-channels";
+import { contactKind, defineContactKind, registerExtensions } from "./extensions";
+import { ladderOptions } from "./notification-rules";
+
+vi.mock("@tanstack/react-router", () => ({
+  createLink: (component: ComponentType) => component,
+  useNavigate: () => vi.fn(),
+  useRouter: () => ({ invalidate: vi.fn() }),
+  Link: ({ children }: { children: ReactNode }) => <a>{children}</a>,
+}));
+vi.mock("./principal", () => ({ useSession: () => ({ organization: { name: "Example" } }) }));
+vi.mock("./authorization", () => ({ useAccess: () => ({ can: () => true }) }));
+vi.mock("@/ds/components/toast", () => ({ useToast: () => ({ add: vi.fn() }) }));
+afterEach(cleanup);
+
+/* A kind the way an edition would register one: vouched for by the
+ * server, so nothing proves it and the list cannot remove it. */
+const PAGER = defineContactKind({
+  kind: "pager",
+  label: "Pager",
+  icon: <span />,
+  description: "Get paged.",
+  available: (config) => config.webhook_enabled,
+  unavailable: "Not set up on this deployment.",
+  action: "Add pager",
+  add: { title: "Add a pager", description: "Pages arrive here.", component: () => <p>pager flow</p> },
+  row: {
+    title: (method) => method.value,
+    subtitle: () => "Pager",
+    badge: () => ({ tone: "approve", label: "Paged" }),
+    removeLabel: null,
+    removeFailure: "Could not remove that pager",
+    confirm: null,
+  },
+  ladderLabel: (method) => `Pager, ${method.value}`,
+});
+
+function method(overrides: Partial<ContactMethod>): ContactMethod {
+  return { id: "m", kind: "pager", value: "12", available: true, verified: true, primary: false, created_at: "2026-09-24T00:00:00Z", ...overrides };
+}
+
+describe("contact kinds", () => {
+  it("registers a kind that core's screens then draw its way", () => {
+    expect(contactKind("pager")).toBeUndefined();
+    expect(isChannelKind("pager")).toBe(false);
+    registerExtensions({ contactKinds: [PAGER] });
+    expect(contactKind("pager")).toBe(PAGER);
+    expect(isChannelKind("pager")).toBe(true);
+    expect(ladderOptions([method({ id: "pager-id" })])).toContainEqual({ id: "pager-id", label: "Pager, 12" });
+    render(<ChannelRows methods={[method({ id: "pager-id" })]} onChanged={vi.fn()} />);
+    expect(screen.getByText("Paged")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Remove/ })).toBeNull();
+  });
+
+  it("lists a method of a kind no bundle registered by its raw value", () => {
+    const fax = method({ id: "fax-id", kind: "fax", value: "+1 555 0100", verified: false });
+    expect(contactKind("fax")).toBeUndefined();
+    expect(isChannelKind("fax")).toBe(false);
+    expect(ladderOptions([{ ...fax, verified: true }])).toContainEqual({ id: "fax-id", label: "fax, +1 555 0100" });
+    render(<ChannelRows methods={[fax]} onChanged={vi.fn()} />);
+    expect(screen.getByText("+1 555 0100")).toBeTruthy();
+    expect(screen.getByText("fax")).toBeTruthy();
+    expect(screen.getByText("Unconfirmed")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Remove +1 555 0100" })).toBeTruthy();
+  });
+});
