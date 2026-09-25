@@ -359,10 +359,14 @@ export function NameDialog({
 }) {
   const [name, setName] = useState(initialName);
   const [submitting, setSubmitting] = useState(false);
+  /* Each opening starts from the initial name; a refused submit keeps
+   * what was typed so it can be corrected. */
+  useEffect(() => {
+    if (open) setName(initialName);
+  }, [open, initialName]);
 
   function close(next: boolean) {
     onOpenChange(next);
-    if (!next) setName(initialName);
   }
 
   async function submit(event: FormEvent) {
@@ -370,7 +374,6 @@ export function NameDialog({
     setSubmitting(true);
     try {
       await onSubmit(name);
-      setName("");
     } finally {
       setSubmitting(false);
     }

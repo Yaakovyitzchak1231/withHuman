@@ -285,6 +285,27 @@ func (input SetAgentInstanceStatusInput) Validate() error {
 	})
 }
 
+// RenameAgentInstanceInput changes one instance's display name. The name
+// must be free among the agent's instances; requests already made keep
+// the name the instance had when they were created.
+type RenameAgentInstanceInput struct {
+	OrganizationID domain.ID
+	InstanceID     domain.ID
+	Name           string
+	ActorID        domain.ID
+	Now            time.Time
+}
+
+func (input RenameAgentInstanceInput) Validate() error {
+	return firstError([]error{
+		requiredID("organization ID", input.OrganizationID),
+		requiredID("agent instance ID", input.InstanceID),
+		requiredString("agent instance name", input.Name),
+		requiredID("acting actor ID", input.ActorID),
+		requiredTime("current time", input.Now),
+	})
+}
+
 func validAgentStatus(status domain.AgentStatus) error {
 	if !status.Valid() {
 		return invalidField("agent status", "must be active or disabled")

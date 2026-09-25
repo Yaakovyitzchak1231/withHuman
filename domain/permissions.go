@@ -167,7 +167,7 @@ var corePermissions = []PermissionDefinition{
 	{Key: PermissionTeamEscalationWrite, Description: "Create team escalation policy revisions", Holders: managementHolders, Resource: ResourceTeam},
 	{Key: PermissionTeamEscalationActivate, Description: "Activate, roll back, and deactivate team escalation policies", Holders: managementHolders, Resource: ResourceTeam},
 	{Key: PermissionAgentRead, Description: "View agents, their instances, and credential state", Holders: managementHolders, Resource: ResourceAgent},
-	{Key: PermissionAgentWrite, Description: "Create agents and change their status", Holders: managementHolders, Resource: ResourceAgent},
+	{Key: PermissionAgentWrite, Description: "Create agents, rename agents and instances, and change their status", Holders: managementHolders, Resource: ResourceAgent},
 	{Key: PermissionAgentCredentialIssue, Description: "Issue instance credentials and provisioner tokens", Holders: managementHolders, Resource: ResourceAgent, Dangerous: true},
 	{Key: PermissionAgentCredentialRevoke, Description: "Revoke instance credentials and provisioner tokens", Holders: managementHolders, Resource: ResourceAgent},
 	{Key: PermissionPipelineRead, Description: "Read request approval pipelines and their revisions", Holders: managementHolders, Resource: ResourceAgent},

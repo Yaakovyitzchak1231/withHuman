@@ -658,6 +658,25 @@ func (s *Service) SetAgentInstanceStatus(ctx context.Context, principal domain.P
 	})
 }
 
+// RenameAgentInstance changes one instance's display name. Requests
+// already made keep the name they were created with.
+func (s *Service) RenameAgentInstance(ctx context.Context, principal domain.Principal, instanceID domain.ID, name string) (domain.AgentInstance, error) {
+	if err := s.requireAgentPermission(ctx, principal, domain.PermissionAgentWrite, application.LookupAgentSlugInput{AgentInstanceID: instanceID}); err != nil {
+		return domain.AgentInstance{}, err
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return domain.AgentInstance{}, fmt.Errorf("agent instance name is required: %w", domain.ErrInvalid)
+	}
+	return s.agents.RenameAgentInstance(ctx, application.RenameAgentInstanceInput{
+		OrganizationID: principal.OrganizationID,
+		InstanceID:     instanceID,
+		Name:           name,
+		ActorID:        principal.ManagementActorID(),
+		Now:            s.clock.Now(),
+	})
+}
+
 // humanMember is the precondition every management call shares: a
 // signed-in person with a membership row. Agents, gateways, and sessions
 // that are not yet attached to an organization never manage anything.

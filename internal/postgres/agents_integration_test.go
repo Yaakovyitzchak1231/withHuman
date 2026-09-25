@@ -359,6 +359,59 @@ func TestAgentInventoryAgainstRealPostgres(t *testing.T) {
 		t.Fatalf("SetAgentInstanceStatus enabled: %v", err)
 	}
 
+	// Renaming an instance changes its display name alone: the name must
+	// be free among the agent's instances, the requests already made keep
+	// the name they were created with, and only a real change is audited.
+	renamedAt := now.Add(9 * time.Minute)
+	renamedInstance, err := store.RenameAgentInstance(ctx, application.RenameAgentInstanceInput{
+		OrganizationID: orgID, InstanceID: live.instance.ID, Name: "chris laptop", ActorID: membershipID, Now: renamedAt,
+	})
+	if err != nil || renamedInstance.ID != live.instance.ID || renamedInstance.Name != "chris laptop" || renamedInstance.Status != domain.AgentActive || renamedInstance.AgentSlug != release.AgentSlug {
+		t.Fatalf("RenameAgentInstance = %#v, %v", renamedInstance, err)
+	}
+	if _, err := store.RenameAgentInstance(ctx, application.RenameAgentInstanceInput{
+		OrganizationID: orgID, InstanceID: live.instance.ID, Name: "canary runner", ActorID: membershipID, Now: renamedAt,
+	}); !errors.Is(err, domain.ErrAgentInstanceNameTaken) || !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("renaming onto a sibling's name must be refused, got %v", err)
+	}
+	if _, err := store.RenameAgentInstance(ctx, application.RenameAgentInstanceInput{
+		OrganizationID: orgID, InstanceID: domain.ID(uuid.NewString()), Name: "nobody", ActorID: membershipID, Now: renamedAt,
+	}); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("renaming an unknown instance must be not found, got %v", err)
+	}
+	if _, err := store.RenameAgentInstance(ctx, application.RenameAgentInstanceInput{
+		OrganizationID: orgID, InstanceID: live.instance.ID, Name: "chris laptop", ActorID: membershipID, Now: renamedAt.Add(time.Minute),
+	}); err != nil {
+		t.Fatalf("renaming to the current name must be a no-op, got %v", err)
+	}
+	detail, err = store.GetAgentDetail(ctx, application.GetAgentDetailInput{OrganizationID: orgID, AgentID: release.ID, Now: now, InstanceLimit: 25})
+	if err != nil {
+		t.Fatalf("GetAgentDetail after rename: %v", err)
+	}
+	if !slices.ContainsFunc(detail.Instances, func(instance domain.AgentInstanceDetail) bool {
+		return instance.ID == live.instance.ID && instance.Name == "chris laptop"
+	}) {
+		t.Fatalf("the renamed instance must list under its new name: %#v", detail.Instances)
+	}
+	var requestInstanceName string
+	if err := store.Pool().QueryRow(ctx, `SELECT agent_instance_name FROM approval_requests WHERE id = $1`, oldRequest.ID).Scan(&requestInstanceName); err != nil || requestInstanceName != "production runner" {
+		t.Fatalf("an earlier request must keep the name it was created with, got %q, %v", requestInstanceName, err)
+	}
+	var renameEvents int
+	var renamePayload map[string]any
+	if err := store.Pool().QueryRow(ctx, `SELECT count(*), min(data::text)::jsonb FROM test_audit_events
+		WHERE organization_id = $1 AND actor_id = $2 AND event_type = 'agent_instance.renamed' AND subject_id = $3`, orgID, userID, live.instance.ID).Scan(&renameEvents, &renamePayload); err != nil {
+		t.Fatalf("query rename audit events: %v", err)
+	}
+	if renameEvents != 1 || renamePayload["agent_slug"] != string(release.AgentSlug) || renamePayload["previous_name"] != "production runner" || renamePayload["name"] != "chris laptop" {
+		t.Fatalf("instance rename audit = %d events, payload %v", renameEvents, renamePayload)
+	}
+	if _, err := store.RenameAgentInstance(ctx, application.RenameAgentInstanceInput{
+		OrganizationID: orgID, InstanceID: live.instance.ID, Name: "production runner", ActorID: membershipID, Now: renamedAt.Add(2 * time.Minute),
+	}); err != nil {
+		t.Fatalf("the freed name must be usable again: %v", err)
+	}
+
 	// Every switch that changed something is audited and attributed to
 	// the acting member; the no-op re-enable of an active instance is not.
 	var events []string
@@ -694,6 +747,9 @@ func TestArchiveAgentAgainstRealPostgres(t *testing.T) {
 	}
 	if found, err := store.GetAgentBySlug(ctx, application.GetAgentBySlugInput{OrganizationID: orgID, AgentSlug: "release-two"}); err != nil || found.Name != "release canary" || found.ID != reused.ID {
 		t.Fatalf("the renamed agent must keep its slug, got %#v, %v", found, err)
+	}
+	if _, err := store.RenameAgentInstance(ctx, application.RenameAgentInstanceInput{OrganizationID: orgID, InstanceID: instance.ID, Name: "archived runner", ActorID: membershipID, Now: renamedAt}); !errors.Is(err, domain.ErrAgentArchived) {
+		t.Fatalf("renaming an archived agent's instance must be refused, got %v", err)
 	}
 
 	// Restoring puts the agent back to active and its pipeline with it:

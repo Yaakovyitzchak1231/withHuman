@@ -336,6 +336,12 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify({ status }),
     }),
+  /* Requests already made keep the name the instance had at the time. */
+  renameAgentInstance: (id: string, name: string) =>
+    request<AgentInstance>(`${APP_API_BASE}/agent_instances/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ name }),
+    }),
   revokeAgentCredential: (id: string) =>
     request<void>(`${APP_API_BASE}/agent-credentials/${id}`, { method: "DELETE" }),
   createAgentProvisioner: (agentSlug: string) =>
