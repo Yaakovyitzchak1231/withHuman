@@ -26,6 +26,7 @@ import (
 	"github.com/withHumanAI/withHuman/db"
 	"github.com/withHumanAI/withHuman/domain"
 	"github.com/withHumanAI/withHuman/entitlements"
+	"github.com/withHumanAI/withHuman/internal/aapdelivery"
 	"github.com/withHumanAI/withHuman/internal/approvalpipeline"
 	"github.com/withHumanAI/withHuman/internal/approvals"
 	"github.com/withHumanAI/withHuman/internal/authorization"
@@ -329,9 +330,13 @@ func NewServer(ctx context.Context, options ServerOptions) (*Server, error) {
 		client := webhookdelivery.NewClient(webhookPolicy)
 		webhookDeliverer = client
 		blockRegistryOptions = append(blockRegistryOptions, approvalpipeline.WithWebhooks(approvalpipeline.WebhookRuntime{Endpoints: store, Deliverer: client}))
-		logger.Info("webhook blocks enabled")
+		// AAP asynchronous delivery shares the egress policy and the
+		// sealer: a provisioner's receiver is verified and its secret
+		// sealed before the instance is minted.
+		authService.RegisterInstanceDeliveries(aapdelivery.NewVerifier(client, webhookPolicy, sealer, clock, logger))
+		logger.Info("webhook blocks and AAP asynchronous delivery enabled")
 	} else {
-		logger.Info("webhook blocks disabled: WITHHUMAN_SECRETS_KEY is not set")
+		logger.Info("webhook blocks and AAP asynchronous delivery disabled: WITHHUMAN_SECRETS_KEY is not set")
 	}
 	webhookService := webhookendpoints.NewService(store, sealer, webhookPolicy, webhookDeliverer, clock, logger)
 	compiledPipelines := approvalpipeline.NewCompiledPipelineState(store, approvalpipeline.NewBlockRegistry(blockRegistryOptions...))

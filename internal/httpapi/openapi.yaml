@@ -653,7 +653,7 @@ paths:
   /api/aap/v1/instances:
     post:
       summary: Create an agent instance
-      description: "Creates a new instance of the agent the provisioner token belongs to and returns it together with its agent credential. Use this from a fleet or platform that starts agent replicas itself, so each replica gets a credential of its own. The bearer token must be a provisioner token (`whp_`); an agent credential is rejected."
+      description: "Creates a new instance of the agent the provisioner token belongs to and returns it together with its agent credential. Use this from a fleet or platform that starts agent replicas itself, so each replica gets a credential of its own. The bearer token must be a provisioner token (`whp_`); an agent credential is rejected. Pass `delivery` to use the Agent Approval Protocol's asynchronous mode: before the instance is created, withHuman sends a signed `webhook.verification` message to the receiver, which must answer `200` with the same `challenge` within ten seconds, or the call fails with `422` and code `webhook_verification_failed`. Afterwards, every request of the instance that becomes approved, denied, expired or cancelled sends one signed `request.resolved` notification to the receiver, retried with backoff for up to seven days until it answers `2xx`. The notification carries only IDs; read the decision with `GET /api/aap/v1/requests/{id}`. Both messages are signed with the Standard Webhooks scheme (`webhook-id`, `webhook-timestamp` and `webhook-signature` headers). Requires the deployment's secrets key; without it, delivery is refused with `501`."
       operationId: mintAgentInstance
       x-withhuman-permission: public
       tags: [Agent Approval Protocol]
@@ -668,6 +668,7 @@ paths:
                 instance_name: { type: string, example: ci-runner-07, description: "A name for the instance, unique within the agent. Reviewers see it next to the agent's name." }
                 instance_metadata: { type: object, additionalProperties: true, example: { region: eu-west }, description: "Any JSON object to store with the instance, such as a region or pod name." }
                 ttl_seconds: { type: integer, format: int64, minimum: 0, example: 86400, description: "How long the credential stays valid, in seconds. A value above the provider's default is reduced to the default." }
+                delivery: { $ref: "#/components/schemas/AgentInstanceDeliveryInput" }
       responses:
         "201":
           description: The new instance and its credential. The credential's token appears only in this response.
@@ -677,6 +678,8 @@ paths:
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
         "409": { description: An instance with this name already exists for the agent }
+        "422": { $ref: "#/components/responses/Error" }
+        "501": { $ref: "#/components/responses/Error" }
   /api/aap/v1/requests:
     post:
       summary: Create an approval request
@@ -6898,6 +6901,25 @@ components:
         metadata: { type: object, additionalProperties: true, example: { region: eu-west }, description: The JSON stored when the instance was created. }
         created_at: { type: string, format: date-time }
         last_seen_at: { type: string, format: date-time, description: The last time this instance called the API. }
+        delivery: { $ref: "#/components/schemas/AgentInstanceDelivery" }
+    AgentInstanceDelivery:
+      type: object
+      description: The verified receiver of an instance using asynchronous mode, returned when the instance is created. The signing secret is never returned.
+      required: [type, url, registration_id]
+      properties:
+        type: { type: string, enum: [webhook] }
+        url: { type: string, format: uri, example: "https://harness.example.com/aap/events" }
+        registration_id: { type: string, format: uuid }
+    AgentInstanceDeliveryInput:
+      type: object
+      description: "A webhook receiver for asynchronous mode. Install the registration ID and signing secret on the receiver before calling: the verification message names the registration so the receiver can pick the secret before it knows the instance ID."
+      required: [type, url, registration_id, signing_secret]
+      additionalProperties: false
+      properties:
+        type: { type: string, enum: [webhook], description: The only delivery type offered. Another value answers `400` with code `unsupported_delivery_type`. }
+        url: { type: string, format: uri, example: "https://harness.example.com/aap/events", description: "The exact HTTPS receiver URL. Private, loopback and other non-public addresses are refused, and redirects are not followed." }
+        registration_id: { type: string, format: uuid, description: A UUID you generate for this configuration and associate with the secret on the receiver. It is echoed in the verification message. }
+        signing_secret: { type: string, writeOnly: true, pattern: '^whsec_[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$', description: "`whsec_` followed by 32 random bytes in padded base64. Use a separate secret for each instance. It is never returned." }
     AgentCredentialState:
       type: object
       description: One instance credential as the agent page shows it. The token is never included. A credential is live while it is neither expired nor revoked.

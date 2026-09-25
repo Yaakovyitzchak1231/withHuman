@@ -97,6 +97,7 @@ type AgentRepository interface {
 	RevokeAgentCredential(ctx context.Context, input RevokeAgentCredentialInput) error
 	CreateAgentProvisioner(ctx context.Context, input CreateAgentProvisionerInput) (domain.AgentProvisioner, error)
 	MintAgentInstance(ctx context.Context, input MintAgentInstanceInput) (domain.AgentInstance, error)
+	AuthenticateAgentProvisioner(ctx context.Context, input AuthenticateAgentProvisionerInput) (domain.AgentProvisioner, error)
 	RevokeAgentProvisioner(ctx context.Context, input RevokeAgentProvisionerInput) error
 	CreateAgentEnrollment(ctx context.Context, input CreateAgentEnrollmentInput) error
 	GetAgentEnrollment(ctx context.Context, input GetAgentEnrollmentInput) (domain.AgentEnrollment, error)

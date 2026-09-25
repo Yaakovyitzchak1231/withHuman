@@ -34,6 +34,8 @@ type agentRepositoryStub struct {
 	provisionerRecord   application.AgentProvisionerRecord
 	provisionerAgentID  domain.ID
 	mintInput           application.MintAgentInstanceInput
+	mintCalls           int
+	provisionerErr      error
 	statusInput         application.SetAgentStatusInput
 	renameInput         application.RenameAgentInput
 	archiveInput        application.ArchiveAgentInput
@@ -128,11 +130,18 @@ func (r *agentRepositoryStub) CreateAgentProvisioner(_ context.Context, input ap
 }
 func (r *agentRepositoryStub) MintAgentInstance(_ context.Context, input application.MintAgentInstanceInput) (domain.AgentInstance, error) {
 	r.mintInput = input
+	r.mintCalls++
 	name := input.InstanceName
 	if name == "" {
 		name = "instance-generated"
 	}
 	return domain.AgentInstance{ID: "instance-1", AgentID: "agent-1", Name: name, Status: domain.AgentActive, Metadata: input.Metadata, CreatedAt: input.Now, LastSeenAt: input.Now}, nil
+}
+func (r *agentRepositoryStub) AuthenticateAgentProvisioner(_ context.Context, input application.AuthenticateAgentProvisionerInput) (domain.AgentProvisioner, error) {
+	if r.provisionerErr != nil {
+		return domain.AgentProvisioner{}, r.provisionerErr
+	}
+	return domain.AgentProvisioner{ID: input.ProvisionerID, OrganizationID: "org-1", AgentID: "agent-1"}, nil
 }
 func (r *agentRepositoryStub) RevokeAgentProvisioner(context.Context, application.RevokeAgentProvisionerInput) error {
 	return nil
@@ -255,7 +264,7 @@ func TestMintAgentInstanceCapsRequestedTTLAndAllowsAnonymousName(t *testing.T) {
 	service := NewService(nil, repository, nil, nil, entitlements.NewUnlimited(), nil, fixedClock{now}, ServiceConfig{CredentialTTL: 90 * 24 * time.Hour})
 	token := "whp_1b4e28ba-2fa1-11d2-883f-0016d3cca427_provisioner-secret"
 
-	result, err := service.MintAgentInstance(context.Background(), token, "", nil, 3600)
+	result, err := service.MintAgentInstance(context.Background(), MintInstanceRequest{Token: token, TTLSeconds: 3600})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,18 +282,69 @@ func TestMintAgentInstanceCapsRequestedTTLAndAllowsAnonymousName(t *testing.T) {
 		t.Fatal("minted credential is not an instance-class whc token")
 	}
 
-	if _, err := service.MintAgentInstance(context.Background(), token, "runner-1", nil, 400*24*60*60); err != nil {
+	if _, err := service.MintAgentInstance(context.Background(), MintInstanceRequest{Token: token, InstanceName: "runner-1", TTLSeconds: 400 * 24 * 60 * 60}); err != nil {
 		t.Fatal(err)
 	}
 	if repository.mintInput.Credential.ExpiresAt != now.Add(90*24*time.Hour) {
 		t.Fatalf("requested TTL was not capped by policy: %s", repository.mintInput.Credential.ExpiresAt)
 	}
 
-	if _, err := service.MintAgentInstance(context.Background(), token, "", nil, 0); err != nil {
+	if _, err := service.MintAgentInstance(context.Background(), MintInstanceRequest{Token: token}); err != nil {
 		t.Fatal(err)
 	}
 	if repository.mintInput.Credential.ExpiresAt != now.Add(90*24*time.Hour) {
 		t.Fatalf("default TTL was not applied: %s", repository.mintInput.Credential.ExpiresAt)
+	}
+}
+
+type deliveryVerifierStub struct {
+	input application.VerifyInstanceDeliveryInput
+	err   error
+}
+
+func (v *deliveryVerifierStub) VerifyInstanceDelivery(_ context.Context, input application.VerifyInstanceDeliveryInput) (application.AgentInstanceDeliveryRecord, error) {
+	v.input = input
+	if v.err != nil {
+		return application.AgentInstanceDeliveryRecord{}, v.err
+	}
+	return application.AgentInstanceDeliveryRecord{URL: input.Delivery.URL, RegistrationID: input.Delivery.RegistrationID, SealedSigningSecret: []byte("sealed"), VerifiedAt: time.Unix(1, 0)}, nil
+}
+
+func TestMintAgentInstanceVerifiesDeliveryAgainstTheNewInstance(t *testing.T) {
+	repository := &agentRepositoryStub{}
+	service := NewService(nil, repository, nil, nil, entitlements.NewUnlimited(), nil, fixedClock{time.Unix(50_000, 0).UTC()}, ServiceConfig{CredentialTTL: time.Hour})
+	token := "whp_1b4e28ba-2fa1-11d2-883f-0016d3cca427_provisioner-secret"
+	delivery := &application.ProposedInstanceDelivery{Type: "webhook", URL: "https://harness.example.com/aap", RegistrationID: "registration-1", SigningSecret: "whsec_x"}
+
+	if _, err := service.MintAgentInstance(context.Background(), MintInstanceRequest{Token: token, Delivery: delivery}); !errors.Is(err, domain.ErrWebhookUnconfigured) {
+		t.Fatalf("delivery without a verifier must be unconfigured, got %v", err)
+	}
+	verifier := &deliveryVerifierStub{}
+	service.RegisterInstanceDeliveries(verifier)
+	repository.provisionerErr = domain.ErrUnauthenticated
+	if _, err := service.MintAgentInstance(context.Background(), MintInstanceRequest{Token: token, Delivery: delivery}); !errors.Is(err, domain.ErrUnauthenticated) {
+		t.Fatalf("a dead provisioner must fail before verification, got %v", err)
+	}
+	if verifier.input.InstanceID != "" {
+		t.Fatal("the receiver was contacted for an unauthenticated provisioner")
+	}
+	repository.provisionerErr = nil
+	verifier.err = domain.ErrWebhookVerificationFailed
+	if _, err := service.MintAgentInstance(context.Background(), MintInstanceRequest{Token: token, Delivery: delivery}); !errors.Is(err, domain.ErrWebhookVerificationFailed) {
+		t.Fatalf("expected verification failure, got %v", err)
+	}
+	if repository.mintCalls != 0 {
+		t.Fatal("an instance was minted although verification failed")
+	}
+	verifier.err = nil
+	if _, err := service.MintAgentInstance(context.Background(), MintInstanceRequest{Token: token, Delivery: delivery}); err != nil {
+		t.Fatal(err)
+	}
+	if verifier.input.OrganizationID != "org-1" || verifier.input.InstanceID == "" || verifier.input.InstanceID != repository.mintInput.InstanceID {
+		t.Fatalf("verification must bind the minted instance: verified %+v, minted %s", verifier.input, repository.mintInput.InstanceID)
+	}
+	if repository.mintInput.Delivery == nil || repository.mintInput.Delivery.URL != delivery.URL {
+		t.Fatalf("the verified receiver was not stored: %+v", repository.mintInput.Delivery)
 	}
 }
 
@@ -293,7 +353,7 @@ func TestCredentialClassesAreDisjoint(t *testing.T) {
 	repository := &agentRepositoryStub{}
 	service := NewService(nil, repository, nil, nil, entitlements.NewUnlimited(), nil, fixedClock{now}, ServiceConfig{CredentialTTL: time.Hour})
 
-	if _, err := service.MintAgentInstance(context.Background(), "whc_1b4e28ba-2fa1-11d2-883f-0016d3cca427_secret", "", nil, 0); err != domain.ErrUnauthenticated {
+	if _, err := service.MintAgentInstance(context.Background(), MintInstanceRequest{Token: "whc_1b4e28ba-2fa1-11d2-883f-0016d3cca427_secret"}); err != domain.ErrUnauthenticated {
 		t.Fatalf("an instance credential must not mint, got %v", err)
 	}
 	if _, err := service.ResolveCredential(context.Background(), "whp_1b4e28ba-2fa1-11d2-883f-0016d3cca427_secret"); err != domain.ErrUnauthenticated {

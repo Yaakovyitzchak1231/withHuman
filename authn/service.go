@@ -68,6 +68,7 @@ type Service struct {
 	onboarding    application.OnboardingRepository
 	apiKeys       application.APIKeyRepository
 	notifications application.NotificationDispatcher
+	deliveries    application.InstanceDeliveryVerifier
 }
 
 func NewService(identities application.IdentityRepository, agents application.AgentRepository, memberships application.MembershipRepository, activator OrganizationActivator, entitlements application.Entitlements, passwords PasswordHasher, clock application.Clock, config ServiceConfig) *Service {
@@ -80,6 +81,13 @@ func NewService(identities application.IdentityRepository, agents application.Ag
 	service := &Service{identities: identities, agents: agents, memberships: memberships, activator: activator, entitlements: entitlements, passwords: passwords, clock: clock, config: config}
 	service.local = NewLocalAuthenticator(identities, passwords, clock, config.PublicOrigin)
 	return service
+}
+
+// RegisterInstanceDeliveries wires the AAP receiver verifier. Without it,
+// minting an instance with delivery configuration is refused as
+// unconfigured.
+func (s *Service) RegisterInstanceDeliveries(verifier application.InstanceDeliveryVerifier) {
+	s.deliveries = verifier
 }
 
 // RegisterRoles wires the role repository, which just-in-time admission
@@ -955,36 +963,72 @@ func (s *Service) CreateAgentProvisioner(ctx context.Context, principal domain.P
 	}, nil
 }
 
+// MintInstanceRequest is what a provisioner submits to create an instance.
+type MintInstanceRequest struct {
+	Token        string
+	InstanceName string
+	Metadata     json.RawMessage
+	TTLSeconds   int64
+	// Delivery configures AAP asynchronous mode. The receiver must pass
+	// verification before the instance is created.
+	Delivery *application.ProposedInstanceDelivery
+}
+
 // MintAgentInstance registers a runtime and issues its credential using a
 // provisioner token instead of a human authorization. The instance name is
 // optional and the credential TTL is the smaller of the requested TTL and
-// the configured credential TTL.
-func (s *Service) MintAgentInstance(ctx context.Context, token, instanceName string, metadata json.RawMessage, requestedTTLSeconds int64) (domain.AgentInstanceCredential, error) {
-	provisionerID, secret, err := ParseOpaqueToken(token, "whp")
+// the configured credential TTL. With delivery configuration, the token is
+// checked first so only a live provisioner can make the provider call a
+// receiver, and the receiver is verified against the new instance's ID
+// before anything is stored.
+func (s *Service) MintAgentInstance(ctx context.Context, request MintInstanceRequest) (domain.AgentInstanceCredential, error) {
+	provisionerID, secret, err := ParseOpaqueToken(request.Token, "whp")
 	if err != nil {
 		return domain.AgentInstanceCredential{}, domain.ErrUnauthenticated
 	}
-	if requestedTTLSeconds < 0 {
+	if request.TTLSeconds < 0 {
 		return domain.AgentInstanceCredential{}, fmt.Errorf("requested TTL must not be negative: %w", domain.ErrInvalid)
 	}
-	metadata, err = normalizeMetadata(metadata)
+	metadata, err := normalizeMetadata(request.Metadata)
 	if err != nil {
 		return domain.AgentInstanceCredential{}, err
 	}
 	ttl := s.config.CredentialTTL
-	if requested := time.Duration(requestedTTLSeconds) * time.Second; requested > 0 && requested < ttl {
+	if requested := time.Duration(request.TTLSeconds) * time.Second; requested > 0 && requested < ttl {
 		ttl = requested
 	}
 	credential, record, err := s.newCredentialWithTTL(ttl)
 	if err != nil {
 		return domain.AgentInstanceCredential{}, err
 	}
+	instanceID := domain.ID(uuid.NewString())
+	var delivery *application.AgentInstanceDeliveryRecord
+	if request.Delivery != nil {
+		if s.deliveries == nil {
+			return domain.AgentInstanceCredential{}, domain.ErrWebhookUnconfigured
+		}
+		provisioner, err := s.agents.AuthenticateAgentProvisioner(ctx, application.AuthenticateAgentProvisionerInput{
+			ProvisionerID: domain.ID(provisionerID), SecretHash: HashToken(secret), Now: s.clock.Now(),
+		})
+		if err != nil {
+			return domain.AgentInstanceCredential{}, err
+		}
+		verified, err := s.deliveries.VerifyInstanceDelivery(ctx, application.VerifyInstanceDeliveryInput{
+			OrganizationID: provisioner.OrganizationID, InstanceID: instanceID, Delivery: *request.Delivery,
+		})
+		if err != nil {
+			return domain.AgentInstanceCredential{}, err
+		}
+		delivery = &verified
+	}
 	instance, err := s.agents.MintAgentInstance(ctx, application.MintAgentInstanceInput{
 		ProvisionerID: domain.ID(provisionerID),
 		SecretHash:    HashToken(secret),
-		InstanceName:  strings.TrimSpace(instanceName),
+		InstanceID:    instanceID,
+		InstanceName:  strings.TrimSpace(request.InstanceName),
 		Metadata:      metadata,
 		Credential:    record,
+		Delivery:      delivery,
 		Now:           s.clock.Now(),
 	})
 	if err != nil {

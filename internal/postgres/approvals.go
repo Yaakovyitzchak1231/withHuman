@@ -66,6 +66,9 @@ func (s *Store) InitializeApproval(ctx context.Context, input application.Initia
 			decision.DecidedAt); err != nil {
 			return domain.ApprovalRequest{}, err
 		}
+		if err := recordRequestResolvedEvent(ctx, tx, decision.OrganizationID, decision.RequestID); err != nil {
+			return domain.ApprovalRequest{}, err
+		}
 	}
 	for _, event := range input.AuditEvents {
 		if err := s.appendAuditEvent(ctx, tx, event); err != nil {
@@ -278,6 +281,9 @@ func (s *Store) ExpireApproval(ctx context.Context, input application.ExpireAppr
 	if _, err := tx.Exec(ctx, `UPDATE approval_requests SET status='expired',updated_at=$3 WHERE organization_id=$1 AND id=$2`, organizationID, requestID, now); err != nil {
 		return domain.ApprovalRequest{}, err
 	}
+	if err := recordRequestResolvedEvent(ctx, tx, organizationID, requestID); err != nil {
+		return domain.ApprovalRequest{}, err
+	}
 	if err := closeOpenClaims(ctx, tx, organizationID, requestID, domain.ClaimExpired, now); err != nil {
 		return domain.ApprovalRequest{}, err
 	}
@@ -344,6 +350,9 @@ func (s *Store) CancelApproval(ctx context.Context, input application.CancelAppr
 		return domain.ApprovalRequest{}, err
 	}
 	if _, err := tx.Exec(ctx, `UPDATE approval_requests SET status='cancelled',updated_at=$3 WHERE organization_id=$1 AND id=$2`, organizationID, requestID, now); err != nil {
+		return domain.ApprovalRequest{}, err
+	}
+	if err := recordRequestResolvedEvent(ctx, tx, organizationID, requestID); err != nil {
 		return domain.ApprovalRequest{}, err
 	}
 	// A claim that already lapsed closes as lapsed with its own event, as

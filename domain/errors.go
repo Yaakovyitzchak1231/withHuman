@@ -48,6 +48,12 @@ var (
 	// ErrWebhookUnconfigured means the deployment has no secrets key, so
 	// webhook endpoints cannot be stored and webhook blocks cannot compile.
 	ErrWebhookUnconfigured = errors.New("webhook runtime is not configured")
+	// ErrUnsupportedDeliveryType rejects an AAP instance delivery whose
+	// type this provider does not offer; webhook is the only one.
+	ErrUnsupportedDeliveryType = errors.New("delivery type is not supported")
+	// ErrWebhookVerificationFailed means a proposed AAP receiver did not
+	// echo the verification challenge, so no instance was created.
+	ErrWebhookVerificationFailed = errors.New("webhook receiver verification failed")
 	// ErrWebhookEndpointInUse refuses archiving an endpoint a webhook block
 	// in an active pipeline revision still references.
 	ErrWebhookEndpointInUse = errors.New("webhook endpoint is in use")

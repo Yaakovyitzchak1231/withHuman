@@ -23,10 +23,13 @@ const (
 var ErrResponseTooLarge = errors.New("webhook response exceeds the size limit")
 
 // Delivery is one signed POST. Timeout bounds the attempt from connect to
-// the full response.
+// the full response. Secret signs with withHuman's own scheme; a caller
+// that signs another way (AAP's Standard Webhooks) leaves it empty and
+// supplies its headers in Headers.
 type Delivery struct {
 	URL            string
 	Secret         string
+	Headers        http.Header
 	Body           []byte
 	Timeout        time.Duration
 	DeliveryID     string
@@ -37,6 +40,7 @@ type Delivery struct {
 // Response carrying only the duration.
 type Response struct {
 	StatusCode int
+	Header     http.Header
 	Body       []byte
 	Duration   time.Duration
 }
@@ -132,7 +136,14 @@ func (c *Client) Deliver(ctx context.Context, delivery Delivery) (Response, erro
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("User-Agent", UserAgent)
-	request.Header.Set(SignatureHeader, Sign(delivery.Secret, c.now().UTC(), delivery.Body))
+	if delivery.Secret != "" {
+		request.Header.Set(SignatureHeader, Sign(delivery.Secret, c.now().UTC(), delivery.Body))
+	}
+	for name, values := range delivery.Headers {
+		for _, value := range values {
+			request.Header.Add(name, value)
+		}
+	}
 	if delivery.DeliveryID != "" {
 		request.Header.Set(DeliveryIDHeader, delivery.DeliveryID)
 	}
@@ -156,12 +167,12 @@ func (c *Client) Deliver(ctx context.Context, delivery Delivery) (Response, erro
 	body, err := io.ReadAll(io.LimitReader(response.Body, MaximumResponseBytes+1))
 	duration := time.Since(started)
 	if err != nil {
-		return Response{StatusCode: response.StatusCode, Duration: duration}, err
+		return Response{StatusCode: response.StatusCode, Header: response.Header, Duration: duration}, err
 	}
 	if len(body) > MaximumResponseBytes {
-		return Response{StatusCode: response.StatusCode, Duration: duration}, ErrResponseTooLarge
+		return Response{StatusCode: response.StatusCode, Header: response.Header, Duration: duration}, ErrResponseTooLarge
 	}
-	return Response{StatusCode: response.StatusCode, Body: body, Duration: duration}, nil
+	return Response{StatusCode: response.StatusCode, Header: response.Header, Body: body, Duration: duration}, nil
 }
 
 // IsTimeout reports whether a delivery error was the attempt deadline.

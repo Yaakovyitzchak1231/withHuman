@@ -198,6 +198,19 @@ recorded in this file with both the reason and the replacement rule.
   state answers 409 `already_terminal`, and cancelling twice is
   idempotent. The CLI hooks and the gateway withdraw on interrupt and on
   their local deadline.
+- AAP asynchronous mode is a proof of concept on the provider side
+  (`internal/aapdelivery`). A provisioner may pass `delivery` to
+  `POST /api/aap/v1/instances`; the receiver must echo a signed
+  `webhook.verification` challenge before the instance is minted, and
+  its `whsec_` secret is sealed in `agent_instance_deliveries` (so it
+  needs `WITHHUMAN_SECRETS_KEY` and the webhook egress policy). Every
+  store method that inserts a terminal decision also calls
+  `recordRequestResolvedEvent` in the same transaction; a new decision
+  path must too. The worker's dispatcher delivers the ID-only
+  `request.resolved` events, signed with Standard Webhooks, with backoff
+  for seven days until a `2xx`. Not built yet: `PATCH`/`DELETE` on
+  instances, an `Idempotency-Key` on minting, delivery on other
+  enrollment paths, per-destination rate limits, and any product UI.
 - `Agent` is the stable organization-owned machine principal, addressed
   everywhere outside the database by its immutable slug and shown by its
   editable name. `AgentInstance`

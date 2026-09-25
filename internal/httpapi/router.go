@@ -983,13 +983,27 @@ func (a *API) mintAgentInstance(c *gin.Context) {
 		InstanceName     string          `json:"instance_name"`
 		InstanceMetadata json.RawMessage `json:"instance_metadata"`
 		TTLSeconds       int64           `json:"ttl_seconds"`
+		Delivery         *struct {
+			Type           string `json:"type"`
+			URL            string `json:"url"`
+			RegistrationID string `json:"registration_id"`
+			SigningSecret  string `json:"signing_secret"`
+		} `json:"delivery"`
 	}
 	if c.Request.ContentLength != 0 && !bind(c, &request) {
 		return
 	}
-	result, err := a.auth.MintAgentInstance(c.Request.Context(),
-		strings.TrimSpace(strings.TrimPrefix(bearer, "Bearer ")),
-		request.InstanceName, request.InstanceMetadata, request.TTLSeconds)
+	mint := authn.MintInstanceRequest{
+		Token:        strings.TrimSpace(strings.TrimPrefix(bearer, "Bearer ")),
+		InstanceName: request.InstanceName, Metadata: request.InstanceMetadata, TTLSeconds: request.TTLSeconds,
+	}
+	if delivery := request.Delivery; delivery != nil {
+		mint.Delivery = &application.ProposedInstanceDelivery{
+			Type: delivery.Type, URL: delivery.URL,
+			RegistrationID: domain.ID(delivery.RegistrationID), SigningSecret: delivery.SigningSecret,
+		}
+	}
+	result, err := a.auth.MintAgentInstance(c.Request.Context(), mint)
 	if err != nil {
 		a.writeError(c, err)
 		return
@@ -1466,6 +1480,10 @@ func WriteError(c *gin.Context, logger *slog.Logger, err error) {
 		status, errorType, code = http.StatusBadRequest, "invalid_request", refused.Code
 	case errors.Is(err, domain.ErrWebhookUnconfigured):
 		status, errorType, code = http.StatusNotImplemented, "dependency", "webhook_unconfigured"
+	case errors.Is(err, domain.ErrUnsupportedDeliveryType):
+		status, errorType, code = http.StatusBadRequest, "invalid_request", "unsupported_delivery_type"
+	case errors.Is(err, domain.ErrWebhookVerificationFailed):
+		status, errorType, code = http.StatusUnprocessableEntity, "invalid_request", "webhook_verification_failed"
 	case errors.Is(err, domain.ErrOnboardingExpired):
 		status, errorType, code = http.StatusGone, "conflict", "onboarding_session_expired"
 	case errors.Is(err, domain.ErrOnboardingState):
