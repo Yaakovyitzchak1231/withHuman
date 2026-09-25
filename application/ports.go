@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/withHumanAI/withHuman/domain"
@@ -267,10 +268,17 @@ type ApprovalMetrics struct {
 	DatabaseMaxConns           int32
 }
 
+// ErrWorkflowClosed reports that a request's workflow has already finished,
+// which it does only once the request is terminal, so a signal can no
+// longer reach it.
+var ErrWorkflowClosed = errors.New("approval workflow has already finished")
+
 // LifecycleOrchestrator owns only durable asynchronous approval work. Automatic
 // pipeline decisions commit synchronously without entering this port.
 type LifecycleOrchestrator interface {
 	StartApproval(ctx context.Context, input StartApprovalInput) error
+	// SubmitDecision returns ErrWorkflowClosed when the request's workflow
+	// has already finished.
 	SubmitDecision(ctx context.Context, input SubmitDecisionInput) error
 	SubmitClaim(ctx context.Context, input SubmitClaimInput) error
 	// SubmitCancellation stands the request's workflow down after the

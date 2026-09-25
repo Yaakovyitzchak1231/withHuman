@@ -223,8 +223,9 @@ expired_status=$(curl --silent --fail --header "Authorization: Bearer $token" \
 test "$expired_status" = "expired"
 
 # Withdrawal: the instance that opened a request takes it back, the
-# resource comes back cancelled, a second cancel is idempotent, and a
-# human can no longer decide it.
+# resource comes back cancelled, a second cancel is idempotent, the
+# product read records the agent's channel (AAP responses carry protocol
+# fields only), and a human can no longer decide it.
 withdrawn=$(curl --silent --fail --header "Authorization: Bearer $token" --header 'Content-Type: application/json' \
   --header "Idempotency-Key: smoke-cancel-$unique" --data '{"tool":"deploy.preview","arguments":{"version":"withdrawn"},"agent_reasoning":"Exercising agent-side withdrawal","timeout":"5m"}' \
   "$origin/api/aap/v1/requests")
@@ -233,7 +234,9 @@ cancelled_status=$(curl --silent --fail --request DELETE --header "Authorization
   "$origin/api/aap/v1/requests/$withdrawn_id" | jq -r .status)
 test "$cancelled_status" = "cancelled"
 curl --silent --fail --request DELETE --header "Authorization: Bearer $token" \
-  "$origin/api/aap/v1/requests/$withdrawn_id" | jq -e '.status == "cancelled" and .decision.channel == "aap"' >/dev/null
+  "$origin/api/aap/v1/requests/$withdrawn_id" | jq -e '.status == "cancelled" and .decision.status == "cancelled"' >/dev/null
+curl --silent --fail --cookie "$cookie_jar" "$app_api/requests/$withdrawn_id" \
+  | jq -e '.status == "cancelled" and .decision.channel == "aap"' >/dev/null
 cancelled_decision_status=$(curl --silent --output /dev/null --write-out '%{http_code}' \
   --cookie "$cookie_jar" --header 'Content-Type: application/json' \
   --header "Idempotency-Key: smoke-cancelled-decision-$unique" --data '{"status":"approved","note":"Too late","channel":"web"}' \
