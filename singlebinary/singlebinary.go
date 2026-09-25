@@ -153,6 +153,10 @@ func Start(ctx context.Context, cfg Config) (_ *Instance, err error) {
 	base.DatabaseURL = instance.pg.URL(applicationDatabase)
 	instance.DatabaseURL = base.DatabaseURL
 	if err = applyMigrations(ctx, base.DatabaseURL); err != nil {
+		var foreign *db.ForeignChainError
+		if errors.As(err, &foreign) {
+			return nil, fmt.Errorf("apply application migrations: %w; the data directory %s was created by an earlier withHuman, so move it aside or start with a fresh --data-dir", err, dataDir)
+		}
 		return nil, fmt.Errorf("apply application migrations: %w", err)
 	}
 

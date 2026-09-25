@@ -49,6 +49,12 @@ generated bootstrap secret is in `~/.withhuman/bootstrap-secret`. The first
 start downloads and extracts the PostgreSQL binaries (about 32 MB); later
 starts are offline and take about half a second.
 
+The migration chain was squashed at the repository split (2026-09-24) and
+does not upgrade a database from before it. A `~/.withhuman` created by an
+earlier build makes the binary stop at startup with `database was migrated
+by a different migration chain`; move that directory aside or point
+`--data-dir` at a fresh one.
+
 ## Start locally
 
 Requirements are Go, Node, `curl`, and `jq`.

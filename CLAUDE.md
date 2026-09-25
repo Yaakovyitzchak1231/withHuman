@@ -74,6 +74,10 @@ recorded in this file with both the reason and the replacement rule.
   one `0001_initial.sql` at the repository split (2026-09-24), generated
   from a dump of the schema the old files built; the hosted edition's
   chain restarted the same way, and every deployment was recreated.
+  Because the squashed file reuses the old first file's name, `db.Apply`
+  refuses a database whose record table names a file the chain does not
+  ship (`*db.ForeignChainError`) instead of skipping the schema, and the
+  single binary tells the person to move the data directory aside.
 - `withhuman` (`cmd/withhuman`) is the single-binary topology: embedded
   PostgreSQL as a child process, the Temporal server in-process, worker and
   HTTP server in one process. The exported `singlebinary` package composes
