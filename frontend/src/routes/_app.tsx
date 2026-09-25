@@ -20,14 +20,21 @@ import { SessionContext } from "../app/principal";
 import { ReferenceCards } from "../app/reference-cards";
 import { ensureSession, refreshSession, setSession, useSessionState } from "../app/session-store";
 import { readPendingOAuth } from "../app/oauth-consent";
+import { ensureQueue } from "../app/queue-store";
 import { Shell } from "../app/shell";
 
 /* The authenticated app: providers, the session gate, and the shell
  * around every workspace route. The session loads here, alongside the
  * page's own loader, so the shell and the page arrive together. It is
- * fetched once per tab; sign-in and sign-out replace it explicitly. */
+ * fetched once per tab; sign-in and sign-out replace it explicitly. The
+ * queue's notified layer loads beside it, so the count on the sidebar's
+ * queue entry is there at first paint rather than a beat later; without
+ * a session the fetch is refused and retried once sign-in invalidates
+ * the loaders. */
 export const Route = createFileRoute("/_app")({
-  loader: ensureSession,
+  loader: async () => {
+    await Promise.all([ensureSession(), ensureQueue()]);
+  },
   staleTime: Infinity,
   pendingComponent: Booting,
   component: AppLayout,
