@@ -384,24 +384,27 @@ func (input CreateAgentProvisionerInput) Validate() error {
 // name is optional; the adapter generates one from the instance identity when
 // the minting caller has nothing meaningful to say.
 //
-// InstanceID is chosen before the store is reached because a delivery
-// receiver is verified against it before the instance exists. Delivery is
-// that verified receiver, stored with the instance when present.
+// InstanceID is reserved by the claimed IdempotencyKey before the store is
+// reached, because a delivery receiver is verified against it before the
+// instance exists; minting completes that key in its transaction. Delivery
+// is the verified receiver, stored with the instance when present.
 type MintAgentInstanceInput struct {
-	ProvisionerID domain.ID
-	SecretHash    []byte
-	InstanceID    domain.ID
-	InstanceName  string
-	Metadata      json.RawMessage
-	Credential    AgentCredentialRecord
-	Delivery      *AgentInstanceDeliveryRecord
-	Now           time.Time
+	ProvisionerID  domain.ID
+	SecretHash     []byte
+	IdempotencyKey string
+	InstanceID     domain.ID
+	InstanceName   string
+	Metadata       json.RawMessage
+	Credential     AgentCredentialRecord
+	Delivery       *AgentInstanceDeliveryRecord
+	Now            time.Time
 }
 
 func (input MintAgentInstanceInput) Validate() error {
 	checks := []error{
 		requiredID("provisioner ID", input.ProvisionerID),
 		requiredTokenHash("provisioner secret hash", input.SecretHash),
+		validIdempotencyKey(input.IdempotencyKey),
 		requiredID("agent instance ID", input.InstanceID),
 		validJSON("agent instance metadata", input.Metadata),
 		input.Credential.Validate(),

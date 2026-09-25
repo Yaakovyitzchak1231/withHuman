@@ -98,6 +98,16 @@ type AgentRepository interface {
 	CreateAgentProvisioner(ctx context.Context, input CreateAgentProvisionerInput) (domain.AgentProvisioner, error)
 	MintAgentInstance(ctx context.Context, input MintAgentInstanceInput) (domain.AgentInstance, error)
 	AuthenticateAgentProvisioner(ctx context.Context, input AuthenticateAgentProvisionerInput) (domain.AgentProvisioner, error)
+	// The AAP instance lifecycle a provisioner drives: idempotent
+	// provisioning and updates, reads, and deletion. DeleteProvisionedInstance
+	// answers the requests it cancelled so their workflows can be told.
+	ClaimProvisioningKey(ctx context.Context, input ClaimProvisioningKeyInput) (ProvisioningKeyClaim, error)
+	ReleaseProvisioningKey(ctx context.Context, input ReleaseProvisioningKeyInput) error
+	GetProvisionedInstance(ctx context.Context, input GetProvisionedInstanceInput) (ProvisionedInstance, error)
+	ClaimUpdateKey(ctx context.Context, input ClaimUpdateKeyInput) (UpdateKeyClaim, error)
+	ReleaseUpdateKey(ctx context.Context, input ReleaseUpdateKeyInput) error
+	UpdateProvisionedInstance(ctx context.Context, input UpdateProvisionedInstanceInput) (domain.AgentInstance, error)
+	DeleteProvisionedInstance(ctx context.Context, input DeleteProvisionedInstanceInput) ([]domain.ID, error)
 	RevokeAgentProvisioner(ctx context.Context, input RevokeAgentProvisionerInput) error
 	CreateAgentEnrollment(ctx context.Context, input CreateAgentEnrollmentInput) error
 	GetAgentEnrollment(ctx context.Context, input GetAgentEnrollmentInput) (domain.AgentEnrollment, error)

@@ -198,19 +198,30 @@ recorded in this file with both the reason and the replacement rule.
   state answers 409 `already_terminal`, and cancelling twice is
   idempotent. The CLI hooks and the gateway withdraw on interrupt and on
   their local deadline.
-- AAP asynchronous mode is a proof of concept on the provider side
-  (`internal/aapdelivery`). A provisioner may pass `delivery` to
-  `POST /api/aap/v1/instances`; the receiver must echo a signed
-  `webhook.verification` challenge before the instance is minted, and
-  its `whsec_` secret is sealed in `agent_instance_deliveries` (so it
-  needs `WITHHUMAN_SECRETS_KEY` and the webhook egress policy). Every
-  store method that inserts a terminal decision also calls
-  `recordRequestResolvedEvent` in the same transaction; a new decision
-  path must too. The worker's dispatcher delivers the ID-only
-  `request.resolved` events, signed with Standard Webhooks, with backoff
-  for seven days until a `2xx`. Not built yet: `PATCH`/`DELETE` on
-  instances, an `Idempotency-Key` on minting, delivery on other
-  enrollment paths, per-destination rate limits, and any product UI.
+- AAP asynchronous mode and the provisioner's instance lifecycle live in
+  `internal/aapdelivery` and `authn/aap_instances.go`. A provisioner
+  creates, reads, updates and deletes instances at
+  `/api/aap/v1/instances[/{id}]`. Creation and updates require an
+  `Idempotency-Key` (keys in `agent_instance_provisioning_keys` and
+  `agent_instance_update_keys`, leased per attempt, kept seven days, pruned
+  by the dispatcher). A replayed creation returns the original credential
+  without storing it: the secret is an HMAC of the provisioner's own
+  secret and a per-key salt, so only the hash is persisted and the salt
+  goes when the key expires. A `delivery` receiver must echo a signed
+  `webhook.verification` challenge before the instance is created or its
+  receiver replaced; its `whsec_` secret is sealed in
+  `agent_instance_deliveries` (so it needs `WITHHUMAN_SECRETS_KEY` and the
+  webhook egress policy). Every store method that inserts a terminal
+  decision also calls `recordRequestResolvedEvent` in the same
+  transaction; a new decision path must too. The worker's dispatcher
+  delivers the ID-only `request.resolved` events, signed with Standard
+  Webhooks, with backoff for seven days until a `2xx`, pausing while the
+  instance is disabled. Deleting an instance keeps the row for the record
+  (`deleted_at`, disabled, never re-enabled), revokes its credentials,
+  removes the receiver with its queued events first, and then cancels its
+  pending requests, so they send no notification. Not built yet:
+  per-destination rate limits on registration and delivery, delivery on
+  other enrollment paths, and any product UI for receivers.
 - `Agent` is the stable organization-owned machine principal, addressed
   everywhere outside the database by its immutable slug and shown by its
   editable name. `AgentInstance`

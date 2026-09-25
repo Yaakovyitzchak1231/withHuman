@@ -23,6 +23,9 @@ const (
 	claimLimit   = 20
 	firstBackoff = 5 * time.Second
 	maxBackoff   = time.Hour
+	// pruneInterval spaces the housekeeping pass: expired idempotency
+	// keys and events that ran out of retry window while paused.
+	pruneInterval = time.Hour
 )
 
 // Dispatcher delivers queued request.resolved events with exponential
@@ -43,7 +46,15 @@ func NewDispatcher(events application.RequestResolvedEventRepository, client *we
 func (d *Dispatcher) Run(ctx context.Context) {
 	ticker := time.NewTicker(dispatchInterval)
 	defer ticker.Stop()
+	var pruned time.Time
 	for {
+		if now := d.clock.Now(); now.Sub(pruned) >= pruneInterval {
+			if err := d.events.PruneAAPState(ctx, application.PruneAAPStateInput{Now: now}); err != nil && ctx.Err() == nil {
+				d.logger.ErrorContext(ctx, "AAP housekeeping failed; expired idempotency keys stay until the next pass", "error", err)
+			} else {
+				pruned = now
+			}
+		}
 		_ = d.Dispatch(ctx)
 		select {
 		case <-ctx.Done():

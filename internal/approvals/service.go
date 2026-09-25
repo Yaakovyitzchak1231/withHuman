@@ -350,6 +350,19 @@ func (s *Service) Cancel(ctx context.Context, principal domain.Principal, reques
 	return request, nil
 }
 
+// SignalCancelled stands down the workflows of requests another path
+// already cancelled, such as an AAP instance deletion. Like Cancel's, the
+// signal is best-effort.
+func (s *Service) SignalCancelled(ctx context.Context, organizationID domain.ID, requestIDs []domain.ID) {
+	for _, requestID := range requestIDs {
+		if err := s.orchestrator.SubmitCancellation(ctx, application.SubmitCancellationInput{
+			OrganizationID: organizationID, RequestID: requestID,
+		}); err != nil {
+			slog.WarnContext(ctx, "cancellation not signalled to the request workflow", "approval_request_id", requestID, "error", err)
+		}
+	}
+}
+
 // AddReviewer widens a pending request's routing to one more person. The
 // actor must be a reviewer; the repository enforces the rest inside its
 // transaction (the actor is targeted or holds break glass, the request is

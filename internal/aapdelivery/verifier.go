@@ -65,7 +65,7 @@ func (v *Verifier) VerifyInstanceDelivery(ctx context.Context, input application
 		return application.AgentInstanceDeliveryRecord{}, fmt.Errorf("delivery type %q: %w", proposed.Type, domain.ErrUnsupportedDeliveryType)
 	}
 	if _, err := v.policy.ValidateURL(proposed.URL); err != nil {
-		return application.AgentInstanceDeliveryRecord{}, fmt.Errorf("delivery URL is not allowed (%v): %w", err, domain.ErrInvalid)
+		return application.AgentInstanceDeliveryRecord{}, fmt.Errorf("delivery URL is not allowed (%v): %w", err, domain.ErrInvalidWebhookURL)
 	}
 	if _, err := uuid.Parse(string(proposed.RegistrationID)); err != nil {
 		return application.AgentInstanceDeliveryRecord{}, fmt.Errorf("delivery registration_id must be a UUID: %w", domain.ErrInvalid)

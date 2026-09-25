@@ -112,6 +112,9 @@ func (s *Store) MintAgentInstance(ctx context.Context, input application.MintAge
 			Type: application.InstanceDeliveryWebhook, URL: delivery.URL, RegistrationID: delivery.RegistrationID,
 		}
 	}
+	if err := completeProvisioningKey(ctx, tx, provisionerID, input.IdempotencyKey, instance.ID, now); err != nil {
+		return domain.AgentInstance{}, err
+	}
 	if _, err := tx.Exec(ctx, `UPDATE agent_provisioners SET last_used_at = $2 WHERE id = $1`, provisionerID, now); err != nil {
 		return domain.AgentInstance{}, err
 	}

@@ -142,4 +142,5 @@ func (input RecordRequestResolvedAttemptInput) Validate() error {
 type RequestResolvedEventRepository interface {
 	ClaimDueRequestResolvedEvents(ctx context.Context, input ClaimDueRequestResolvedEventsInput) ([]RequestResolvedDelivery, error)
 	RecordRequestResolvedAttempt(ctx context.Context, input RecordRequestResolvedAttemptInput) error
+	PruneAAPState(ctx context.Context, input PruneAAPStateInput) error
 }

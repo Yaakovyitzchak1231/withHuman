@@ -28,7 +28,8 @@ func recordRequestResolvedEvent(ctx context.Context, tx execer, organizationID, 
 
 // ClaimDueRequestResolvedEvents leases up to Limit due events by moving
 // their next attempt to LeaseUntil, skipping rows another worker holds.
-// An event whose instance has no receiver is never claimed.
+// An event whose instance has no receiver is never claimed, and one whose
+// instance is disabled waits until it is enabled again.
 func (s *Store) ClaimDueRequestResolvedEvents(ctx context.Context, input application.ClaimDueRequestResolvedEventsInput) ([]application.RequestResolvedDelivery, error) {
 	if err := input.Validate(); err != nil {
 		return nil, err
@@ -44,8 +45,9 @@ func (s *Store) ClaimDueRequestResolvedEvents(ctx context.Context, input applica
 		 LIMIT $3
 		 FOR UPDATE SKIP LOCKED)
 		UPDATE request_resolved_events e SET next_attempt_at = $2
-		  FROM due, agent_instance_deliveries ad
+		  FROM due, agent_instance_deliveries ad, agent_instances ai
 		 WHERE e.id = due.id AND ad.agent_instance_id = e.agent_instance_id AND ad.organization_id = e.organization_id
+		   AND ai.id = e.agent_instance_id AND ai.organization_id = e.organization_id AND ai.status = 'active'
 		RETURNING e.id::text, e.organization_id::text, e.agent_instance_id::text, e.request_id::text,
 		          e.created_at, e.retry_until, e.attempt_count, ad.url, ad.sealed_signing_secret`,
 		input.Now, input.LeaseUntil, limit)
@@ -85,4 +87,25 @@ func (s *Store) RecordRequestResolvedAttempt(ctx context.Context, input applicat
 		WHERE organization_id = $1 AND id = $2 AND delivered_at IS NULL AND abandoned_at IS NULL`,
 		input.OrganizationID, input.EventID, input.AttemptedAt, statusCode, input.Delivered, input.NextAttemptAt)
 	return err
+}
+
+// PruneAAPState drops idempotency keys past retention, taking the
+// credential salts with them so an old credential can no longer be
+// derived, and abandons undelivered events whose retry window closed
+// while their instance was disabled and nothing attempted them.
+func (s *Store) PruneAAPState(ctx context.Context, input application.PruneAAPStateInput) error {
+	if err := input.Validate(); err != nil {
+		return err
+	}
+	for _, statement := range []string{
+		`DELETE FROM agent_instance_provisioning_keys WHERE expires_at <= $1`,
+		`DELETE FROM agent_instance_update_keys WHERE expires_at <= $1`,
+		`UPDATE request_resolved_events SET abandoned_at = $1
+		  WHERE delivered_at IS NULL AND abandoned_at IS NULL AND retry_until <= $1`,
+	} {
+		if _, err := s.pool.Exec(ctx, statement, input.Now); err != nil {
+			return err
+		}
+	}
+	return nil
 }

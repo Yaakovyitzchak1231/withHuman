@@ -54,6 +54,15 @@ var (
 	// ErrWebhookVerificationFailed means a proposed AAP receiver did not
 	// echo the verification challenge, so no instance was created.
 	ErrWebhookVerificationFailed = errors.New("webhook receiver verification failed")
+	// ErrInvalidWebhookURL rejects a malformed AAP receiver URL or one the
+	// egress policy forbids.
+	ErrInvalidWebhookURL = errors.New("webhook URL is not allowed")
+	// ErrInstanceDeleted answers a replayed AAP provisioning whose instance
+	// has since been deleted, and a product attempt to re-enable one.
+	ErrInstanceDeleted = errors.New("agent instance was deleted")
+	// ErrIdempotencyInProgress means another attempt with the same
+	// idempotency key is still running; retry after it finishes.
+	ErrIdempotencyInProgress = errors.New("an attempt with this idempotency key is in progress")
 	// ErrWebhookEndpointInUse refuses archiving an endpoint a webhook block
 	// in an active pipeline revision still references.
 	ErrWebhookEndpointInUse = errors.New("webhook endpoint is in use")
