@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -27,6 +28,7 @@ type approvalRepositoryStub struct {
 	routingErr      error
 	addedInput      *application.AddApprovalReviewerInput
 	addErr          error
+	applied         []domain.DecisionCommand
 }
 
 // policyStub answers the organization policy from a fixed value.
@@ -80,14 +82,19 @@ func (r *approvalRepositoryStub) ListApprovals(_ context.Context, input applicat
 	r.listInput = input
 	return nil, nil
 }
-func (r *approvalRepositoryStub) CreateDecisionOperation(context.Context, application.CreateDecisionOperationInput) (domain.DecisionOperation, error) {
-	return domain.DecisionOperation{}, nil
+func (r *approvalRepositoryStub) CreateDecisionOperation(_ context.Context, input application.CreateDecisionOperationInput) (domain.DecisionOperation, error) {
+	return input.Operation, nil
 }
 func (r *approvalRepositoryStub) GetDecisionOperation(context.Context, application.GetDecisionOperationInput) (domain.DecisionOperation, error) {
 	return domain.DecisionOperation{}, nil
 }
-func (r *approvalRepositoryStub) ApplyDecision(context.Context, application.ApplyDecisionInput) (domain.DecisionOperation, error) {
-	return domain.DecisionOperation{}, nil
+func (r *approvalRepositoryStub) ApplyDecision(_ context.Context, input application.ApplyDecisionInput) (domain.DecisionOperation, error) {
+	r.applied = append(r.applied, input.Command)
+	operation := domain.DecisionOperation{ID: input.Command.OperationID, OrganizationID: input.Command.OrganizationID, RequestID: input.Command.RequestID, Status: domain.OperationApplied}
+	if r.request.Status.Terminal() {
+		operation.Status, operation.ErrorCode = domain.OperationRejected, "already_terminal"
+	}
+	return operation, nil
 }
 func (r *approvalRepositoryStub) ExpireApproval(context.Context, application.ExpireApprovalInput) (domain.ApprovalRequest, error) {
 	return domain.ApprovalRequest{}, nil
@@ -143,16 +150,19 @@ func (r *approvalRepositoryStub) MarkApprovalWorkflowStarted(context.Context, ap
 
 type lifecycleStub struct {
 	starts        int
+	decisions     int
 	cancellations int
 	err           error
+	decisionErr   error
 }
 
 func (o *lifecycleStub) StartApproval(context.Context, application.StartApprovalInput) error {
 	o.starts++
 	return o.err
 }
-func (*lifecycleStub) SubmitDecision(context.Context, application.SubmitDecisionInput) error {
-	return nil
+func (o *lifecycleStub) SubmitDecision(context.Context, application.SubmitDecisionInput) error {
+	o.decisions++
+	return o.decisionErr
 }
 func (*lifecycleStub) SubmitClaimRelease(context.Context, application.SubmitClaimReleaseInput) error {
 	return nil
@@ -456,6 +466,28 @@ func TestCancelSurvivesTemporalOutage(t *testing.T) {
 	}
 	if request.Status != domain.ApprovalCancelled || lifecycle.cancellations != 1 {
 		t.Fatalf("Temporal outage changed the committed cancellation: %s signals=%d", request.Status, lifecycle.cancellations)
+	}
+}
+
+func TestDecideOnAClosedWorkflowIsRejectedAsTerminal(t *testing.T) {
+	now := time.Unix(41_700, 0).UTC()
+	repository := &approvalRepositoryStub{request: domain.ApprovalRequest{
+		ID: "request-1", OrganizationID: "org-1", AgentID: "agent-1", AgentInstanceID: "instance-1", Status: domain.ApprovalCancelled,
+	}}
+	lifecycle := &lifecycleStub{decisionErr: fmt.Errorf("%w: workflow execution already finished", application.ErrWorkflowClosed)}
+	service := NewService(repository, repository, defaultPolicy(), &evaluatorStub{}, nil, lifecycle, entitlements.NewUnlimited(), approvalClock{now})
+	reviewer := domain.Principal{ActorType: domain.ActorHuman, ActorID: "user-1", OrganizationID: "org-1", MembershipID: "membership-1"}.
+		WithGrants(domain.OrganizationGrants([]domain.Permission{domain.PermissionRequestDecide}))
+
+	operation, err := service.Decide(context.Background(), reviewer, "request-1", DecideInput{Status: domain.ApprovalApproved, IdempotencyKey: "too-late"})
+	if !errors.Is(err, domain.ErrAlreadyTerminal) {
+		t.Fatalf("decide error = %v, want already terminal", err)
+	}
+	if lifecycle.decisions != 1 || len(repository.applied) != 1 || repository.applied[0].OperationID != operation.ID {
+		t.Fatalf("closed workflow decision: signals=%d applied=%#v operation=%s", lifecycle.decisions, repository.applied, operation.ID)
+	}
+	if operation.Status != domain.OperationRejected {
+		t.Fatalf("operation status = %s, want rejected", operation.Status)
 	}
 }
 

@@ -256,7 +256,18 @@ func (s *Service) Decide(ctx context.Context, principal domain.Principal, reques
 		Principal: principal, Status: input.Status, Note: input.Note, Channel: input.Channel,
 		IdempotencyKey: input.IdempotencyKey, OutsideRouting: input.OutsideRouting,
 	}
-	if err := s.orchestrator.SubmitDecision(ctx, application.SubmitDecisionInput{Command: command}); err != nil {
+	err = s.orchestrator.SubmitDecision(ctx, application.SubmitDecisionInput{Command: command})
+	if errors.Is(err, application.ErrWorkflowClosed) {
+		// No workflow is left to record the decision, so record it here:
+		// the store rejects it against the terminal request and closes the
+		// operation, which answers retries under the same key.
+		operation, err = s.approvals.ApplyDecision(ctx, application.ApplyDecisionInput{Command: command, Now: s.clock.Now()})
+		if err != nil {
+			return domain.DecisionOperation{}, err
+		}
+		return operation, operationError(operation)
+	}
+	if err != nil {
 		return domain.DecisionOperation{}, err
 	}
 	return s.waitForOperation(ctx, principal.OrganizationID, operation.ID)

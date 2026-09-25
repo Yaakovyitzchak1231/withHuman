@@ -76,6 +76,12 @@ func (t *Temporal) SubmitDecision(ctx context.Context, input application.SubmitD
 	_, err := t.client.SignalWithStartWorkflow(ctx, workflowID, DecisionSignal, signal, client.StartWorkflowOptions{
 		ID: workflowID, TaskQueue: t.taskQueue, WorkflowIDReusePolicy: enums.WORKFLOW_ID_REUSE_POLICY_REJECT_DUPLICATE,
 	}, ApprovalWorkflow, ApprovalWorkflowInput{OrganizationID: command.OrganizationID, RequestID: command.RequestID})
+	// The reuse policy refuses to start a closed workflow again, and a
+	// workflow closes only once its request is terminal.
+	var alreadyStarted *serviceerror.WorkflowExecutionAlreadyStarted
+	if errors.As(err, &alreadyStarted) {
+		return fmt.Errorf("%w: %w", application.ErrWorkflowClosed, err)
+	}
 	return err
 }
 
