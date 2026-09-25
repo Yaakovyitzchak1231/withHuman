@@ -175,6 +175,9 @@ func (s *Store) SetMembershipStatus(ctx context.Context, input application.SetMe
 		if err := s.revokeMembershipAPIKeys(ctx, tx, input.OrganizationID, input.MembershipID, domain.ActorHuman, actorID, input.Now); err != nil {
 			return domain.Membership{}, err
 		}
+		if err := s.disableMembershipAgentInstances(ctx, tx, input.OrganizationID, input.MembershipID, domain.ActorHuman, actorID, input.Now); err != nil {
+			return domain.Membership{}, err
+		}
 	}
 	eventType := map[domain.MembershipStatus]string{
 		domain.MembershipActive:        "membership.reactivated",

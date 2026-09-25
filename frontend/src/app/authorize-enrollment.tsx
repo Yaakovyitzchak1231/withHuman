@@ -54,7 +54,6 @@ export function AuthorizeEnrollmentScreen({
   const target = preview?.agent ?? selected;
   const completed =
     connected ?? (preview?.status !== "pending" ? preview?.agent : null);
-  const allowed = holdsAnywhere("agent.credential.issue");
 
   async function authorize() {
     if (!target || !search.user_code || submitting) return;
@@ -87,16 +86,12 @@ export function AuthorizeEnrollmentScreen({
         <div>
           <h1 className="text-title-lg text-ink">Connect an instance</h1>
           <p className="mt-1.5 text-body text-ink-muted">
-            Choose the agent whose approval pipeline this runtime will use.
+            Choose the agent whose approval pipeline this runtime will use. An
+            instance of a personal agent is yours: it acts on your behalf.
           </p>
         </div>
       </PageHeader>
-      {!allowed ? (
-        <Callout tone="warn" title="Permission required">
-          Ask an administrator to connect this instance or give you permission
-          to issue agent credentials.
-        </Callout>
-      ) : completed ? (
+      {completed ? (
         <Card>
           <CardBody>
             <Callout tone="approve" title="Instance authorized">
@@ -267,7 +262,7 @@ export function AuthorizeEnrollmentScreen({
                               ? "No matching agents."
                               : holdsAnywhere("agent.write")
                                 ? "No agents are available to connect. Create one to get started."
-                                : "No agents are available to connect. Ask an administrator to add one or grant you access."}
+                                : "No agents are available to connect. Ask an administrator to add a personal agent or grant you access to a service agent."}
                           </p>
                         )}
                         {((search.offset ?? 0) > 0 ||
@@ -343,6 +338,9 @@ function AgentName({ agent }: { agent: Agent }) {
     >
       <span className="text-ink">{agent.name}</span>{" "}
       <span className="font-mono text-[12px] text-ink-muted">{agent.slug}</span>
+      {agent.kind === "personal" ? (
+        <span className="ml-1 text-label text-ink-faint">personal</span>
+      ) : null}
     </Referenced>
   );
 }

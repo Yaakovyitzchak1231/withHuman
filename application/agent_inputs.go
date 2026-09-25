@@ -75,6 +75,8 @@ type CreateAgentInput struct {
 	ActorID        domain.ID
 	Name           string
 	AgentSlug      domain.AgentSlug
+	// Kind is service or personal, chosen once; see domain.AgentKind.
+	Kind domain.AgentKind
 	// AgentQuota is enforced inside the creating transaction.
 	AgentQuota AllocationQuota
 	Now        time.Time
@@ -86,6 +88,7 @@ func (input CreateAgentInput) Validate() error {
 		requiredID("actor ID", input.ActorID),
 		requiredString("agent name", input.Name),
 		validAgentSlug(input.AgentSlug),
+		validAgentKind(input.Kind),
 		input.AgentQuota.Validate(),
 		requiredTime("current time", input.Now),
 	})
@@ -318,15 +321,22 @@ type CreateAgentInstanceWithCredentialInput struct {
 	OrganizationID domain.ID
 	AgentID        domain.ID
 	ActorID        domain.ID
-	Name           string
-	Metadata       json.RawMessage
-	Credential     AgentCredentialRecord
-	Now            time.Time
+	// MembershipID is the member the instance belongs to when the agent
+	// is personal: the human registering it. Empty for a service agent;
+	// the store refuses a mismatch either way.
+	MembershipID domain.ID
+	Name         string
+	Metadata     json.RawMessage
+	Credential   AgentCredentialRecord
+	Now          time.Time
 }
 
 func (input CreateAgentInstanceWithCredentialInput) Validate() error {
 	if input.ActorType != domain.ActorHuman && input.ActorType != domain.ActorAPIKey {
 		return domain.ErrInvalid
+	}
+	if input.MembershipID != "" && input.ActorType != domain.ActorHuman {
+		return invalidField("membership ID", "only a person can own an instance")
 	}
 	return firstError([]error{
 		requiredID("organization ID", input.OrganizationID),
@@ -528,8 +538,15 @@ type ListEnrollmentAgentsInput struct {
 }
 
 func (input ListEnrollmentAgentsInput) Validate() error {
-	if err := firstError([]error{requiredID("organization ID", input.OrganizationID), validScopeSet("scope", input.Scope, domain.ScopeAgent)}); err != nil {
+	// An empty scope lists only personal agents, which every member may
+	// enroll their own instance of; the scope names the service agents.
+	if err := requiredID("organization ID", input.OrganizationID); err != nil {
 		return err
+	}
+	if !input.Scope.Empty() {
+		if err := validScopeSet("scope", input.Scope, domain.ScopeAgent); err != nil {
+			return err
+		}
 	}
 	if input.Offset < 0 || input.Limit < 1 || input.Limit > 100 {
 		return invalidField("pagination", "offset must be nonnegative and limit between 1 and 100")

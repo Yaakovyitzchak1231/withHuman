@@ -71,7 +71,7 @@ func TestSlackLifecycleKeepsRulesAndRejectsStaleGenerations(t *testing.T) {
 		t.Fatal(err)
 	}
 	version := application.SlackConnectionVersion{OrganizationID: org, InstallationID: generation}
-	agent, err := store.CreateAgent(ctx, application.CreateAgentInput{OrganizationID: org, ActorID: member, Name: "fixture", AgentSlug: "fixture", AgentQuota: application.UnlimitedQuota(), Now: now})
+	agent, err := store.CreateAgent(ctx, application.CreateAgentInput{Kind: domain.AgentService, OrganizationID: org, ActorID: member, Name: "fixture", AgentSlug: "fixture", AgentQuota: application.UnlimitedQuota(), Now: now})
 	if err != nil {
 		t.Fatal(err)
 	}

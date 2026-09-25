@@ -39,7 +39,7 @@ func TestEnrollmentSelectsExistingAgent(t *testing.T) {
 	org, member := activate("enrollment")
 	foreignOrg, foreignMember := activate("foreign")
 	create := func(org, member domain.ID, name, kind string) domain.Agent {
-		a, err := store.CreateAgent(ctx, application.CreateAgentInput{OrganizationID: org, ActorID: member, Name: name, AgentSlug: domain.AgentSlug(kind), AgentQuota: application.UnlimitedQuota(), Now: now})
+		a, err := store.CreateAgent(ctx, application.CreateAgentInput{Kind: domain.AgentService, OrganizationID: org, ActorID: member, Name: name, AgentSlug: domain.AgentSlug(kind), AgentQuota: application.UnlimitedQuota(), Now: now})
 		if err != nil {
 			t.Fatal(err)
 		}

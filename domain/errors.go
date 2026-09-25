@@ -16,6 +16,14 @@ var (
 	ErrInvalid              = errors.New("invalid")
 	ErrMembershipInactive   = errors.New("membership is not active")
 	ErrAgentInactive        = errors.New("agent or agent instance is not active")
+	// ErrAgentOwnerRequired refuses registering an instance of a personal
+	// agent without the member it belongs to: only a signed-in person can
+	// enroll one, for themselves.
+	ErrAgentOwnerRequired = errors.New("an instance of a personal agent needs an owner")
+	// ErrPersonalAgent refuses an operation a personal agent has no use
+	// for, such as a provisioner token: its instances are enrolled by
+	// the people they belong to.
+	ErrPersonalAgent = errors.New("the operation does not apply to a personal agent")
 	// ErrAgentArchived refuses every write to an archived agent: the
 	// status switch, new instances and provisioners, and archiving it
 	// again. Archived agents are read only.

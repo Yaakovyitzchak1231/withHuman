@@ -264,12 +264,15 @@ type minterStub struct {
 	conflicts int
 }
 
-func (m *minterStub) CreateAgent(_ context.Context, principal domain.Principal, name string, agentSlug domain.AgentSlug) (domain.Agent, error) {
+func (m *minterStub) CreateAgent(_ context.Context, principal domain.Principal, name string, agentSlug domain.AgentSlug, kind domain.AgentKind) (domain.Agent, error) {
 	if err := authorization.Check(principal, domain.PermissionAgentWrite, domain.OrganizationResource()); err != nil {
 		return domain.Agent{}, err
 	}
+	if kind != domain.AgentPersonal {
+		return domain.Agent{}, fmt.Errorf("guided setup must create personal agents, got %q: %w", kind, domain.ErrInvalid)
+	}
 	m.created = append(m.created, string(agentSlug)+"="+name)
-	agent := domain.Agent{ID: domain.ID(uuid.NewString()), Name: name, AgentSlug: agentSlug, Status: domain.AgentActive}
+	agent := domain.Agent{ID: domain.ID(uuid.NewString()), Name: name, AgentSlug: agentSlug, Kind: kind, Status: domain.AgentActive}
 	m.agents.existing[agentSlug] = agent
 	return agent, nil
 }

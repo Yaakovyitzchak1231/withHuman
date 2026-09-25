@@ -36,7 +36,7 @@ func TestToolCatalogReportsAndVisibility(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	agent, err := store.CreateAgent(ctx, application.CreateAgentInput{OrganizationID: org, ActorID: member, Name: "Support", AgentSlug: "support", AgentQuota: application.UnlimitedQuota(), Now: now})
+	agent, err := store.CreateAgent(ctx, application.CreateAgentInput{Kind: domain.AgentService, OrganizationID: org, ActorID: member, Name: "Support", AgentSlug: "support", AgentQuota: application.UnlimitedQuota(), Now: now})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -52,7 +52,7 @@ func TestClaimsAgainstRealPostgres(t *testing.T) {
 	claimantMembershipID := admitTeamTestMember(t, ctx, store, orgID, ownerMembershipID, "claimant@example.com", "claimant-secret", now)
 	reviewerMembershipID := admitTeamTestMember(t, ctx, store, orgID, ownerMembershipID, "reviewer@example.com", "reviewer-secret", now)
 
-	agent, err := store.CreateAgent(ctx, application.CreateAgentInput{
+	agent, err := store.CreateAgent(ctx, application.CreateAgentInput{Kind: domain.AgentService,
 		OrganizationID: orgID, ActorID: ownerMembershipID, Name: "claims-agent",
 		AgentSlug: "billing", AgentQuota: application.UnlimitedQuota(), Now: now,
 	})

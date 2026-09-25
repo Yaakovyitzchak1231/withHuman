@@ -303,7 +303,7 @@ func TestRoutingAgainstRealPostgres(t *testing.T) {
 			firstMembership).Scan(&userID); err != nil {
 			t.Fatalf("resolve membership user: %v", err)
 		}
-		agent, err := store.CreateAgent(ctx, application.CreateAgentInput{
+		agent, err := store.CreateAgent(ctx, application.CreateAgentInput{Kind: domain.AgentService,
 			OrganizationID: firstOrg, ActorID: firstMembership, Name: "routing-agent",
 			AgentSlug: "billing", AgentQuota: application.UnlimitedQuota(), Now: now,
 		})

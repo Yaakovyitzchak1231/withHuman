@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"crypto/subtle"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,15 +22,17 @@ func (s *Store) ResolveAgentCredential(ctx context.Context, input application.Re
 	}
 	credentialID, secretHash, now := input.CredentialID, input.SecretHash, input.Now
 	var organizationID, agentID, instanceID, agentSlug, agentStatus, instanceStatus string
+	var ownerID, ownerStatus sql.NullString
 	var storedHash []byte
 	err := s.pool.QueryRow(ctx, `SELECT c.organization_id::text, a.id::text, ai.id::text, a.slug, c.secret_hash,
-        a.status, ai.status
+        a.status, ai.status, ai.membership_id::text, m.status
       FROM agent_credentials c
       JOIN agent_instances ai ON ai.id = c.agent_instance_id AND ai.organization_id = c.organization_id
       JOIN agents a ON a.id = ai.agent_id AND a.organization_id = ai.organization_id
       JOIN organizations o ON o.id = a.organization_id
+      LEFT JOIN memberships m ON m.id = ai.membership_id AND m.organization_id = ai.organization_id
      WHERE c.id = $1 AND c.revoked_at IS NULL AND c.expires_at > $2 AND o.status = 'active'`, credentialID, now).Scan(
-		&organizationID, &agentID, &instanceID, &agentSlug, &storedHash, &agentStatus, &instanceStatus,
+		&organizationID, &agentID, &instanceID, &agentSlug, &storedHash, &agentStatus, &instanceStatus, &ownerID, &ownerStatus,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.Principal{}, domain.ErrUnauthenticated
@@ -43,6 +46,12 @@ func (s *Store) ResolveAgentCredential(ctx context.Context, input application.Re
 	if domain.AgentStatus(agentStatus) != domain.AgentActive || domain.AgentStatus(instanceStatus) != domain.AgentActive {
 		return domain.Principal{}, domain.ErrAgentInactive
 	}
+	// A personal instance acts for its owner and stops with them: a
+	// suspended or removed member's instances refuse to resolve, the way
+	// their personal API keys do.
+	if ownerID.Valid && domain.MembershipStatus(ownerStatus.String) != domain.MembershipActive {
+		return domain.Principal{}, domain.ErrAgentInactive
+	}
 	// An agent's grants are its assignments like any other principal's,
 	// typically the built-in agent role at organization scope.
 	grants, err := loadGrants(ctx, s.pool, domain.ID(organizationID), domain.PrincipalAgent, domain.ID(agentID))
@@ -54,6 +63,7 @@ func (s *Store) ResolveAgentCredential(ctx context.Context, input application.Re
 	return domain.Principal{
 		ActorType: domain.ActorAgent, ActorID: domain.ID(agentID), AgentInstanceID: domain.ID(instanceID),
 		AgentSlug:      domain.AgentSlug(agentSlug),
+		MembershipID:   domain.ID(ownerID.String),
 		OrganizationID: domain.ID(organizationID),
 		Auth:           domain.AuthContext{Method: "bearer", Assurance: "machine", AuthenticatedAt: now, CredentialID: credentialID},
 	}.WithGrants(grants), nil
@@ -67,7 +77,7 @@ func (s *Store) CreateAgent(ctx context.Context, input application.CreateAgentIn
 	name, agentSlug, now := input.Name, input.AgentSlug, input.Now
 	agent := domain.Agent{
 		ID: domain.ID(uuid.NewString()), OrganizationID: organizationID, CreatedByActorID: membershipID,
-		Name: name, AgentSlug: agentSlug, Status: domain.AgentActive,
+		Name: name, AgentSlug: agentSlug, Kind: input.Kind, Status: domain.AgentActive,
 		CreatedAt: now, UpdatedAt: now,
 	}
 	err := retrySerializable(func() error {
@@ -94,15 +104,15 @@ func (s *Store) createAgent(ctx context.Context, input application.CreateAgentIn
 		return err
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO agents
-		(id, organization_id, created_by_actor_id, slug, name, status, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, 'active', $6, $6)`, agent.ID, organizationID, membershipID,
-		agentSlug, name, now); err != nil {
+		(id, organization_id, created_by_actor_id, slug, name, kind, status, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, 'active', $7, $7)`, agent.ID, organizationID, membershipID,
+		agentSlug, name, string(input.Kind), now); err != nil {
 		return agentIdentityConflict(err)
 	}
 	if err := s.ensureRequestApprovalPipelineScope(ctx, tx, organizationID, agentSlug, membershipID, now); err != nil {
 		return err
 	}
-	data, _ := json.Marshal(map[string]any{"agent_slug": agentSlug, "name": name})
+	data, _ := json.Marshal(map[string]any{"agent_slug": agentSlug, "name": name, "kind": input.Kind})
 	if err := s.appendManagementAuditEvent(ctx, tx, domain.AuditEvent{OrganizationID: organizationID, EventType: "agent.created", ActorType: domain.ActorHuman, ActorID: membershipID, SubjectType: "agent", SubjectID: agent.ID, Data: data, OccurredAt: now}); err != nil {
 		return err
 	}
@@ -338,9 +348,12 @@ func (s *Store) GetAgentDetail(ctx context.Context, input application.GetAgentDe
 	}
 
 	rows, err := s.pool.Query(ctx, `SELECT ai.id::text, ai.organization_id::text, ai.agent_id::text, ai.name, ai.status,
-		ai.metadata, ai.created_at, ai.last_seen_at,
+		ai.metadata, ai.created_at, ai.last_seen_at, ai.membership_id::text, ou.display_name,
 		(SELECT count(*) FROM approval_requests r WHERE r.organization_id = ai.organization_id AND r.agent_instance_id = ai.id AND r.created_at > $3)
-		FROM agent_instances ai WHERE ai.organization_id = $1 AND ai.agent_id = $2
+		FROM agent_instances ai
+		LEFT JOIN memberships om ON om.id = ai.membership_id AND om.organization_id = ai.organization_id
+		LEFT JOIN users ou ON ou.id = om.user_id
+		WHERE ai.organization_id = $1 AND ai.agent_id = $2
 		AND ($4::text = '' OR strpos(lower(ai.name), lower($4)) > 0)
 		AND ($5::text = '' OR ai.status = $5)
 		ORDER BY ai.last_seen_at DESC, ai.created_at DESC, ai.id DESC LIMIT $6 OFFSET $7`,
@@ -353,12 +366,14 @@ func (s *Store) GetAgentDetail(ctx context.Context, input application.GetAgentDe
 	byInstance := make(map[domain.ID]int)
 	for rows.Next() {
 		var instance domain.AgentInstanceDetail
-		var id, orgID, ownerID, status string
-		if err := rows.Scan(&id, &orgID, &ownerID, &instance.Name, &status, &instance.Metadata,
-			&instance.CreatedAt, &instance.LastSeenAt, &instance.RecentRequestCount); err != nil {
+		var id, orgID, agentRef, status string
+		var ownerID, ownerName sql.NullString
+		if err := rows.Scan(&id, &orgID, &agentRef, &instance.Name, &status, &instance.Metadata,
+			&instance.CreatedAt, &instance.LastSeenAt, &ownerID, &ownerName, &instance.RecentRequestCount); err != nil {
 			return domain.AgentDetail{}, err
 		}
-		instance.ID, instance.OrganizationID, instance.AgentID = domain.ID(id), domain.ID(orgID), domain.ID(ownerID)
+		instance.ID, instance.OrganizationID, instance.AgentID = domain.ID(id), domain.ID(orgID), domain.ID(agentRef)
+		instance.MembershipID, instance.OwnerDisplayName = domain.ID(ownerID.String), ownerName.String
 		instance.AgentSlug, instance.Status = agent.AgentSlug, domain.AgentStatus(status)
 		instance.Credentials = make([]domain.AgentCredentialState, 0)
 		instance.RequestTrend = make([]int, application.RecentRequestDays)
@@ -509,13 +524,14 @@ func (s *Store) SetAgentInstanceStatus(ctx context.Context, input application.Se
 	}
 	var instance domain.AgentInstance
 	var id, orgID, agentID, previous, agentStatus string
+	var ownerID sql.NullString
 	err = tx.QueryRow(ctx, `UPDATE agent_instances ai SET status = $3
 		FROM (SELECT status FROM agent_instances WHERE organization_id = $1 AND id = $2 FOR UPDATE) before,
 		     agents a
 		WHERE ai.organization_id = $1 AND ai.id = $2 AND a.id = ai.agent_id AND a.organization_id = ai.organization_id
-		RETURNING ai.id::text, ai.organization_id::text, ai.agent_id::text, a.slug, ai.name, ai.metadata, ai.created_at, ai.last_seen_at, before.status, a.status`,
+		RETURNING ai.id::text, ai.organization_id::text, ai.agent_id::text, a.slug, ai.name, ai.metadata, ai.created_at, ai.last_seen_at, before.status, a.status, ai.membership_id::text`,
 		input.OrganizationID, input.InstanceID, string(input.Status)).Scan(
-		&id, &orgID, &agentID, &instance.AgentSlug, &instance.Name, &instance.Metadata, &instance.CreatedAt, &instance.LastSeenAt, &previous, &agentStatus)
+		&id, &orgID, &agentID, &instance.AgentSlug, &instance.Name, &instance.Metadata, &instance.CreatedAt, &instance.LastSeenAt, &previous, &agentStatus, &ownerID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.AgentInstance{}, domain.ErrNotFound
 	}
@@ -526,7 +542,7 @@ func (s *Store) SetAgentInstanceStatus(ctx context.Context, input application.Se
 		return domain.AgentInstance{}, domain.ErrAgentArchived
 	}
 	instance.ID, instance.OrganizationID, instance.AgentID = domain.ID(id), domain.ID(orgID), domain.ID(agentID)
-	instance.Status = input.Status
+	instance.MembershipID, instance.Status = domain.ID(ownerID.String), input.Status
 	if domain.AgentStatus(previous) != input.Status {
 		if err := s.appendActorAuditEvent(ctx, tx, input.OrganizationID, agentStatusEventType("agent_instance", input.Status),
 			"agent_instance", input.InstanceID, input.ActorID, input.Now,
@@ -552,11 +568,12 @@ func (s *Store) RenameAgentInstance(ctx context.Context, input application.Renam
 	defer tx.Rollback(ctx)
 	var instance domain.AgentInstance
 	var id, orgID, agentID, previous, status, agentStatus string
-	err = tx.QueryRow(ctx, `SELECT ai.id::text, ai.organization_id::text, ai.agent_id::text, a.slug, ai.name, ai.status, ai.metadata, ai.created_at, ai.last_seen_at, a.status
+	var ownerID sql.NullString
+	err = tx.QueryRow(ctx, `SELECT ai.id::text, ai.organization_id::text, ai.agent_id::text, a.slug, ai.name, ai.status, ai.metadata, ai.created_at, ai.last_seen_at, a.status, ai.membership_id::text
 		FROM agent_instances ai JOIN agents a ON a.id = ai.agent_id AND a.organization_id = ai.organization_id
 		WHERE ai.organization_id = $1 AND ai.id = $2 FOR UPDATE OF ai`,
 		input.OrganizationID, input.InstanceID).Scan(
-		&id, &orgID, &agentID, &instance.AgentSlug, &previous, &status, &instance.Metadata, &instance.CreatedAt, &instance.LastSeenAt, &agentStatus)
+		&id, &orgID, &agentID, &instance.AgentSlug, &previous, &status, &instance.Metadata, &instance.CreatedAt, &instance.LastSeenAt, &agentStatus, &ownerID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.AgentInstance{}, domain.ErrNotFound
 	}
@@ -567,7 +584,7 @@ func (s *Store) RenameAgentInstance(ctx context.Context, input application.Renam
 		return domain.AgentInstance{}, domain.ErrAgentArchived
 	}
 	instance.ID, instance.OrganizationID, instance.AgentID = domain.ID(id), domain.ID(orgID), domain.ID(agentID)
-	instance.Name, instance.Status = input.Name, domain.AgentStatus(status)
+	instance.MembershipID, instance.Name, instance.Status = domain.ID(ownerID.String), input.Name, domain.AgentStatus(status)
 	if previous != input.Name {
 		if _, err := tx.Exec(ctx, `UPDATE agent_instances SET name = $3 WHERE organization_id = $1 AND id = $2`,
 			input.OrganizationID, input.InstanceID, input.Name); err != nil {
@@ -786,7 +803,7 @@ func (s *Store) appendActorAuditEvent(ctx context.Context, tx pgx.Tx, organizati
 // agentSelect is the agent column list every agent query starts from;
 // scanAgentWith reads it and then any trailing columns the caller adds.
 const agentSelect = `SELECT a.id::text, a.organization_id::text, a.created_by_actor_id::text,
-	a.name, a.slug, a.status, a.created_at, a.updated_at, a.archived_at`
+	a.name, a.slug, a.kind, a.status, a.created_at, a.updated_at, a.archived_at`
 
 func scanAgent(row rowScanner) (domain.Agent, error) {
 	return scanAgentWith(row)
@@ -794,8 +811,8 @@ func scanAgent(row rowScanner) (domain.Agent, error) {
 
 func scanAgentWith(row rowScanner, extra ...any) (domain.Agent, error) {
 	var agent domain.Agent
-	var id, organizationID, membershipID, status string
-	targets := append([]any{&id, &organizationID, &membershipID, &agent.Name, &agent.AgentSlug, &status, &agent.CreatedAt, &agent.UpdatedAt, &agent.ArchivedAt}, extra...)
+	var id, organizationID, membershipID, kind, status string
+	targets := append([]any{&id, &organizationID, &membershipID, &agent.Name, &agent.AgentSlug, &kind, &status, &agent.CreatedAt, &agent.UpdatedAt, &agent.ArchivedAt}, extra...)
 	err := row.Scan(targets...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.Agent{}, domain.ErrNotFound
@@ -804,7 +821,7 @@ func scanAgentWith(row rowScanner, extra ...any) (domain.Agent, error) {
 		return domain.Agent{}, err
 	}
 	agent.ID, agent.OrganizationID = domain.ID(id), domain.ID(organizationID)
-	agent.CreatedByActorID, agent.Status = domain.ID(membershipID), domain.AgentStatus(status)
+	agent.CreatedByActorID, agent.Kind, agent.Status = domain.ID(membershipID), domain.AgentKind(kind), domain.AgentStatus(status)
 	return agent, nil
 }
 
@@ -815,7 +832,7 @@ func (s *Store) CreateAgentInstanceWithCredential(ctx context.Context, input app
 	organizationID, agentID, actorID := input.OrganizationID, input.AgentID, input.ActorID
 	name, metadata, credential, now := input.Name, input.Metadata, input.Credential, input.Now
 	instance := domain.AgentInstance{
-		ID: domain.ID(uuid.NewString()), OrganizationID: organizationID, AgentID: agentID, Name: name,
+		ID: domain.ID(uuid.NewString()), OrganizationID: organizationID, AgentID: agentID, MembershipID: input.MembershipID, Name: name,
 		Status: domain.AgentActive, Metadata: metadata, CreatedAt: now, LastSeenAt: now,
 	}
 	tx, err := s.pool.Begin(ctx)
@@ -823,18 +840,21 @@ func (s *Store) CreateAgentInstanceWithCredential(ctx context.Context, input app
 		return domain.AgentInstance{}, err
 	}
 	defer tx.Rollback(ctx)
-	var status string
-	if err := tx.QueryRow(ctx, `SELECT status, slug FROM agents WHERE organization_id = $1 AND id = $2 FOR SHARE`, organizationID, agentID).Scan(&status, &instance.AgentSlug); errors.Is(err, pgx.ErrNoRows) {
+	var status, kind string
+	if err := tx.QueryRow(ctx, `SELECT status, slug, kind FROM agents WHERE organization_id = $1 AND id = $2 FOR SHARE`, organizationID, agentID).Scan(&status, &instance.AgentSlug, &kind); errors.Is(err, pgx.ErrNoRows) {
 		return domain.AgentInstance{}, domain.ErrNotFound
 	} else if err != nil {
 		return domain.AgentInstance{}, err
 	} else if domain.AgentStatus(status) != domain.AgentActive {
 		return domain.AgentInstance{}, domain.ErrAgentInactive
 	}
+	if err := checkInstanceOwner(domain.AgentKind(kind), input.MembershipID); err != nil {
+		return domain.AgentInstance{}, err
+	}
 	command, err := tx.Exec(ctx, `INSERT INTO agent_instances
-        (id, organization_id, agent_id, name, status, metadata, created_at, last_seen_at)
-		VALUES ($1, $2, $3, $4, 'active', $5, $6, $6)
-		ON CONFLICT (agent_id, name) DO NOTHING`, instance.ID, organizationID, agentID, name, metadata, now)
+        (id, organization_id, agent_id, membership_id, name, status, metadata, created_at, last_seen_at)
+		VALUES ($1, $2, $3, NULLIF($4::text, '')::uuid, $5, 'active', $6, $7, $7)
+		ON CONFLICT (agent_id, name) DO NOTHING`, instance.ID, organizationID, agentID, input.MembershipID, name, metadata, now)
 	if err != nil {
 		return domain.AgentInstance{}, err
 	}
@@ -844,7 +864,7 @@ func (s *Store) CreateAgentInstanceWithCredential(ctx context.Context, input app
 	if err := insertAgentCredential(ctx, tx, organizationID, instance.ID, credential); err != nil {
 		return domain.AgentInstance{}, err
 	}
-	data, _ := json.Marshal(map[string]any{"agent_slug": instance.AgentSlug, "name": name})
+	data, _ := json.Marshal(map[string]any{"agent_slug": instance.AgentSlug, "name": name, "membership_id": input.MembershipID})
 	if err := s.appendAuditEvent(ctx, tx, domain.AuditEvent{
 		OrganizationID: organizationID, EventType: "agent_instance.registered",
 		ActorType: input.ActorType, ActorID: actorID,
@@ -854,6 +874,72 @@ func (s *Store) CreateAgentInstanceWithCredential(ctx context.Context, input app
 		return domain.AgentInstance{}, err
 	}
 	return instance, tx.Commit(ctx)
+}
+
+// disableMembershipAgentInstances is the cascade a membership deprovision
+// runs beside revoking personal API keys: every instance the member owns
+// is disabled and its live credentials revoked in the same transaction,
+// one audit event per instance, so a personal agent leaves with its
+// person. actorID may be empty for a directory-driven removal, which
+// the audit row then attributes to the system.
+func (s *Store) disableMembershipAgentInstances(ctx context.Context, tx pgx.Tx, organizationID, membershipID domain.ID, actorType domain.ActorType, actorID domain.ID, now time.Time) error {
+	rows, err := tx.Query(ctx, `UPDATE agent_instances ai SET status = 'disabled'
+		FROM agents a
+		WHERE ai.organization_id = $1 AND ai.membership_id = $2 AND ai.status = 'active'
+			AND a.id = ai.agent_id AND a.organization_id = ai.organization_id
+		RETURNING ai.id::text, ai.name, a.slug`, organizationID, membershipID)
+	if err != nil {
+		return err
+	}
+	type disabled struct{ id, name, agentSlug string }
+	var instances []disabled
+	for rows.Next() {
+		var instance disabled
+		if err := rows.Scan(&instance.id, &instance.name, &instance.agentSlug); err != nil {
+			rows.Close()
+			return err
+		}
+		instances = append(instances, instance)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE agent_credentials c SET revoked_at = $3
+		FROM agent_instances ai
+		WHERE c.organization_id = $1 AND ai.id = c.agent_instance_id AND ai.organization_id = c.organization_id
+			AND ai.membership_id = $2 AND c.revoked_at IS NULL`, organizationID, membershipID, now); err != nil {
+		return err
+	}
+	for _, instance := range instances {
+		payload, _ := json.Marshal(map[string]any{
+			"agent_slug": instance.agentSlug, "name": instance.name, "membership_id": membershipID,
+			"previous_status": domain.AgentActive, "status": domain.AgentDisabled, "reason": "membership_deprovisioned",
+		})
+		if err := s.appendAuditEvent(ctx, tx, domain.AuditEvent{
+			OrganizationID: organizationID, EventType: "agent_instance.disabled",
+			ActorType: actorType, ActorID: actorID,
+			SubjectType: "agent_instance", SubjectID: domain.ID(instance.id),
+			Data: payload, OccurredAt: now,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// checkInstanceOwner is the owner rule the database trigger also holds:
+// an instance of a personal agent belongs to a member, an instance of a
+// service agent to nobody. Answering it here names the mistake instead
+// of surfacing a constraint failure.
+func checkInstanceOwner(kind domain.AgentKind, membershipID domain.ID) error {
+	switch {
+	case kind == domain.AgentPersonal && membershipID == "":
+		return fmt.Errorf("an instance of a personal agent needs an owner: %w", domain.ErrAgentOwnerRequired)
+	case kind != domain.AgentPersonal && membershipID != "":
+		return fmt.Errorf("an instance of a service agent has no owner: %w", domain.ErrInvalid)
+	}
+	return nil
 }
 
 func insertAgentCredential(ctx context.Context, tx pgx.Tx, organizationID, instanceID domain.ID, record application.AgentCredentialRecord) error {

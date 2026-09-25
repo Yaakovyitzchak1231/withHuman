@@ -46,7 +46,7 @@ func TestAgentInventoryAgainstRealPostgres(t *testing.T) {
 
 	createAgent := func(name string) domain.Agent {
 		agentSlug := domain.AgentSlug(strings.ReplaceAll(name, " ", "-"))
-		agent, err := store.CreateAgent(ctx, application.CreateAgentInput{
+		agent, err := store.CreateAgent(ctx, application.CreateAgentInput{Kind: domain.AgentService,
 			OrganizationID: orgID, ActorID: membershipID, Name: name, AgentSlug: agentSlug, AgentQuota: application.UnlimitedQuota(), Now: now,
 		})
 		if err != nil {
@@ -553,7 +553,7 @@ func TestArchiveAgentAgainstRealPostgres(t *testing.T) {
 		t.Fatalf("ActivateOrganization: %v", err)
 	}
 	createAgent := func(name string, agentSlug domain.AgentSlug) domain.Agent {
-		agent, err := store.CreateAgent(ctx, application.CreateAgentInput{
+		agent, err := store.CreateAgent(ctx, application.CreateAgentInput{Kind: domain.AgentService,
 			OrganizationID: orgID, ActorID: membershipID, Name: name, AgentSlug: agentSlug, AgentQuota: application.UnlimitedQuota(), Now: now,
 		})
 		if err != nil {
@@ -697,7 +697,7 @@ func TestArchiveAgentAgainstRealPostgres(t *testing.T) {
 		t.Fatalf("an archived agent must stay reachable by its slug, got %#v, %v", found, err)
 	}
 	reused := createAgent(first.Name, "release-two")
-	if _, err := store.CreateAgent(ctx, application.CreateAgentInput{
+	if _, err := store.CreateAgent(ctx, application.CreateAgentInput{Kind: domain.AgentService,
 		OrganizationID: orgID, ActorID: membershipID, Name: "release again", AgentSlug: "release", AgentQuota: application.UnlimitedQuota(), Now: now,
 	}); !errors.Is(err, domain.ErrAgentSlugTaken) || !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("an archived agent's slug must never be reused, got %v", err)

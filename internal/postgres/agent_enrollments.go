@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -82,32 +83,46 @@ func (s *Store) authorizeAgentEnrollment(ctx context.Context, input application.
 	if err != nil {
 		return domain.AgentInstance{}, err
 	}
-	principal := domain.Principal{ActorType: domain.ActorHuman, OrganizationID: organizationID, MembershipID: membershipID}.WithGrants(grants)
-	if err := authorization.Check(principal, domain.PermissionAgentCredentialIssue, domain.AgentResource(agent.AgentSlug)); err != nil {
-		return domain.AgentInstance{}, err
+	// A member connects their own instance of a personal agent on the
+	// strength of their membership; a service agent's instance needs
+	// credential issuance on that agent, checked here against the same
+	// grants the transaction writes under.
+	if agent.Kind != domain.AgentPersonal {
+		principal := domain.Principal{ActorType: domain.ActorHuman, OrganizationID: organizationID, MembershipID: membershipID}.WithGrants(grants)
+		if err := authorization.Check(principal, domain.PermissionAgentCredentialIssue, domain.AgentResource(agent.AgentSlug)); err != nil {
+			return domain.AgentInstance{}, err
+		}
 	}
 	if enrollmentStatus != "pending" {
 		if enrolledAgent != string(agentID) {
 			return domain.AgentInstance{}, domain.ErrConflict
 		}
 		instance := domain.AgentInstance{AgentSlug: agent.AgentSlug}
-		err := tx.QueryRow(ctx, `SELECT id::text, organization_id::text, agent_id::text, name, status, metadata, created_at, last_seen_at FROM agent_instances WHERE organization_id=$1 AND id=$2`, organizationID, enrolledInstance).Scan(&instance.ID, &instance.OrganizationID, &instance.AgentID, &instance.Name, &instance.Status, &instance.Metadata, &instance.CreatedAt, &instance.LastSeenAt)
+		var ownerID sql.NullString
+		err := tx.QueryRow(ctx, `SELECT id::text, organization_id::text, agent_id::text, name, status, metadata, created_at, last_seen_at, membership_id::text FROM agent_instances WHERE organization_id=$1 AND id=$2`, organizationID, enrolledInstance).Scan(&instance.ID, &instance.OrganizationID, &instance.AgentID, &instance.Name, &instance.Status, &instance.Metadata, &instance.CreatedAt, &instance.LastSeenAt, &ownerID)
 		if err != nil {
 			return domain.AgentInstance{}, err
 		}
+		instance.MembershipID = domain.ID(ownerID.String)
 		if instance.Status != domain.AgentActive {
 			return domain.AgentInstance{}, domain.ErrAgentInactive
 		}
 		return instance, tx.Commit(ctx)
 	}
+	// An instance of a personal agent belongs to the person authorizing
+	// it; a service agent's instance belongs to nobody.
+	var ownerID domain.ID
+	if agent.Kind == domain.AgentPersonal {
+		ownerID = membershipID
+	}
 	instance := domain.AgentInstance{
-		ID: domain.ID(uuid.NewString()), OrganizationID: organizationID, AgentID: agentID, AgentSlug: agent.AgentSlug, Name: instanceName,
+		ID: domain.ID(uuid.NewString()), OrganizationID: organizationID, AgentID: agentID, AgentSlug: agent.AgentSlug, MembershipID: ownerID, Name: instanceName,
 		Status: domain.AgentActive, Metadata: metadata, CreatedAt: now, LastSeenAt: now,
 	}
 	command, err := tx.Exec(ctx, `INSERT INTO agent_instances
-        (id, organization_id, agent_id, name, status, metadata, created_at, last_seen_at)
-        VALUES ($1, $2, $3, $4, 'active', $5, $6, $6)
-        ON CONFLICT (agent_id, name) DO NOTHING`, instance.ID, organizationID, agentID, instanceName, metadata, now)
+        (id, organization_id, agent_id, membership_id, name, status, metadata, created_at, last_seen_at)
+        VALUES ($1, $2, $3, NULLIF($4::text, '')::uuid, $5, 'active', $6, $7, $7)
+        ON CONFLICT (agent_id, name) DO NOTHING`, instance.ID, organizationID, agentID, ownerID, instanceName, metadata, now)
 	if err != nil {
 		return domain.AgentInstance{}, err
 	}
@@ -119,7 +134,7 @@ func (s *Store) authorizeAgentEnrollment(ctx context.Context, input application.
 		organizationID, membershipID, agentID, instance.ID, now); err != nil {
 		return domain.AgentInstance{}, err
 	}
-	data, _ := json.Marshal(map[string]any{"agent_slug": agent.AgentSlug, "agent_name": agent.Name, "instance_name": instanceName})
+	data, _ := json.Marshal(map[string]any{"agent_slug": agent.AgentSlug, "agent_name": agent.Name, "instance_name": instanceName, "membership_id": ownerID})
 	var userID string
 	if err := tx.QueryRow(ctx, `SELECT user_id::text FROM memberships WHERE id = $1 AND organization_id = $2`,
 		membershipID, organizationID).Scan(&userID); err != nil {
@@ -147,14 +162,15 @@ func (s *Store) ExchangeAgentEnrollment(ctx context.Context, input application.E
 	defer tx.Rollback(ctx)
 	var instance domain.AgentInstance
 	var id, organizationID, agentID, instanceStatus, agentStatus string
+	var ownerID sql.NullString
 	err = tx.QueryRow(ctx, `SELECT ai.id::text, ai.organization_id::text, ai.agent_id::text, ai.name,
-        ai.status, ai.metadata, ai.created_at, ai.last_seen_at, a.status
+        ai.status, ai.metadata, ai.created_at, ai.last_seen_at, a.status, ai.membership_id::text
       FROM agent_enrollments e
       JOIN agent_instances ai ON ai.id = e.agent_instance_id AND ai.organization_id = e.organization_id
       JOIN agents a ON a.id = ai.agent_id AND a.organization_id = ai.organization_id
      WHERE e.enrollment_code_hash = $1 AND e.status = 'authorized' AND e.expires_at > $2
      FOR UPDATE OF e`, enrollmentCodeHash, now).Scan(&id, &organizationID, &agentID, &instance.Name,
-		&instanceStatus, &instance.Metadata, &instance.CreatedAt, &instance.LastSeenAt, &agentStatus)
+		&instanceStatus, &instance.Metadata, &instance.CreatedAt, &instance.LastSeenAt, &agentStatus, &ownerID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.AgentEnrollmentIdentity{}, domain.ErrNotFound
 	}
@@ -165,7 +181,7 @@ func (s *Store) ExchangeAgentEnrollment(ctx context.Context, input application.E
 		return domain.AgentEnrollmentIdentity{}, domain.ErrAgentInactive
 	}
 	instance.ID, instance.OrganizationID, instance.AgentID = domain.ID(id), domain.ID(organizationID), domain.ID(agentID)
-	instance.Status, instance.LastSeenAt = domain.AgentStatus(instanceStatus), now
+	instance.MembershipID, instance.Status, instance.LastSeenAt = domain.ID(ownerID.String), domain.AgentStatus(instanceStatus), now
 	agent, err := scanAgent(tx.QueryRow(ctx, agentSelect+` FROM agents a WHERE a.organization_id = $1 AND a.id = $2 FOR SHARE`, instance.OrganizationID, instance.AgentID))
 	if err != nil {
 		return domain.AgentEnrollmentIdentity{}, err
@@ -201,7 +217,10 @@ func (s *Store) ListEnrollmentAgents(ctx context.Context, input application.List
 	if err := input.Validate(); err != nil {
 		return page, err
 	}
-	rows, err := s.pool.Query(ctx, agentSelect+` FROM agents a WHERE a.organization_id=$1 AND a.status='active' AND ($2::boolean OR a.slug=ANY($3::text[])) AND (strpos(lower(a.name), lower($4))>0 OR strpos(lower(a.slug), lower($4))>0) ORDER BY lower(a.name), a.id LIMIT $5 OFFSET $6`, input.OrganizationID, input.Scope.All, input.Scope.IDs(domain.ScopeAgent), input.Query, input.Limit+1, input.Offset)
+	// Every active member may enroll their own instance of a personal
+	// agent, so those are always eligible; service agents are the ones the
+	// scope of the person's credential issuance permission names.
+	rows, err := s.pool.Query(ctx, agentSelect+` FROM agents a WHERE a.organization_id=$1 AND a.status='active' AND (a.kind='personal' OR $2::boolean OR a.slug=ANY($3::text[])) AND (strpos(lower(a.name), lower($4))>0 OR strpos(lower(a.slug), lower($4))>0) ORDER BY lower(a.name), a.id LIMIT $5 OFFSET $6`, input.OrganizationID, input.Scope.All, input.Scope.IDs(domain.ScopeAgent), input.Query, input.Limit+1, input.Offset)
 	if err != nil {
 		return page, err
 	}

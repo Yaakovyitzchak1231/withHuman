@@ -138,7 +138,12 @@ describe("CLI enrollment authorization", () => {
     expect((screen.getByLabelText("Slug") as HTMLInputElement).value).toBe("coding-agents");
     fireEvent.click(screen.getByRole("button", { name: "Create agent" }));
     await screen.findByRole("button", { name: "Connect instance" });
-    expect(create).toHaveBeenCalledWith("coding-agents", "Coding agents");
+    /* An agent created while connecting a runtime starts out personal. */
+    expect(create).toHaveBeenCalledWith(
+      "coding-agents",
+      "Coding agents",
+      "personal",
+    );
     expect(authorize).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Connect instance" }));
     await screen.findByRole("alert");
@@ -168,12 +173,19 @@ describe("CLI enrollment authorization", () => {
     });
   });
 
-  it("withholds connection actions without issuance permission", () => {
+  it("lets a member without issuance connect the agents the server offers", () => {
+    /* Enrollment is self service: the roster the loader fetched is what
+     * the member may connect to (their own instance of a personal agent
+     * needs no permission), so the screen never gates on issuance. */
     allowed.issue = false;
-    setup();
-    expect(screen.getByText("Permission required")).toBeTruthy();
+    allowed.create = false;
+    setup({ ...page, agents: [{ ...coding, kind: "personal" }] });
+    expect(screen.queryByText("Permission required")).toBeNull();
     expect(
-      screen.queryByRole("button", { name: "Connect instance" }),
+      screen.getByRole("button", { name: "Connect instance" }),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Create new agent" }),
     ).toBeNull();
   });
 

@@ -27,13 +27,18 @@ func (s *Store) CreateAgentProvisioner(ctx context.Context, input application.Cr
 		return domain.AgentProvisioner{}, err
 	}
 	defer tx.Rollback(ctx)
-	var status string
-	if err := tx.QueryRow(ctx, `SELECT status, slug FROM agents WHERE organization_id = $1 AND id = $2 FOR SHARE`, organizationID, agentID).Scan(&status, &provisioner.AgentSlug); errors.Is(err, pgx.ErrNoRows) {
+	var status, kind string
+	if err := tx.QueryRow(ctx, `SELECT status, slug, kind FROM agents WHERE organization_id = $1 AND id = $2 FOR SHARE`, organizationID, agentID).Scan(&status, &provisioner.AgentSlug, &kind); errors.Is(err, pgx.ErrNoRows) {
 		return domain.AgentProvisioner{}, domain.ErrNotFound
 	} else if err != nil {
 		return domain.AgentProvisioner{}, err
 	} else if domain.AgentStatus(status) != domain.AgentActive {
 		return domain.AgentProvisioner{}, domain.ErrAgentInactive
+	}
+	// A personal agent's instances belong to people, so there is no fleet
+	// to mint for and no token that could name an owner.
+	if domain.AgentKind(kind) == domain.AgentPersonal {
+		return domain.AgentProvisioner{}, fmt.Errorf("personal agents have no provisioner tokens: %w", domain.ErrPersonalAgent)
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO agent_provisioners
         (id, organization_id, agent_id, created_by_actor_id, secret_hash, issued_at, expires_at)
@@ -59,14 +64,14 @@ func (s *Store) MintAgentInstance(ctx context.Context, input application.MintAge
 		return domain.AgentInstance{}, err
 	}
 	defer tx.Rollback(ctx)
-	var organizationID, agentID, agentSlug, agentStatus string
+	var organizationID, agentID, agentSlug, agentStatus, agentKind string
 	var storedHash []byte
-	err = tx.QueryRow(ctx, `SELECT p.organization_id::text, p.agent_id::text, a.slug, p.secret_hash, a.status
+	err = tx.QueryRow(ctx, `SELECT p.organization_id::text, p.agent_id::text, a.slug, p.secret_hash, a.status, a.kind
       FROM agent_provisioners p
       JOIN agents a ON a.id = p.agent_id AND a.organization_id = p.organization_id
       JOIN organizations o ON o.id = p.organization_id
      WHERE p.id = $1 AND p.revoked_at IS NULL AND p.expires_at > $2 AND o.status = 'active'
-       FOR SHARE OF p, a`, provisionerID, now).Scan(&organizationID, &agentID, &agentSlug, &storedHash, &agentStatus)
+       FOR SHARE OF p, a`, provisionerID, now).Scan(&organizationID, &agentID, &agentSlug, &storedHash, &agentStatus, &agentKind)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.AgentInstance{}, domain.ErrUnauthenticated
 	}
@@ -78,6 +83,9 @@ func (s *Store) MintAgentInstance(ctx context.Context, input application.MintAge
 	}
 	if domain.AgentStatus(agentStatus) != domain.AgentActive {
 		return domain.AgentInstance{}, domain.ErrAgentInactive
+	}
+	if domain.AgentKind(agentKind) == domain.AgentPersonal {
+		return domain.AgentInstance{}, fmt.Errorf("personal agents have no provisioner tokens: %w", domain.ErrPersonalAgent)
 	}
 	instance := domain.AgentInstance{
 		ID: input.InstanceID, OrganizationID: domain.ID(organizationID), AgentID: domain.ID(agentID),

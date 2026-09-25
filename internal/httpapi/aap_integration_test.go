@@ -90,7 +90,7 @@ func TestAAPLibraryAgainstProvider(t *testing.T) {
 	if _, err = store.ActivateOrganization(ctx, application.ActivateOrganizationInput{OrganizationID: org, OrganizationSlug: "aap", OrganizationName: "AAP", UserID: user, MembershipID: member, DisplayName: "Owner", Email: "aap@example.com", PasswordHash: "test", AdmissionSource: domain.AdmissionManual, Now: now}); err != nil {
 		t.Fatal(err)
 	}
-	agent, err := store.CreateAgent(ctx, application.CreateAgentInput{OrganizationID: org, ActorID: member, Name: "adapter", AgentSlug: "test", AgentQuota: application.UnlimitedQuota(), Now: now})
+	agent, err := store.CreateAgent(ctx, application.CreateAgentInput{Kind: domain.AgentService, OrganizationID: org, ActorID: member, Name: "adapter", AgentSlug: "test", AgentQuota: application.UnlimitedQuota(), Now: now})
 	if err != nil {
 		t.Fatal(err)
 	}

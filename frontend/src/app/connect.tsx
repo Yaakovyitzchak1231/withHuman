@@ -3,13 +3,14 @@ import { useNavigate } from "@tanstack/react-router";
 import { Button } from "@/ds/components/button";
 import { Card, CardBody, CardFooter } from "@/ds/components/card";
 import { EmptyState } from "@/ds/components/empty-state";
+import { RadioGroup, RadioOption } from "@/ds/components/radio-group";
 import { TextField } from "@/ds/components/text-field";
 import { useToast } from "@/ds/components/toast";
 import { Page } from "@/ds/components/page";
 import { PageHeader, PageBackLink } from "@/ds/components/page-header";
 import { AgentIcon } from "@/ds/icons";
 import { api } from "../api";
-import type { Agent } from "../types";
+import type { Agent, AgentKind } from "../types";
 import { useAccess } from "./authorization";
 import { useTitle } from "./use-title";
 
@@ -87,15 +88,23 @@ export function CreateAgentForm({
   const [slugInput, setSlugInput] = useState("");
   /* The slug follows the name until the person edits it themselves. */
   const [slugTouched, setSlugTouched] = useState(false);
+  /* An agent created while connecting a runtime is usually the person's
+   * own assistant, so enrollment starts on personal. */
+  const [kind, setKind] = useState<AgentKind>(
+    forEnrollment ? "personal" : "service",
+  );
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
   const slug = slugTouched ? slugInput.trim() : slugFromName(name);
   const trimmedName = name.trim();
   const validSlug = AGENT_SLUG_PATTERN.test(slug);
+  /* Anyone may connect their own instance of a personal agent; a service
+   * agent's instance needs credential issuance on it. */
   const allowed =
     canCreate &&
     can("agent.write", { kind: "agent", id: slug }) &&
     (!forEnrollment ||
+      kind === "personal" ||
       can("agent.credential.issue", { kind: "agent", id: slug }));
   const slugError =
     slug === ""
@@ -113,7 +122,7 @@ export function CreateAgentForm({
     setCreating(true);
     setError("");
     try {
-      const agent = await api.createAgent(slug, trimmedName);
+      const agent = await api.createAgent(slug, trimmedName, kind);
       toast.add({ type: "approve", title: "Agent created" });
       await onCreated(agent);
     } catch (reason) {
@@ -161,6 +170,23 @@ export function CreateAgentForm({
             disabled={creating}
             required
           />
+          <RadioGroup
+            aria-label="Kind"
+            value={kind}
+            disabled={creating}
+            onValueChange={(value) => setKind(value as AgentKind)}
+          >
+            <RadioOption
+              value="service"
+              label="Service agent"
+              description="An agent the organization runs, such as a support bot. Its instances share one identity, administrators connect them, and provisioner tokens can register them automatically."
+            />
+            <RadioOption
+              value="personal"
+              label="Personal agent"
+              description="An agent people run for themselves, such as a coding assistant. Every instance belongs to the member who connects it and is disabled when they leave. Anyone can connect their own."
+            />
+          </RadioGroup>
         </CardBody>
         <CardFooter>
           <Button

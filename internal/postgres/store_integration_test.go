@@ -59,7 +59,7 @@ func TestStoreAgainstRealPostgres(t *testing.T) {
 		t.Fatalf("HasOwner after bootstrap = %v, %v", hasOwner, err)
 	}
 
-	agent, err := store.CreateAgent(ctx, application.CreateAgentInput{
+	agent, err := store.CreateAgent(ctx, application.CreateAgentInput{Kind: domain.AgentService,
 		OrganizationID: orgID, ActorID: membershipID, Name: "test-agent",
 		AgentSlug: "release", AgentQuota: application.UnlimitedQuota(), Now: now,
 	})

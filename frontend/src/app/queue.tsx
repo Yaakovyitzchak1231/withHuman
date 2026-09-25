@@ -170,6 +170,12 @@ function rowText(request: ApprovalRequest) {
         {request.agent_name}
         <span className="text-ink-faint"> · </span>
         {request.agent_instance_name}
+        {request.requester_display_name ? (
+          <>
+            <span className="text-ink-faint"> · </span>
+            for {request.requester_display_name}
+          </>
+        ) : null}
       </>
     ),
   };

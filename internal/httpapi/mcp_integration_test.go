@@ -43,7 +43,7 @@ func TestMCPSetsUpAnApprovalFlowEndToEnd(t *testing.T) {
 	if _, err = store.ActivateOrganization(ctx, application.ActivateOrganizationInput{OrganizationID: org, OrganizationSlug: "mcp", OrganizationName: "MCP", UserID: user, MembershipID: member, DisplayName: "Owner", Email: "owner@example.com", PasswordHash: "test", AdmissionSource: domain.AdmissionManual, Now: now}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.CreateAgent(ctx, application.CreateAgentInput{OrganizationID: org, ActorID: member, Name: "Support assistant", AgentSlug: "support", AgentQuota: application.UnlimitedQuota(), Now: now}); err != nil {
+	if _, err := store.CreateAgent(ctx, application.CreateAgentInput{Kind: domain.AgentService, OrganizationID: org, ActorID: member, Name: "Support assistant", AgentSlug: "support", AgentQuota: application.UnlimitedQuota(), Now: now}); err != nil {
 		t.Fatal(err)
 	}
 	auth := authn.NewService(store, store, store, nil, entitlements.NewUnlimited(), nil, clock, authn.ServiceConfig{SessionTTL: time.Hour, APIKeyMaxTTL: 90 * 24 * time.Hour, APIKeyScopingEnabled: true})

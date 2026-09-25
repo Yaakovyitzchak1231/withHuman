@@ -36,7 +36,7 @@ func TestExternalCatalogFollowsTheEditionsVisibility(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, slug := range []domain.AgentSlug{"agent", "other"} {
-		if _, err := store.CreateAgent(ctx, application.CreateAgentInput{OrganizationID: org, ActorID: actor, Name: string(slug), AgentSlug: slug, AgentQuota: application.UnlimitedQuota(), Now: now}); err != nil {
+		if _, err := store.CreateAgent(ctx, application.CreateAgentInput{Kind: domain.AgentService, OrganizationID: org, ActorID: actor, Name: string(slug), AgentSlug: slug, AgentQuota: application.UnlimitedQuota(), Now: now}); err != nil {
 			t.Fatal(err)
 		}
 	}

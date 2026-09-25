@@ -31,6 +31,13 @@ func validAgentSlug(value domain.AgentSlug) error {
 	return nil
 }
 
+func validAgentKind(value domain.AgentKind) error {
+	if !value.Valid() {
+		return invalidField("agent kind", "must be service or personal")
+	}
+	return nil
+}
+
 func validPipelineScope(value domain.AgentSlug) error {
 	if !domain.ValidPipelineScope(value) {
 		return invalidField("pipeline scope", "must be empty for the organization scope or match ^[a-z0-9][a-z0-9._-]{0,62}$")

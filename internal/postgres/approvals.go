@@ -26,9 +26,10 @@ func (s *Store) InitializeApproval(ctx context.Context, input application.Initia
 	defer tx.Rollback(ctx)
 	command, err := tx.Exec(ctx, `INSERT INTO approval_requests
 		(id, organization_id, agent_id, agent_instance_id, agent_name, agent_instance_name, agent_slug, tool, arguments,
-		 agent_reasoning, context, idempotency_key, semantic_hash, status, deadline_at, created_at, updated_at, timeout, server)
+		 agent_reasoning, context, idempotency_key, semantic_hash, status, deadline_at, created_at, updated_at, timeout, server,
+		 requester_membership_id)
 		SELECT $1,$2,$3,$4,a.name,ai.name,a.slug,$6,$7,$8,
-		       NULLIF($9::text,'')::jsonb,$10,$11,$12,$13,$14,$15,$16,$17
+		       NULLIF($9::text,'')::jsonb,$10,$11,$12,$13,$14,$15,$16,$17,ai.membership_id
 		  FROM agents a JOIN agent_instances ai ON ai.agent_id=a.id AND ai.organization_id=a.organization_id
 		 WHERE a.id=$3 AND ai.id=$4 AND a.organization_id=$2 AND a.slug=$5
 		ON CONFLICT (organization_id, agent_instance_id, idempotency_key) DO NOTHING`, request.ID, request.OrganizationID,
@@ -99,6 +100,7 @@ func (s *Store) InitializeApproval(ctx context.Context, input application.Initia
 const approvalSelect = `SELECT r.id::text, r.organization_id::text, r.agent_id::text, r.agent_instance_id::text,
 	r.agent_name, r.agent_instance_name, r.agent_slug, r.tool, r.arguments, r.agent_reasoning, r.context,
 	r.idempotency_key, r.semantic_hash, r.status, r.deadline_at, r.created_at, r.updated_at, r.timeout, r.server,
+	r.requester_membership_id::text, ru.display_name,
 	d.id::text, d.membership_id::text, d.source, d.status, d.note, d.channel,
     d.reviewer_display_name, d.reviewer_email, d.auth_method, d.auth_assurance,
     d.authenticated_at, d.session_id::text, d.credential_id::text, d.idempotency_key, d.decided_at, d.expires_at,
@@ -107,7 +109,9 @@ const approvalSelect = `SELECT r.id::text, r.organization_id::text, r.agent_id::
   LEFT JOIN approval_request_claims cl
     ON cl.request_id = r.id AND cl.organization_id = r.organization_id AND cl.released_at IS NULL
   LEFT JOIN memberships cm ON cm.id = cl.membership_id AND cm.organization_id = cl.organization_id
-  LEFT JOIN users cu ON cu.id = cm.user_id `
+  LEFT JOIN users cu ON cu.id = cm.user_id
+  LEFT JOIN memberships rm ON rm.id = r.requester_membership_id AND rm.organization_id = r.organization_id
+  LEFT JOIN users ru ON ru.id = rm.user_id `
 
 func (s *Store) GetApproval(ctx context.Context, input application.GetApprovalInput) (domain.ApprovalRequest, error) {
 	if err := input.Validate(); err != nil {
@@ -211,9 +215,11 @@ func scanApproval(row rowScanner) (domain.ApprovalRequest, error) {
 	var sessionID, credentialID, decisionKey sql.NullString
 	var claimID, claimMembershipID, claimantName sql.NullString
 	var claimedAt, claimExpiresAt sql.NullTime
+	var requesterID, requesterName sql.NullString
 	err := row.Scan(&id, &organizationID, &agentID, &agentInstanceID, &request.AgentName, &request.AgentInstanceName,
 		&request.AgentSlug, &request.Tool, &request.Arguments, &request.AgentReasoning, &contextJSON,
 		&request.IdempotencyKey, &request.SemanticHash, &status, &request.DeadlineAt, &request.CreatedAt, &request.UpdatedAt, &request.Timeout, &request.Server,
+		&requesterID, &requesterName,
 		&decisionID, &membershipID, &decisionSource, &decisionStatus, &note, &channel, &reviewerName, &reviewerEmail,
 		&authMethod, &authAssurance, &authenticatedAt, &sessionID, &credentialID, &decisionKey, &decidedAt, &expiresAt,
 		&claimID, &claimMembershipID, &claimantName, &claimedAt, &claimExpiresAt)
@@ -225,6 +231,7 @@ func scanApproval(row rowScanner) (domain.ApprovalRequest, error) {
 	}
 	request.ID, request.OrganizationID, request.AgentID, request.AgentInstanceID = domain.ID(id), domain.ID(organizationID), domain.ID(agentID), domain.ID(agentInstanceID)
 	request.Status, request.Context = domain.ApprovalStatus(status), contextJSON
+	request.RequesterMembershipID, request.RequesterDisplayName = domain.ID(requesterID.String), requesterName.String
 	if decisionID.Valid {
 		request.Decision = &domain.Decision{
 			ID: domain.ID(decisionID.String), RequestID: request.ID, OrganizationID: request.OrganizationID,
