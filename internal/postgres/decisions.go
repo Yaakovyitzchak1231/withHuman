@@ -266,6 +266,9 @@ func (s *Store) ApplyDecision(ctx context.Context, input application.ApplyDecisi
 		command.OrganizationID, command.RequestID, command.Status, now); err != nil {
 		return domain.DecisionOperation{}, err
 	}
+	if err := recordRequestResolvedEvent(ctx, tx, command.OrganizationID, command.RequestID); err != nil {
+		return domain.DecisionOperation{}, err
+	}
 	// A claim that outlived its expiry stopped holding the request then,
 	// so it closes as lapsed with its own event rather than being credited
 	// to a decision another reviewer made. Only a still-live claim is

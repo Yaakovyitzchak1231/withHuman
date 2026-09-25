@@ -495,6 +495,18 @@ func (s *Store) SetAgentInstanceStatus(ctx context.Context, input application.Se
 		return domain.AgentInstance{}, err
 	}
 	defer tx.Rollback(ctx)
+	// An instance a provisioner deleted stays disabled: its credentials
+	// are revoked and its pending requests were cancelled.
+	var deleted bool
+	if err := tx.QueryRow(ctx, `SELECT deleted_at IS NOT NULL FROM agent_instances WHERE organization_id = $1 AND id = $2 FOR UPDATE`,
+		input.OrganizationID, input.InstanceID).Scan(&deleted); errors.Is(err, pgx.ErrNoRows) {
+		return domain.AgentInstance{}, domain.ErrNotFound
+	} else if err != nil {
+		return domain.AgentInstance{}, err
+	}
+	if deleted && input.Status != domain.AgentDisabled {
+		return domain.AgentInstance{}, domain.ErrInstanceDeleted
+	}
 	var instance domain.AgentInstance
 	var id, orgID, agentID, previous, agentStatus string
 	err = tx.QueryRow(ctx, `UPDATE agent_instances ai SET status = $3

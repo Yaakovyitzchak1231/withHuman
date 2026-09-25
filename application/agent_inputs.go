@@ -383,21 +383,52 @@ func (input CreateAgentProvisionerInput) Validate() error {
 // step, authorized by a provisioner instead of a human principal. The instance
 // name is optional; the adapter generates one from the instance identity when
 // the minting caller has nothing meaningful to say.
+//
+// InstanceID is reserved by the claimed IdempotencyKey before the store is
+// reached, because a delivery receiver is verified against it before the
+// instance exists; minting completes that key in its transaction. Delivery
+// is the verified receiver, stored with the instance when present.
 type MintAgentInstanceInput struct {
-	ProvisionerID domain.ID
-	SecretHash    []byte
-	InstanceName  string
-	Metadata      json.RawMessage
-	Credential    AgentCredentialRecord
-	Now           time.Time
+	ProvisionerID  domain.ID
+	SecretHash     []byte
+	IdempotencyKey string
+	InstanceID     domain.ID
+	InstanceName   string
+	Metadata       json.RawMessage
+	Credential     AgentCredentialRecord
+	Delivery       *AgentInstanceDeliveryRecord
+	Now            time.Time
 }
 
 func (input MintAgentInstanceInput) Validate() error {
+	checks := []error{
+		requiredID("provisioner ID", input.ProvisionerID),
+		requiredTokenHash("provisioner secret hash", input.SecretHash),
+		validIdempotencyKey(input.IdempotencyKey),
+		requiredID("agent instance ID", input.InstanceID),
+		validJSON("agent instance metadata", input.Metadata),
+		input.Credential.Validate(),
+		requiredTime("current time", input.Now),
+	}
+	if input.Delivery != nil {
+		checks = append(checks, input.Delivery.Validate())
+	}
+	return firstError(checks)
+}
+
+// AuthenticateAgentProvisionerInput checks a provisioner token without
+// using it, so outbound receiver verification only ever runs for a caller
+// holding a live token of an active agent.
+type AuthenticateAgentProvisionerInput struct {
+	ProvisionerID domain.ID
+	SecretHash    []byte
+	Now           time.Time
+}
+
+func (input AuthenticateAgentProvisionerInput) Validate() error {
 	return firstError([]error{
 		requiredID("provisioner ID", input.ProvisionerID),
 		requiredTokenHash("provisioner secret hash", input.SecretHash),
-		validJSON("agent instance metadata", input.Metadata),
-		input.Credential.Validate(),
 		requiredTime("current time", input.Now),
 	})
 }

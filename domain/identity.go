@@ -309,6 +309,18 @@ type AgentInstance struct {
 	Metadata       json.RawMessage `json:"metadata"`
 	CreatedAt      time.Time       `json:"created_at"`
 	LastSeenAt     time.Time       `json:"last_seen_at"`
+	// Delivery is the verified AAP webhook receiver, present only on the
+	// instance a provisioner has just minted with one.
+	Delivery *AgentInstanceDelivery `json:"delivery,omitempty"`
+}
+
+// AgentInstanceDelivery is an instance's verified AAP asynchronous
+// receiver as the protocol exposes it; the signing secret never leaves
+// the store.
+type AgentInstanceDelivery struct {
+	Type           string `json:"type"`
+	URL            string `json:"url"`
+	RegistrationID ID     `json:"registration_id"`
 }
 
 // AgentCredentialState is one instance credential as the inventory shows
