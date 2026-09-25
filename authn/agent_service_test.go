@@ -40,6 +40,7 @@ type agentRepositoryStub struct {
 	restoreInput        application.RestoreAgentInput
 	getBySlugInput      application.GetAgentBySlugInput
 	instanceStatusInput application.SetAgentInstanceStatusInput
+	instanceRenameInput application.RenameAgentInstanceInput
 }
 
 func (r *agentRepositoryStub) ResolveAgentCredential(context.Context, application.ResolveAgentCredentialInput) (domain.Principal, error) {
@@ -94,6 +95,10 @@ func (r *agentRepositoryStub) RestoreAgent(_ context.Context, input application.
 func (r *agentRepositoryStub) SetAgentInstanceStatus(_ context.Context, input application.SetAgentInstanceStatusInput) (domain.AgentInstance, error) {
 	r.instanceStatusInput = input
 	return domain.AgentInstance{ID: input.InstanceID, OrganizationID: input.OrganizationID, Status: input.Status}, nil
+}
+func (r *agentRepositoryStub) RenameAgentInstance(_ context.Context, input application.RenameAgentInstanceInput) (domain.AgentInstance, error) {
+	r.instanceRenameInput = input
+	return domain.AgentInstance{ID: input.InstanceID, OrganizationID: input.OrganizationID, AgentSlug: r.agentSlug, Name: input.Name, Status: domain.AgentActive}, nil
 }
 func (r *agentRepositoryStub) CreateAgentInstanceWithCredential(_ context.Context, input application.CreateAgentInstanceWithCredentialInput) (domain.AgentInstance, error) {
 	r.instanceRecord, r.instanceActorID, r.instanceMetadata = input.Credential, input.ActorID, input.Metadata
@@ -430,6 +435,29 @@ func TestRenameAndRestoreAgentNeedAgentWriteAtTheAgent(t *testing.T) {
 	}
 	if repository.lookupInput.OrganizationID != "org-1" || repository.lookupInput.AgentID != "agent-1" {
 		t.Fatalf("rename did not resolve the agent's slug first: %#v", repository.lookupInput)
+	}
+
+	// An instance rename resolves the instance to its agent before the
+	// same check, trims the name, and refuses an empty one.
+	if _, err := service.RenameAgentInstance(context.Background(), reviewer, "instance-1", "laptop"); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("a reviewer renaming an instance = %v, want forbidden", err)
+	}
+	if _, err := service.RenameAgentInstance(context.Background(), billingAdmin, "instance-1", "laptop"); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("an admin bound to another agent renaming an instance = %v, want forbidden", err)
+	}
+	if _, err := service.RenameAgentInstance(context.Background(), releaseAdmin, "instance-1", " "); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("an empty instance name = %v, want invalid", err)
+	}
+	renamedInstance, err := service.RenameAgentInstance(context.Background(), releaseAdmin, "instance-1", " chris laptop ")
+	if err != nil || renamedInstance.Name != "chris laptop" || renamedInstance.ID != "instance-1" {
+		t.Fatalf("RenameAgentInstance = %#v, %v", renamedInstance, err)
+	}
+	if repository.instanceRenameInput.InstanceID != "instance-1" || repository.instanceRenameInput.Name != "chris laptop" ||
+		repository.instanceRenameInput.OrganizationID != "org-1" || repository.instanceRenameInput.ActorID != "membership-1" || !repository.instanceRenameInput.Now.Equal(now) {
+		t.Fatalf("instance rename lost its attribution: %#v", repository.instanceRenameInput)
+	}
+	if repository.lookupInput.OrganizationID != "org-1" || repository.lookupInput.AgentInstanceID != "instance-1" {
+		t.Fatalf("instance rename did not resolve the instance's agent first: %#v", repository.lookupInput)
 	}
 
 	if _, err := service.RestoreAgent(context.Background(), reviewer, "agent-1"); !errors.Is(err, domain.ErrForbidden) {

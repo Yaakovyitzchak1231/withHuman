@@ -28,6 +28,9 @@ var (
 	// ErrAgentNameTaken refuses a display name a live agent of the
 	// organization already carries.
 	ErrAgentNameTaken error = conflictError{"agent name is already taken"}
+	// ErrAgentInstanceNameTaken refuses an instance name another instance
+	// of the same agent already carries.
+	ErrAgentInstanceNameTaken error = conflictError{"agent instance name is already taken"}
 	// ErrRequestApprovalPipelineArchived refuses appending to or
 	// activating within the pipeline of an archived agent.
 	ErrRequestApprovalPipelineArchived = errors.New("request approval pipeline is archived")

@@ -852,7 +852,13 @@ recorded in this file with both the reason and the replacement rule.
   credential and refuses them all at resolution until it is enabled
   again; revoking a credential is the irreversible alternative. Both
   switches are audited as `agent.disabled` / `agent.enabled` and
-  `agent_instance.disabled` / `agent_instance.enabled`. Archiving an
+  `agent_instance.disabled` / `agent_instance.enabled`. The same
+  `PATCH /api/v1/agent_instances/{id}` takes `name` (the Instances tab's
+  Rename instance action), audited as `agent_instance.renamed`: the
+  name stays unique within the agent (409 `agent_instance_name_taken`),
+  nothing addresses an instance by name after enrollment, and requests
+  already made keep the `agent_instance_name` they were created with.
+  Archiving an
   agent (`DELETE /api/v1/agents/{slug}`, `agent.write`, the page's Archive
   action with the name typed to confirm) is the third status,
   `archived` with `agents.archived_at`: every live credential and

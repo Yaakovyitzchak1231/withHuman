@@ -92,6 +92,7 @@ type AgentRepository interface {
 	ArchiveAgent(ctx context.Context, input ArchiveAgentInput) (domain.Agent, error)
 	RestoreAgent(ctx context.Context, input RestoreAgentInput) (domain.Agent, error)
 	SetAgentInstanceStatus(ctx context.Context, input SetAgentInstanceStatusInput) (domain.AgentInstance, error)
+	RenameAgentInstance(ctx context.Context, input RenameAgentInstanceInput) (domain.AgentInstance, error)
 	CreateAgentInstanceWithCredential(ctx context.Context, input CreateAgentInstanceWithCredentialInput) (domain.AgentInstance, error)
 	RevokeAgentCredential(ctx context.Context, input RevokeAgentCredentialInput) error
 	CreateAgentProvisioner(ctx context.Context, input CreateAgentProvisionerInput) (domain.AgentProvisioner, error)

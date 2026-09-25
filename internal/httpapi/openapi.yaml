@@ -51,7 +51,7 @@ x-withhuman-permissions:
     dangerous: false
   - key: agent.write
     area: agent
-    description: Create agents and change their status
+    description: Create agents, rename agents and instances, and change their status
     holders: [human, api_key, organization_api_key]
     resource: agent
     dangerous: false
@@ -1757,16 +1757,22 @@ paths:
         "409": { $ref: "#/components/responses/Error", description: "The agent is not archived (`agent_not_archived`), or a live agent took its name meanwhile (`agent_name_taken`)" }
   /api/v1/agent_instances/{id}:
     patch:
-      summary: Disable or enable an instance
-      operationId: setAgentInstanceStatus
+      summary: Update an instance
+      operationId: updateAgentInstance
       x-withhuman-permission: agent.write
       x-withhuman-credential-kinds: [session, personal_api_key, organization_api_key]
       tags: [Agents]
       security: [{ cookieAuth: [] }, { apiKeyAuth: [] }]
       description: >-
-        Disables or re-enables one instance. A disabled instance keeps its
-        credentials, but none of them can authenticate until it is enabled
-        again. The agent and its other instances are not affected.
+        Changes an instance's status or its display name, the two fields
+        that can change after enrollment. The agent and its other
+        instances are not affected.
+
+        Disabling an instance keeps its credentials, but none of them can
+        authenticate until it is enabled again. Renaming changes what the
+        instance is called from now on: nothing addresses an instance by
+        name after enrollment, so the running agent needs no change, and
+        requests already made keep the name the instance had at the time.
       parameters:
         - $ref: "#/components/parameters/AgentInstanceID"
       requestBody:
@@ -1775,22 +1781,26 @@ paths:
           application/json:
             schema:
               type: object
-              required: [status]
+              minProperties: 1
               properties:
                 status:
                   type: string
                   enum: [active, disabled]
                   description: "`active` or `disabled`."
+                name:
+                  type: string
+                  example: support-server-01
+                  description: "A new display name, unique within the agent. Audited as `agent_instance.renamed`."
       responses:
         "200":
           description: The updated instance
           content:
             application/json:
               schema: { $ref: "#/components/schemas/AgentInstance" }
-        "400": { $ref: "#/components/responses/Error", description: "`status` is not `active` or `disabled`" }
+        "400": { $ref: "#/components/responses/Error", description: "Neither status nor name was given, or the status is invalid" }
         "403": { $ref: "#/components/responses/Error", description: "You cannot change agents" }
         "404": { $ref: "#/components/responses/Error", description: "No such instance" }
-        "409": { $ref: "#/components/responses/Error", description: "The instance's agent is archived (`agent_archived`)" }
+        "409": { $ref: "#/components/responses/Error", description: "The instance's agent is archived (`agent_archived`), or another instance of the agent already has the name (`agent_instance_name_taken`)" }
   /api/v1/agents/{slug}/instances:
     post:
       summary: Register an instance

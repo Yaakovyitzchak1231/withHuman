@@ -181,6 +181,8 @@ func agentIdentityConflict(err error) error {
 			return domain.ErrAgentSlugTaken
 		case "agents_live_name_idx":
 			return domain.ErrAgentNameTaken
+		case "agent_instances_agent_id_name_key":
+			return domain.ErrAgentInstanceNameTaken
 		}
 	}
 	return err
@@ -517,6 +519,51 @@ func (s *Store) SetAgentInstanceStatus(ctx context.Context, input application.Se
 		if err := s.appendActorAuditEvent(ctx, tx, input.OrganizationID, agentStatusEventType("agent_instance", input.Status),
 			"agent_instance", input.InstanceID, input.ActorID, input.Now,
 			map[string]any{"agent_slug": instance.AgentSlug, "previous_status": previous, "status": input.Status}); err != nil {
+			return domain.AgentInstance{}, err
+		}
+	}
+	return instance, tx.Commit(ctx)
+}
+
+// RenameAgentInstance changes one instance's display name. Nothing
+// addresses an instance by name after enrollment, so the running agent is
+// unaffected; requests already made keep the name they were created with.
+// The instances of an archived agent are frozen with it.
+func (s *Store) RenameAgentInstance(ctx context.Context, input application.RenameAgentInstanceInput) (domain.AgentInstance, error) {
+	if err := input.Validate(); err != nil {
+		return domain.AgentInstance{}, err
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.AgentInstance{}, err
+	}
+	defer tx.Rollback(ctx)
+	var instance domain.AgentInstance
+	var id, orgID, agentID, previous, status, agentStatus string
+	err = tx.QueryRow(ctx, `SELECT ai.id::text, ai.organization_id::text, ai.agent_id::text, a.slug, ai.name, ai.status, ai.metadata, ai.created_at, ai.last_seen_at, a.status
+		FROM agent_instances ai JOIN agents a ON a.id = ai.agent_id AND a.organization_id = ai.organization_id
+		WHERE ai.organization_id = $1 AND ai.id = $2 FOR UPDATE OF ai`,
+		input.OrganizationID, input.InstanceID).Scan(
+		&id, &orgID, &agentID, &instance.AgentSlug, &previous, &status, &instance.Metadata, &instance.CreatedAt, &instance.LastSeenAt, &agentStatus)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.AgentInstance{}, domain.ErrNotFound
+	}
+	if err != nil {
+		return domain.AgentInstance{}, err
+	}
+	if domain.AgentStatus(agentStatus) == domain.AgentArchived {
+		return domain.AgentInstance{}, domain.ErrAgentArchived
+	}
+	instance.ID, instance.OrganizationID, instance.AgentID = domain.ID(id), domain.ID(orgID), domain.ID(agentID)
+	instance.Name, instance.Status = input.Name, domain.AgentStatus(status)
+	if previous != input.Name {
+		if _, err := tx.Exec(ctx, `UPDATE agent_instances SET name = $3 WHERE organization_id = $1 AND id = $2`,
+			input.OrganizationID, input.InstanceID, input.Name); err != nil {
+			return domain.AgentInstance{}, agentIdentityConflict(err)
+		}
+		if err := s.appendActorAuditEvent(ctx, tx, input.OrganizationID, "agent_instance.renamed",
+			"agent_instance", input.InstanceID, input.ActorID, input.Now,
+			map[string]any{"agent_slug": instance.AgentSlug, "previous_name": previous, "name": input.Name}); err != nil {
 			return domain.AgentInstance{}, err
 		}
 	}

@@ -24,6 +24,7 @@ import {
 } from "@/ds/components/hover-card";
 import { CodeBlock } from "@/ds/components/code-block";
 import { ConfirmDialog } from "@/ds/components/confirm-dialog";
+import { NameDialog } from "./teams";
 import { EmptyState } from "@/ds/components/empty-state";
 import { IconButton } from "@/ds/components/icon-button";
 import { Menu, MenuContent, MenuTrigger } from "@/ds/components/menu";
@@ -115,6 +116,8 @@ export function AgentScreen({ page }: { page: AgentPage }) {
   const [confirmingStatus, setConfirmingStatus] = useState(false);
   const [archiving, setArchiving] = useState(false);
   const [revokingCredential, setRevokingCredential] =
+    useState<AgentInstanceDetail | null>(null);
+  const [renamingInstance, setRenamingInstance] =
     useState<AgentInstanceDetail | null>(null);
   const [revokingProvisioner, setRevokingProvisioner] =
     useState<AgentProvisioner | null>(null);
@@ -385,6 +388,12 @@ export function AgentScreen({ page }: { page: AgentPage }) {
   ];
 
   const instanceActions = (instance: AgentInstanceDetail) => [
+    {
+      id: "rename",
+      label: "Rename instance",
+      disabled: !canWrite || frozen,
+      action: () => setRenamingInstance(instance),
+    },
     {
       id: "status",
       label:
@@ -968,6 +977,23 @@ export function AgentScreen({ page }: { page: AgentPage }) {
               if (ok) setConfirmingStatus(false);
             }}
           />
+          {renamingInstance ? (
+            <NameDialog
+              open
+              title={`Rename ${renamingInstance.name}`}
+              description="The name must be unique within the agent. Requests already made keep the old name."
+              confirmLabel="Rename instance"
+              initialName={renamingInstance.name}
+              onOpenChange={(open) => !open && setRenamingInstance(null)}
+              onSubmit={async (name) => {
+                const ok = await act(
+                  () => api.renameAgentInstance(renamingInstance.id, name),
+                  "Rename failed",
+                );
+                if (ok) setRenamingInstance(null);
+              }}
+            />
+          ) : null}
           {revokingCredential ? (
             <ConfirmDialog
               open

@@ -264,7 +264,7 @@ func (a *API) router() *gin.Engine {
 	a.handle(appAPI, http.MethodPatch, "/agents/:slug", string(domain.PermissionAgentWrite), a.updateAgent)
 	a.handle(appAPI, http.MethodDelete, "/agents/:slug", string(domain.PermissionAgentWrite), a.archiveAgent)
 	a.handle(appAPI, http.MethodPost, "/agents/:slug/restore", string(domain.PermissionAgentWrite), a.restoreAgent)
-	a.handle(appAPI, http.MethodPatch, "/agent_instances/:id", string(domain.PermissionAgentWrite), a.setAgentInstanceStatus)
+	a.handle(appAPI, http.MethodPatch, "/agent_instances/:id", string(domain.PermissionAgentWrite), a.updateAgentInstance)
 	a.handle(appAPI, http.MethodPost, "/agents/:slug/instances", string(domain.PermissionAgentCredentialIssue), a.createAgentInstance)
 	a.handle(appAPI, http.MethodPost, "/agents/:slug/provisioners", string(domain.PermissionAgentCredentialIssue), a.createAgentProvisioner)
 	a.handle(appAPI, http.MethodDelete, "/agent-credentials/:id", string(domain.PermissionAgentCredentialRevoke), a.revokeCredential)
@@ -889,17 +889,35 @@ func (a *API) restoreAgent(c *gin.Context) {
 	c.JSON(http.StatusOK, agent)
 }
 
-func (a *API) setAgentInstanceStatus(c *gin.Context) {
+// updateAgentInstance covers the two mutable instance fields: the status
+// switch and the display name. Which agent the instance belongs to never
+// changes.
+func (a *API) updateAgentInstance(c *gin.Context) {
 	var request struct {
-		Status domain.AgentStatus `json:"status" binding:"required"`
+		Status domain.AgentStatus `json:"status"`
+		Name   *string            `json:"name"`
 	}
 	if !bind(c, &request) {
 		return
 	}
-	instance, err := a.auth.SetAgentInstanceStatus(c.Request.Context(), currentPrincipal(c), domain.ID(c.Param("id")), request.Status)
-	if err != nil {
-		a.writeError(c, err)
+	if request.Status == "" && request.Name == nil {
+		a.writeError(c, fmt.Errorf("status or name is required: %w", domain.ErrInvalid))
 		return
+	}
+	instanceID := domain.ID(c.Param("id"))
+	var instance domain.AgentInstance
+	var err error
+	if request.Name != nil {
+		if instance, err = a.auth.RenameAgentInstance(c.Request.Context(), currentPrincipal(c), instanceID, *request.Name); err != nil {
+			a.writeError(c, err)
+			return
+		}
+	}
+	if request.Status != "" {
+		if instance, err = a.auth.SetAgentInstanceStatus(c.Request.Context(), currentPrincipal(c), instanceID, request.Status); err != nil {
+			a.writeError(c, err)
+			return
+		}
 	}
 	c.JSON(http.StatusOK, instance)
 }
@@ -1459,6 +1477,8 @@ func WriteError(c *gin.Context, logger *slog.Logger, err error) {
 		status, errorType, code = http.StatusConflict, "conflict", "agent_slug_taken"
 	case errors.Is(err, domain.ErrAgentNameTaken):
 		status, errorType, code = http.StatusConflict, "conflict", "agent_name_taken"
+	case errors.Is(err, domain.ErrAgentInstanceNameTaken):
+		status, errorType, code = http.StatusConflict, "conflict", "agent_instance_name_taken"
 	case errors.Is(err, domain.ErrRequestApprovalPipelineArchived):
 		status, errorType, code = http.StatusConflict, "conflict", "request_approval_pipeline_archived"
 	case errors.As(err, &pathInUse):
