@@ -118,7 +118,7 @@ func TestPortInputsAcceptCompleteValues(t *testing.T) {
 		{"get organization policy", GetOrganizationPolicyInput{OrganizationID: "organization-1"}},
 		{"credential record", credential},
 		{"resolve agent credential", ResolveAgentCredentialInput{CredentialID: credential.ID, SecretHash: hash, Now: now}},
-		{"create agent", CreateAgentInput{OrganizationID: "organization-1", ActorID: "membership-1", Name: "release-agent", AgentSlug: "release", AgentQuota: UnlimitedQuota(), Now: now}},
+		{"create agent", CreateAgentInput{Kind: domain.AgentService, OrganizationID: "organization-1", ActorID: "membership-1", Name: "release-agent", AgentSlug: "release", AgentQuota: UnlimitedQuota(), Now: now}},
 		{"get agent", GetAgentInput{OrganizationID: "organization-1", AgentID: "agent-1"}},
 		{"list agent summaries", ListAgentSummariesInput{OrganizationID: "organization-1", Scope: domain.ScopeSet{All: true}, Limit: 50, Now: now}},
 		{"get agent detail", GetAgentDetailInput{OrganizationID: "organization-1", AgentID: "agent-1", Now: now}},

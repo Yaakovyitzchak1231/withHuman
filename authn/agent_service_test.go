@@ -19,6 +19,8 @@ func (c fixedClock) Now() time.Time { return c.now }
 
 type agentRepositoryStub struct {
 	agentSlug           domain.AgentSlug
+	agentKind           domain.AgentKind
+	instanceOwnerID     domain.ID
 	requestedAgent      *domain.Agent
 	getEnrollmentInput  application.GetAgentEnrollmentInput
 	listEnrollmentInput application.ListEnrollmentAgentsInput
@@ -59,7 +61,11 @@ func (r *agentRepositoryStub) GetAgentBySlug(_ context.Context, input applicatio
 }
 
 func (r *agentRepositoryStub) GetAgent(_ context.Context, input application.GetAgentInput) (domain.Agent, error) {
-	return domain.Agent{ID: input.AgentID, OrganizationID: input.OrganizationID, AgentSlug: r.agentSlug, Status: domain.AgentActive}, nil
+	kind := r.agentKind
+	if kind == "" {
+		kind = domain.AgentService
+	}
+	return domain.Agent{ID: input.AgentID, OrganizationID: input.OrganizationID, AgentSlug: r.agentSlug, Kind: kind, Status: domain.AgentActive}, nil
 }
 func (r *agentRepositoryStub) ListAgentSummaries(_ context.Context, input application.ListAgentSummariesInput) ([]domain.AgentSummary, error) {
 	r.listInput = input
@@ -101,8 +107,8 @@ func (r *agentRepositoryStub) RenameAgentInstance(_ context.Context, input appli
 	return domain.AgentInstance{ID: input.InstanceID, OrganizationID: input.OrganizationID, AgentSlug: r.agentSlug, Name: input.Name, Status: domain.AgentActive}, nil
 }
 func (r *agentRepositoryStub) CreateAgentInstanceWithCredential(_ context.Context, input application.CreateAgentInstanceWithCredentialInput) (domain.AgentInstance, error) {
-	r.instanceRecord, r.instanceActorID, r.instanceMetadata = input.Credential, input.ActorID, input.Metadata
-	return domain.AgentInstance{ID: "instance-1", OrganizationID: input.OrganizationID, AgentID: input.AgentID, Name: input.Name, Status: domain.AgentActive, Metadata: input.Metadata, CreatedAt: input.Now, LastSeenAt: input.Now}, nil
+	r.instanceRecord, r.instanceActorID, r.instanceMetadata, r.instanceOwnerID = input.Credential, input.ActorID, input.Metadata, input.MembershipID
+	return domain.AgentInstance{ID: "instance-1", OrganizationID: input.OrganizationID, AgentID: input.AgentID, MembershipID: input.MembershipID, Name: input.Name, Status: domain.AgentActive, Metadata: input.Metadata, CreatedAt: input.Now, LastSeenAt: input.Now}, nil
 }
 func (r *agentRepositoryStub) RevokeAgentCredential(context.Context, application.RevokeAgentCredentialInput) error {
 	return nil
@@ -173,14 +179,14 @@ func TestAdministratorsAssignAgentSlug(t *testing.T) {
 		ActorType: domain.ActorHuman, OrganizationID: "org-1", MembershipID: "membership-1",
 	}.WithGrants(domain.OrganizationGrants([]domain.Permission{domain.PermissionAgentWrite, domain.PermissionAgentCredentialIssue}))
 
-	agent, err := service.CreateAgent(context.Background(), principal, "release-agent", "release")
+	agent, err := service.CreateAgent(context.Background(), principal, "release-agent", "release", domain.AgentService)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if agent.AgentSlug != "release" || repository.createAgentInput.AgentSlug != "release" {
 		t.Fatalf("agent slug was not assigned by the administrator: %#v", repository.createAgentInput)
 	}
-	if _, err := service.CreateAgent(context.Background(), principal, "release-agent", "Release Team"); err == nil {
+	if _, err := service.CreateAgent(context.Background(), principal, "release-agent", "Release Team", domain.AgentService); err == nil {
 		t.Fatal("invalid agent slug was accepted")
 	}
 
@@ -327,7 +333,7 @@ func TestCreateAgentResolvesTheAgentQuotaForTheRepository(t *testing.T) {
 		ActorType: domain.ActorHuman, ActorID: "user-1", OrganizationID: "org-1", MembershipID: "membership-1",
 	}.WithGrants(domain.OrganizationGrants([]domain.Permission{domain.PermissionAgentWrite}))
 
-	if _, err := service.CreateAgent(context.Background(), principal, "release-agent", "release"); err != nil {
+	if _, err := service.CreateAgent(context.Background(), principal, "release-agent", "release", domain.AgentService); err != nil {
 		t.Fatalf("create failed: %v", err)
 	}
 	// The service resolves the limit; the repository enforces it inside
@@ -520,10 +526,10 @@ func TestAgentManagementIsScopedToTheAgent(t *testing.T) {
 		{Permission: domain.PermissionAgentCredentialRevoke, ScopeKind: domain.ScopeAgent, ScopeID: "release"},
 	})
 
-	if _, err := service.CreateAgent(context.Background(), releaseAdmin, "release-agent", "release"); err != nil {
+	if _, err := service.CreateAgent(context.Background(), releaseAdmin, "release-agent", "release", domain.AgentService); err != nil {
 		t.Fatalf("create within the bound agent: %v", err)
 	}
-	if _, err := service.CreateAgent(context.Background(), releaseAdmin, "billing-agent", "billing"); !errors.Is(err, domain.ErrForbidden) {
+	if _, err := service.CreateAgent(context.Background(), releaseAdmin, "billing-agent", "billing", domain.AgentService); !errors.Is(err, domain.ErrForbidden) {
 		t.Fatalf("create outside the bound agent = %v, want forbidden", err)
 	}
 	if _, err := service.SetAgentStatus(context.Background(), releaseAdmin, "agent-1", domain.AgentDisabled); err != nil {
@@ -571,7 +577,7 @@ func TestCreateAgentNeedsOnlyAgentWrite(t *testing.T) {
 		ActorType: domain.ActorHuman, ActorID: "user-1", OrganizationID: "org-1", MembershipID: "membership-1",
 	}.WithGrants(domain.GrantsForRoles([]domain.Role{domain.RoleAdmin}))
 
-	if _, err := service.CreateAgent(context.Background(), admin, "release-agent", "release"); err != nil {
+	if _, err := service.CreateAgent(context.Background(), admin, "release-agent", "release", domain.AgentService); err != nil {
 		t.Fatalf("admin creating an agent: %v", err)
 	}
 	input := repository.createAgentInput
@@ -584,11 +590,11 @@ func TestCreateAgentNeedsOnlyAgentWrite(t *testing.T) {
 	// it may not.
 	reviewer := admin.WithGrants(append(domain.GrantsForRoles([]domain.Role{domain.RoleReviewer}),
 		domain.Grant{Permission: domain.PermissionAgentWrite, ScopeKind: domain.ScopeOrganization}))
-	if _, err := service.CreateAgent(context.Background(), reviewer, "release-agent", "release"); err != nil {
+	if _, err := service.CreateAgent(context.Background(), reviewer, "release-agent", "release", domain.AgentService); err != nil {
 		t.Fatalf("reviewer with agent.write creating an agent: %v", err)
 	}
 	plainReviewer := admin.WithGrants(domain.GrantsForRoles([]domain.Role{domain.RoleReviewer}))
-	if _, err := service.CreateAgent(context.Background(), plainReviewer, "release-agent", "release"); !errors.Is(err, domain.ErrForbidden) {
+	if _, err := service.CreateAgent(context.Background(), plainReviewer, "release-agent", "release", domain.AgentService); !errors.Is(err, domain.ErrForbidden) {
 		t.Fatalf("reviewer without agent.write creating an agent = %v, want forbidden", err)
 	}
 }
@@ -678,5 +684,73 @@ func TestEnrollmentPreviewAndSelectionScope(t *testing.T) {
 	}
 	if _, err := service.AuthorizeAgentEnrollment(ctx, principal, "ABCD-1234", "agent"); !errors.Is(err, domain.ErrForbidden) {
 		t.Fatal(err)
+	}
+}
+
+// A personal agent is self service: any signed-in member previews, lists
+// and authorizes an enrollment of their own instance without credential
+// issuance, while a service agent still needs it. An instance a member
+// registers by hand belongs to them; an organization key cannot register
+// one, since it is nobody.
+func TestPersonalAgentEnrollmentIsSelfService(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().UTC()
+	repository := &agentRepositoryStub{agentSlug: "claude-code", agentKind: domain.AgentPersonal, enrollment: domain.AgentEnrollment{Runtime: "claude-code", InstanceName: "laptop", RequestedAgentSlug: "claude-code", Status: "pending", ExpiresAt: now.Add(time.Minute)}}
+	repository.requestedAgent = &domain.Agent{ID: "agent", Name: "Claude Code", AgentSlug: "claude-code", Kind: domain.AgentPersonal, Status: domain.AgentActive}
+	service := NewService(&identityRepositoryStub{policy: domain.OrganizationPolicy{ApprovalReauthWindow: time.Hour}}, repository, nil, nil, entitlements.NewUnlimited(), nil, fixedClock{now}, ServiceConfig{})
+	member := domain.Principal{ActorType: domain.ActorHuman, OrganizationID: "org", MembershipID: "member"}.WithGrants([]domain.Grant{{Permission: domain.PermissionRequestRead, ScopeKind: domain.ScopeOrganization}})
+
+	preview, err := service.PreviewAgentEnrollment(ctx, member, "ABCD-1234")
+	if err != nil || preview.Agent == nil || preview.Agent.Kind != domain.AgentPersonal {
+		t.Fatalf("personal preview by a plain member: %+v %v", preview, err)
+	}
+	if _, err := service.ListEnrollmentAgents(ctx, member, "", 0, 25); err != nil {
+		t.Fatalf("personal roster by a plain member: %v", err)
+	}
+	if !repository.listEnrollmentInput.Scope.Empty() {
+		t.Fatalf("a member without issuance lists personal agents only, got scope %+v", repository.listEnrollmentInput.Scope)
+	}
+	if _, err := service.AuthorizeAgentEnrollment(ctx, member, "ABCD-1234", "agent"); err != nil {
+		t.Fatalf("personal authorization by a plain member: %v", err)
+	}
+	if repository.authorizeInput.MembershipID != "member" || repository.authorizeInput.AgentID != "agent" {
+		t.Fatalf("authorization input = %+v", repository.authorizeInput)
+	}
+
+	// The same member may not touch a service agent.
+	repository.agentKind, repository.requestedAgent.Kind = domain.AgentService, domain.AgentService
+	if _, err := service.PreviewAgentEnrollment(ctx, member, "ABCD-1234"); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("service preview by a plain member: %v", err)
+	}
+	if _, err := service.AuthorizeAgentEnrollment(ctx, member, "ABCD-1234", "agent"); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("service authorization by a plain member: %v", err)
+	}
+	// Agents and keys never enroll anything.
+	agent := domain.Principal{ActorType: domain.ActorAgent, OrganizationID: "org", AgentInstanceID: "instance"}
+	if _, err := service.ListEnrollmentAgents(ctx, agent, "", 0, 25); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatal(err)
+	}
+
+	// Registering by hand: the member owns a personal instance, and an
+	// organization key is refused one.
+	repository.agentKind = domain.AgentPersonal
+	issuer := domain.Principal{ActorType: domain.ActorHuman, OrganizationID: "org", MembershipID: "member", ActorID: "user"}.WithGrants([]domain.Grant{{Permission: domain.PermissionAgentCredentialIssue, ScopeKind: domain.ScopeOrganization}})
+	if _, err := service.CreateAgentInstanceCredential(ctx, issuer, "agent", "laptop", nil); err != nil {
+		t.Fatalf("register a personal instance: %v", err)
+	}
+	if repository.instanceOwnerID != "member" {
+		t.Fatalf("personal instance owner = %q, want the registering member", repository.instanceOwnerID)
+	}
+	repository.agentKind = domain.AgentService
+	if _, err := service.CreateAgentInstanceCredential(ctx, issuer, "agent", "runner", nil); err != nil || repository.instanceOwnerID != "" {
+		t.Fatalf("register a service instance: owner %q, %v", repository.instanceOwnerID, err)
+	}
+	repository.agentKind = domain.AgentPersonal
+	key := domain.Principal{ActorType: domain.ActorAPIKey, OrganizationID: "org", ActorID: "key", Auth: domain.AuthContext{Method: domain.AuthMethodAPIKey, CredentialID: "key", AuthenticatedAt: now, Assurance: "password"}}.WithGrants([]domain.Grant{{Permission: domain.PermissionAgentCredentialIssue, ScopeKind: domain.ScopeOrganization}})
+	if _, err := service.CreateAgentInstanceCredential(ctx, key, "agent", "bot", nil); !errors.Is(err, domain.ErrAgentOwnerRequired) {
+		t.Fatalf("organization key registering a personal instance: err = %v, want ErrAgentOwnerRequired", err)
+	}
+	if _, err := service.CreateAgent(ctx, issuer.WithGrants([]domain.Grant{{Permission: domain.PermissionAgentWrite, ScopeKind: domain.ScopeOrganization}}), "Codex", "codex", "fleet"); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("unknown kind: %v", err)
 	}
 }

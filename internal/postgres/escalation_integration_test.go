@@ -45,7 +45,7 @@ func escalationTestAgent(t *testing.T, ctx context.Context, store *Store, organi
 		membershipID).Scan(&userID); err != nil {
 		t.Fatalf("resolve membership user: %v", err)
 	}
-	agent, err := store.CreateAgent(ctx, application.CreateAgentInput{
+	agent, err := store.CreateAgent(ctx, application.CreateAgentInput{Kind: domain.AgentService,
 		OrganizationID: organizationID, ActorID: membershipID, Name: key + "-agent",
 		AgentSlug: "billing", AgentQuota: application.UnlimitedQuota(), Now: now,
 	})

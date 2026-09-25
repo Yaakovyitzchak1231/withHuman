@@ -100,7 +100,7 @@ func TestOrganizationAPIKeyLifecycle(t *testing.T) {
 	if authorization.Check(principal.WithGrants(domain.OrganizationGrants([]domain.Permission{domain.PermissionRequestDecide})), domain.PermissionRequestDecide, domain.RequestResource("request")) == nil {
 		t.Fatal("injected decision grant passed")
 	}
-	agent, err := store.CreateAgent(ctx, application.CreateAgentInput{OrganizationID: org, ActorID: principal.ManagementActorID(), Name: "CI", AgentSlug: "ci", AgentQuota: application.UnlimitedQuota(), Now: now})
+	agent, err := store.CreateAgent(ctx, application.CreateAgentInput{Kind: domain.AgentService, OrganizationID: org, ActorID: principal.ManagementActorID(), Name: "CI", AgentSlug: "ci", AgentQuota: application.UnlimitedQuota(), Now: now})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +167,7 @@ func TestOrganizationAPIKeyLifecycle(t *testing.T) {
 		}
 		// The slug stays taken, so no new agent can inherit the scope, and
 		// restoring the agent does not bring the deleted grants back.
-		if _, err = store.CreateAgent(ctx, application.CreateAgentInput{OrganizationID: org, ActorID: member, Name: "New CI", AgentSlug: "ci", AgentQuota: application.UnlimitedQuota(), Now: now}); !errors.Is(err, domain.ErrAgentSlugTaken) {
+		if _, err = store.CreateAgent(ctx, application.CreateAgentInput{Kind: domain.AgentService, OrganizationID: org, ActorID: member, Name: "New CI", AgentSlug: "ci", AgentQuota: application.UnlimitedQuota(), Now: now}); !errors.Is(err, domain.ErrAgentSlugTaken) {
 			t.Fatalf("archived slug reused: %v", err)
 		}
 		if _, err = store.RestoreAgent(ctx, application.RestoreAgentInput{OrganizationID: org, AgentID: agent.ID, ActorID: principal.ManagementActorID(), Now: now}); err != nil {

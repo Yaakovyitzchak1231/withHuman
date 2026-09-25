@@ -272,7 +272,7 @@ func TestTeamsAgainstRealPostgres(t *testing.T) {
 		ownerMembershipID).Scan(&ownerUserID); err != nil {
 		t.Fatalf("resolve owner user: %v", err)
 	}
-	agent, err := store.CreateAgent(ctx, application.CreateAgentInput{
+	agent, err := store.CreateAgent(ctx, application.CreateAgentInput{Kind: domain.AgentService,
 		OrganizationID: orgID, ActorID: ownerMembershipID, Name: "teams-agent",
 		AgentSlug: "billing", AgentQuota: application.UnlimitedQuota(), Now: now,
 	})

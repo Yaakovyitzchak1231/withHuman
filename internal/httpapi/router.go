@@ -274,9 +274,12 @@ func (a *API) router() *gin.Engine {
 	a.handle(appAPI, http.MethodPost, "/agents/:slug/provisioners", string(domain.PermissionAgentCredentialIssue), a.createAgentProvisioner)
 	a.handle(appAPI, http.MethodDelete, "/agent-credentials/:id", string(domain.PermissionAgentCredentialRevoke), a.revokeCredential)
 	a.handle(appAPI, http.MethodDelete, "/agent-provisioners/:id", string(domain.PermissionAgentCredentialRevoke), a.revokeAgentProvisioner)
-	a.handle(appAPI, http.MethodPost, "/agent_enrollments/authorize", string(domain.PermissionAgentCredentialIssue), a.authorizeAgentEnrollment)
-	a.handle(appAPI, http.MethodPost, "/agent_enrollments/preview", string(domain.PermissionAgentCredentialIssue), a.previewAgentEnrollment)
-	a.handle(appAPI, http.MethodGet, "/agent_enrollments/agents", string(domain.PermissionAgentCredentialIssue), a.listEnrollmentAgents)
+	// Enrollment is self service: any member may connect their own
+	// instance of a personal agent, and the service checks credential
+	// issuance against a service agent.
+	a.handle(appAPI, http.MethodPost, "/agent_enrollments/authorize", AccessSelf, a.authorizeAgentEnrollment)
+	a.handle(appAPI, http.MethodPost, "/agent_enrollments/preview", AccessSelf, a.previewAgentEnrollment)
+	a.handle(appAPI, http.MethodGet, "/agent_enrollments/agents", AccessSelf, a.listEnrollmentAgents)
 	a.installRequestApprovalPipelineRoutes(appAPI)
 	a.installRoutingRoutes(appAPI)
 	a.installOrganizationRoutes(appAPI)
@@ -794,11 +797,15 @@ func (a *API) createAgent(c *gin.Context) {
 	var request struct {
 		Slug domain.AgentSlug `json:"slug" binding:"required"`
 		Name string           `json:"name" binding:"required"`
+		Kind domain.AgentKind `json:"kind"`
 	}
 	if !bind(c, &request) {
 		return
 	}
-	agent, err := a.auth.CreateAgent(c.Request.Context(), currentPrincipal(c), request.Name, request.Slug)
+	if request.Kind == "" {
+		request.Kind = domain.AgentService
+	}
+	agent, err := a.auth.CreateAgent(c.Request.Context(), currentPrincipal(c), request.Name, request.Slug, request.Kind)
 	if err != nil {
 		a.writeError(c, err)
 		return
@@ -1481,6 +1488,10 @@ func WriteError(c *gin.Context, logger *slog.Logger, err error) {
 		status, errorType, code = http.StatusConflict, "conflict", "escalation_path_archived"
 	case errors.Is(err, domain.ErrAgentArchived):
 		status, errorType, code = http.StatusConflict, "conflict", "agent_archived"
+	case errors.Is(err, domain.ErrAgentOwnerRequired):
+		status, errorType, code = http.StatusBadRequest, "invalid_request", "agent_owner_required"
+	case errors.Is(err, domain.ErrPersonalAgent):
+		status, errorType, code = http.StatusBadRequest, "invalid_request", "personal_agent"
 	case errors.Is(err, domain.ErrAgentNotArchived):
 		status, errorType, code = http.StatusConflict, "conflict", "agent_not_archived"
 	case errors.Is(err, domain.ErrAgentSlugTaken):

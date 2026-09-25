@@ -279,6 +279,29 @@ func (s AgentStatus) Valid() bool {
 	return s == AgentActive || s == AgentDisabled
 }
 
+// AgentKind says whose behalf an agent's instances act on. It is chosen
+// once, when the agent is created, and never changes: instances,
+// enrollment rules and an edition's gateway access all follow from it.
+type AgentKind string
+
+const (
+	// AgentService is an agent the organization runs: a support bot, a
+	// deploy assistant. Its instances share one identity and belong to
+	// nobody; administrators enroll them and hand them provisioner
+	// tokens.
+	AgentService AgentKind = "service"
+	// AgentPersonal is an agent people run for themselves: a coding
+	// assistant on a laptop. Every instance belongs to the member who
+	// enrolled it, acts on that member's behalf, and goes with them when
+	// they leave. Any active member may enroll their own instance;
+	// provisioner tokens do not exist for it.
+	AgentPersonal AgentKind = "personal"
+)
+
+func (k AgentKind) Valid() bool {
+	return k == AgentService || k == AgentPersonal
+}
+
 // Agent is the stable organization-owned identity that asks for approvals.
 // Concrete runtimes authenticate as AgentInstances of this identity. The
 // slug is the identity clients see; ID is the internal key instances,
@@ -290,6 +313,7 @@ type Agent struct {
 	OrganizationID   ID          `json:"organization_id"`
 	AgentSlug        AgentSlug   `json:"slug"`
 	Name             string      `json:"name"`
+	Kind             AgentKind   `json:"kind"`
 	Status           AgentStatus `json:"status"`
 	CreatedByActorID ID          `json:"created_by_actor_id"`
 	CreatedAt        time.Time   `json:"created_at"`
@@ -299,11 +323,14 @@ type Agent struct {
 
 // AgentInstance is one enrolled runtime of an Agent, such as a local process,
 // CI runner, container, or hosted replica. It is not a process execution.
+// MembershipID is the member an instance of a personal agent belongs to
+// and acts for; empty for an instance of a service agent.
 type AgentInstance struct {
 	ID             ID              `json:"id"`
 	OrganizationID ID              `json:"organization_id"`
 	AgentID        ID              `json:"-"`
 	AgentSlug      AgentSlug       `json:"agent_slug"`
+	MembershipID   ID              `json:"membership_id,omitempty"`
 	Name           string          `json:"name"`
 	Status         AgentStatus     `json:"status"`
 	Metadata       json.RawMessage `json:"metadata"`
@@ -348,8 +375,10 @@ type AgentSummary struct {
 
 // AgentInstanceDetail is one enrolled runtime with every credential it
 // has held, newest first, and its own recent request count and trend.
+// OwnerDisplayName names the member a personal instance belongs to.
 type AgentInstanceDetail struct {
 	AgentInstance
+	OwnerDisplayName   string                 `json:"owner_display_name,omitempty"`
 	Credentials        []AgentCredentialState `json:"credentials"`
 	RecentRequestCount int                    `json:"recent_request_count"`
 	// RequestTrend is the recent count split into one bucket per day,

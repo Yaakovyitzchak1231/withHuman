@@ -81,6 +81,10 @@ export interface ApprovalRequest {
   agent_instance_id: string;
   agent_name: string;
   agent_instance_name: string;
+  /* The member a personal instance acted for when it made the request;
+   * absent for a service agent's request. */
+  requester_membership_id?: string;
+  requester_display_name?: string;
   tool: string;
   /* The MCP server that defines the tool, as the adapter reported it;
    * absent for a runtime's built-in tools. */
@@ -399,6 +403,11 @@ export interface TeamEscalationPolicyStatus {
 /* archived is terminal: nothing of the agent resolves again and nothing
  * can be enrolled under it; the reversible switch is active/disabled. */
 export type AgentStatus = "active" | "disabled" | "archived";
+/* Whose behalf an agent's instances act on, chosen once. A service agent
+ * is one the organization runs and administrators enroll; a personal
+ * agent is one people run for themselves, and every instance belongs to
+ * the member who connected it. */
+export type AgentKind = "service" | "personal";
 
 /* Which agents a listing returns: live (active and disabled), archived,
  * or both. */
@@ -413,6 +422,7 @@ export interface Agent {
   organization_id: string;
   created_by_actor_id: string;
   name: string;
+  kind: AgentKind;
   status: AgentStatus;
   created_at: string;
   updated_at: string;
@@ -439,6 +449,9 @@ export interface AgentInstance {
   id: string;
   organization_id: string;
   agent_slug: string;
+  /* The member a personal instance belongs to; absent for a service
+   * agent's instance. */
+  membership_id?: string;
   name: string;
   status: AgentStatus;
   metadata: Record<string, unknown>;
@@ -457,6 +470,8 @@ export interface AgentCredentialState {
 }
 
 export interface AgentInstanceDetail extends AgentInstance {
+  /* The name of the member a personal instance belongs to. */
+  owner_display_name?: string;
   /* Every credential the instance has held, newest first. */
   credentials: AgentCredentialState[];
   recent_request_count: number;

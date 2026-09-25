@@ -40,7 +40,7 @@ func TestPipelineSuspensionsAgainstRealPostgres(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("ActivateOrganization: %v", err)
 	}
-	agent, err := store.CreateAgent(ctx, application.CreateAgentInput{
+	agent, err := store.CreateAgent(ctx, application.CreateAgentInput{Kind: domain.AgentService,
 		OrganizationID: orgID, ActorID: ownerMembershipID, Name: "judged-agent",
 		AgentSlug: "billing", AgentQuota: application.UnlimitedQuota(), Now: now,
 	})

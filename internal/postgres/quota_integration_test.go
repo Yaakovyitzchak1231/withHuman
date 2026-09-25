@@ -65,7 +65,7 @@ func TestAllocationQuotasHoldUnderConcurrency(t *testing.T) {
 
 	t.Run("agents are counted inside the creating transaction", func(t *testing.T) {
 		results := runConcurrently(8, func(index int) error {
-			_, err := store.CreateAgent(ctx, application.CreateAgentInput{
+			_, err := store.CreateAgent(ctx, application.CreateAgentInput{Kind: domain.AgentService,
 				OrganizationID: orgID, ActorID: ownerMembershipID, Name: fmt.Sprintf("agent-%d", index),
 				AgentSlug:  domain.AgentSlug(fmt.Sprintf("agent-%d", index)),
 				AgentQuota: limited(3), Now: now,

@@ -187,7 +187,7 @@ func TestOnboardingRepositoryAgainstRealPostgres(t *testing.T) {
 	}
 
 	// The agent lookup by slug onboarding uses to reuse agents.
-	agent, err := store.CreateAgent(ctx, application.CreateAgentInput{
+	agent, err := store.CreateAgent(ctx, application.CreateAgentInput{Kind: domain.AgentService,
 		OrganizationID: orgID, ActorID: membershipID, Name: "claude-code", AgentSlug: "claude-code", AgentQuota: application.UnlimitedQuota(), Now: now,
 	})
 	if err != nil {

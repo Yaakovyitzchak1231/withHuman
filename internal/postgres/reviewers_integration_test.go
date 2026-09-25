@@ -95,7 +95,7 @@ func TestApprovalPolicyKnobsAgainstRealPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create path revision: %v", err)
 	}
-	agent, err := store.CreateAgent(ctx, application.CreateAgentInput{
+	agent, err := store.CreateAgent(ctx, application.CreateAgentInput{Kind: domain.AgentService,
 		OrganizationID: orgID, ActorID: ownerMembershipID, Name: "knobs-agent",
 		AgentSlug: "billing", AgentQuota: application.UnlimitedQuota(), Now: now,
 	})

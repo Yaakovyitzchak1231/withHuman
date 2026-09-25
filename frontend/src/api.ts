@@ -1,4 +1,6 @@
-import type { Grant,
+import type {
+  AgentKind,
+  Grant,
   OAuthAuthorizationDecision,
   OAuthAuthorizationPreview,
   OAuthAuthorizationRequest,
@@ -351,10 +353,10 @@ export const api = {
     ),
   revokeAgentProvisioner: (id: string) =>
     request<void>(`${APP_API_BASE}/agent-provisioners/${id}`, { method: "DELETE" }),
-  createAgent: (slug: string, name: string) =>
+  createAgent: (slug: string, name: string, kind: AgentKind) =>
     request<Agent>(`${APP_API_BASE}/agents`, {
       method: "POST",
-      body: JSON.stringify({ slug, name }),
+      body: JSON.stringify({ slug, name, kind }),
     }),
   createAgentInstance: (agentSlug: string, name: string) =>
     request<{ agent_instance: AgentInstance; credential: IssuedCredential }>(

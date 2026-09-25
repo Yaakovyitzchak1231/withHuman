@@ -46,7 +46,7 @@ type Config struct {
 
 // AgentMinter is the slice of authn.Service enrollment needs.
 type AgentMinter interface {
-	CreateAgent(ctx context.Context, principal domain.Principal, name string, agentSlug domain.AgentSlug) (domain.Agent, error)
+	CreateAgent(ctx context.Context, principal domain.Principal, name string, agentSlug domain.AgentSlug, kind domain.AgentKind) (domain.Agent, error)
 	CreateAgentInstanceCredential(ctx context.Context, principal domain.Principal, agentID domain.ID, name string, metadata json.RawMessage) (domain.AgentInstanceCredential, error)
 }
 
@@ -879,7 +879,10 @@ func (s *Service) ensureAgent(ctx context.Context, principal domain.Principal, r
 		if known, ok := agentruntime.Lookup(agentruntime.Key(runtime)); ok {
 			name = known.DisplayName
 		}
-		return s.minter.CreateAgent(ctx, principal, name, domain.AgentSlug(runtime))
+		// A runtime the guided setup connects is a coding assistant the
+		// person runs for themselves, so its agent is personal: every
+		// instance belongs to whoever enrolls it.
+		return s.minter.CreateAgent(ctx, principal, name, domain.AgentSlug(runtime), domain.AgentPersonal)
 	default:
 		return domain.Agent{}, err
 	}

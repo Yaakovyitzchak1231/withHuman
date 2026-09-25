@@ -350,6 +350,18 @@ export function RequestDetail({
             <Badge icon={<span className="text-label text-ink-muted">instance</span>} tone="neutral">
               {request.agent_instance_name}
             </Badge>
+            {request.requester_display_name ? (
+              <>
+                for
+                <ReferenceChip
+                  reference={{
+                    kind: "person",
+                    id: request.requester_membership_id,
+                    name: request.requester_display_name,
+                  }}
+                />
+              </>
+            ) : null}
           </span>
         </div>
       </PageHeader>

@@ -42,7 +42,13 @@ type ApprovalRequest struct {
 	AgentName         string    `json:"agent_name"`
 	AgentInstanceName string    `json:"agent_instance_name"`
 	AgentSlug         AgentSlug `json:"agent_slug"`
-	Tool              string    `json:"tool"`
+	// RequesterMembershipID is the member a personal instance acts for,
+	// copied from the instance when the request is made; empty for a
+	// service agent's request. RequesterDisplayName is that member's
+	// name, filled by product reads only.
+	RequesterMembershipID ID     `json:"requester_membership_id,omitempty"`
+	RequesterDisplayName  string `json:"requester_display_name,omitempty"`
+	Tool                  string `json:"tool"`
 	// Server is the MCP server that defines the tool, as the adapter
 	// reported it; empty for a runtime's built-in tools.
 	Server         string          `json:"server,omitempty"`

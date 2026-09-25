@@ -470,7 +470,7 @@ func TestPipelineScopesFollowAgentsAgainstRealPostgres(t *testing.T) {
 	}
 	createAgent := func(name string, agentSlug domain.AgentSlug) {
 		t.Helper()
-		if _, err := store.CreateAgent(ctx, application.CreateAgentInput{
+		if _, err := store.CreateAgent(ctx, application.CreateAgentInput{Kind: domain.AgentService,
 			OrganizationID: orgID, ActorID: membershipID, Name: name, AgentSlug: agentSlug,
 			AgentQuota: application.UnlimitedQuota(), Now: now,
 		}); err != nil {
@@ -484,7 +484,7 @@ func TestPipelineScopesFollowAgentsAgainstRealPostgres(t *testing.T) {
 	}
 	// The slug is the scope key and is taken for good: a second agent
 	// cannot share it, so no agent can ever take over another's pipeline.
-	if _, err := store.CreateAgent(ctx, application.CreateAgentInput{
+	if _, err := store.CreateAgent(ctx, application.CreateAgentInput{Kind: domain.AgentService,
 		OrganizationID: orgID, ActorID: membershipID, Name: "release-two", AgentSlug: "release",
 		AgentQuota: application.UnlimitedQuota(), Now: now,
 	}); !errors.Is(err, domain.ErrAgentSlugTaken) || !errors.Is(err, domain.ErrConflict) {

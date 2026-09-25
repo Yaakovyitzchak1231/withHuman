@@ -11,21 +11,25 @@ import (
 
 // approvalResponse is the product representation. It must not be used by AAP handlers.
 type approvalResponse struct {
-	ID                domain.ID                 `json:"id"`
-	OrganizationID    domain.ID                 `json:"organization_id"`
-	AgentSlug         domain.AgentSlug          `json:"agent_slug"`
-	AgentInstanceID   domain.ID                 `json:"agent_instance_id"`
-	AgentName         string                    `json:"agent_name"`
-	AgentInstanceName string                    `json:"agent_instance_name"`
-	Tool              string                    `json:"tool"`
-	Server            string                    `json:"server,omitempty"`
-	Arguments         json.RawMessage           `json:"arguments"`
-	AgentReasoning    string                    `json:"agent_reasoning,omitempty"`
-	Context           json.RawMessage           `json:"context,omitempty"`
-	Status            domain.ApprovalStatus     `json:"status"`
-	DeadlineAt        time.Time                 `json:"deadline_at"`
-	CreatedAt         time.Time                 `json:"created_at"`
-	Decision          *approvalDecisionResponse `json:"decision,omitempty"`
+	ID                domain.ID        `json:"id"`
+	OrganizationID    domain.ID        `json:"organization_id"`
+	AgentSlug         domain.AgentSlug `json:"agent_slug"`
+	AgentInstanceID   domain.ID        `json:"agent_instance_id"`
+	AgentName         string           `json:"agent_name"`
+	AgentInstanceName string           `json:"agent_instance_name"`
+	// RequesterMembershipID is the member a personal instance acted for;
+	// absent for a service agent's request and on the creating response,
+	// which is built before the row is read back.
+	RequesterMembershipID domain.ID                 `json:"requester_membership_id,omitempty"`
+	Tool                  string                    `json:"tool"`
+	Server                string                    `json:"server,omitempty"`
+	Arguments             json.RawMessage           `json:"arguments"`
+	AgentReasoning        string                    `json:"agent_reasoning,omitempty"`
+	Context               json.RawMessage           `json:"context,omitempty"`
+	Status                domain.ApprovalStatus     `json:"status"`
+	DeadlineAt            time.Time                 `json:"deadline_at"`
+	CreatedAt             time.Time                 `json:"created_at"`
+	Decision              *approvalDecisionResponse `json:"decision,omitempty"`
 }
 
 // requestApprovalPipelineSummaryResponse is one scope. active_revision
@@ -318,7 +322,8 @@ func newApprovalResponse(request domain.ApprovalRequest) approvalResponse {
 	return approvalResponse{
 		ID: request.ID, OrganizationID: request.OrganizationID, AgentSlug: request.AgentSlug,
 		AgentInstanceID: request.AgentInstanceID, AgentName: request.AgentName,
-		AgentInstanceName: request.AgentInstanceName, Tool: request.Tool, Server: request.Server, Arguments: request.Arguments,
+		AgentInstanceName: request.AgentInstanceName, RequesterMembershipID: request.RequesterMembershipID,
+		Tool: request.Tool, Server: request.Server, Arguments: request.Arguments,
 		AgentReasoning: request.AgentReasoning, Context: request.Context,
 		Status: request.Status, DeadlineAt: request.DeadlineAt, CreatedAt: request.CreatedAt,
 		Decision: newApprovalDecisionResponse(request.Decision),
@@ -353,6 +358,9 @@ type queueApprovalResponse struct {
 	// rather than polling. Product-only: agents have no use for it.
 	UpdatedAt time.Time              `json:"updated_at"`
 	Claim     *approvalClaimResponse `json:"claim,omitempty"`
+	// RequesterDisplayName names the member a personal instance acted
+	// for. Product-only: reviewers read it, agents know it already.
+	RequesterDisplayName string `json:"requester_display_name,omitempty"`
 	// Presentation is how the client renders the arguments, resolved
 	// from the organization's entries and the shipped catalog. Absent
 	// when neither names the tool, and the client renders by shape.
@@ -365,7 +373,7 @@ type queueApprovalResponse struct {
 // serialized queue payload the moment a claim expires, so the SSE
 // fingerprint diff pushes a frame within its next poll.
 func newQueueApprovalResponse(request domain.ApprovalRequest, now time.Time) queueApprovalResponse {
-	response := queueApprovalResponse{approvalResponse: newApprovalResponse(request), UpdatedAt: request.UpdatedAt}
+	response := queueApprovalResponse{approvalResponse: newApprovalResponse(request), UpdatedAt: request.UpdatedAt, RequesterDisplayName: request.RequesterDisplayName}
 	if claim := request.Claim; claim != nil && claim.Live(now) {
 		response.Claim = &approvalClaimResponse{
 			ID: claim.ID, MembershipID: claim.MembershipID, DisplayName: claim.ClaimantDisplayName,

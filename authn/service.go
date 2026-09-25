@@ -479,7 +479,7 @@ func (s *Service) ResolveCredential(ctx context.Context, token string) (domain.P
 // CreateAgent registers a new agent identity under a slug chosen once.
 // Who may manage it afterwards is a matter of role assignments at the
 // agent; the agent carries no ownership of its own.
-func (s *Service) CreateAgent(ctx context.Context, principal domain.Principal, name string, agentSlug domain.AgentSlug) (domain.Agent, error) {
+func (s *Service) CreateAgent(ctx context.Context, principal domain.Principal, name string, agentSlug domain.AgentSlug, kind domain.AgentKind) (domain.Agent, error) {
 	// The requested slug is the resource: an admin bound to one agent may
 	// create that agent and no other.
 	agentSlug = domain.AgentSlug(strings.TrimSpace(string(agentSlug)))
@@ -493,6 +493,9 @@ func (s *Service) CreateAgent(ctx context.Context, principal domain.Principal, n
 	if !agentSlug.Valid() {
 		return domain.Agent{}, fmt.Errorf("agent slug must match ^[a-z0-9][a-z0-9._-]{0,62}$: %w", domain.ErrInvalid)
 	}
+	if !kind.Valid() {
+		return domain.Agent{}, fmt.Errorf("agent kind must be service or personal: %w", domain.ErrInvalid)
+	}
 	// The quota is resolved here and enforced inside the creating
 	// transaction, so concurrent creations cannot both slip under it.
 	limit, err := s.entitlements.Limit(ctx, application.LimitInput{
@@ -503,6 +506,7 @@ func (s *Service) CreateAgent(ctx context.Context, principal domain.Principal, n
 		return domain.Agent{}, err
 	}
 	return s.agents.CreateAgent(ctx, application.CreateAgentInput{
+		Kind:           kind,
 		OrganizationID: principal.OrganizationID,
 		ActorID:        principal.ManagementActorID(),
 		Name:           name,
@@ -740,6 +744,15 @@ func (s *Service) CreateAgentInstanceCredential(ctx context.Context, principal d
 	if agent.Status != domain.AgentActive {
 		return domain.AgentInstanceCredential{}, domain.ErrAgentInactive
 	}
+	// An instance of a personal agent belongs to the person registering
+	// it. An organization key is nobody, so it cannot register one.
+	var ownerID domain.ID
+	if agent.Kind == domain.AgentPersonal {
+		if !humanMember(principal) {
+			return domain.AgentInstanceCredential{}, fmt.Errorf("only a signed-in member can register an instance of a personal agent: %w", domain.ErrAgentOwnerRequired)
+		}
+		ownerID = principal.MembershipID
+	}
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return domain.AgentInstanceCredential{}, fmt.Errorf("agent instance name is required: %w", domain.ErrInvalid)
@@ -756,6 +769,7 @@ func (s *Service) CreateAgentInstanceCredential(ctx context.Context, principal d
 		OrganizationID: principal.OrganizationID,
 		AgentID:        agentID,
 		ActorID:        principal.ActorID,
+		MembershipID:   ownerID,
 		Name:           name,
 		Metadata:       metadata,
 		Credential:     record,
@@ -818,8 +832,11 @@ type EnrollmentPreview struct {
 	Agent              *domain.Agent `json:"agent,omitempty"`
 }
 
+// PreviewAgentEnrollment shows a signed-in member what a pending code
+// would connect. Any member may connect their own instance of a personal
+// agent; a service agent needs the credential issuance permission on it.
 func (s *Service) PreviewAgentEnrollment(ctx context.Context, principal domain.Principal, userCode string) (EnrollmentPreview, error) {
-	if !humanMember(principal) || !authorization.HoldsAnywhere(principal, domain.PermissionAgentCredentialIssue) {
+	if !humanMember(principal) {
 		return EnrollmentPreview{}, domain.ErrForbidden
 	}
 	enrollment, err := s.agents.GetAgentEnrollment(ctx, application.GetAgentEnrollmentInput{OrganizationID: principal.OrganizationID, UserCode: strings.ToUpper(strings.TrimSpace(userCode)), Now: s.clock.Now()})
@@ -838,7 +855,7 @@ func (s *Service) PreviewAgentEnrollment(ctx context.Context, principal domain.P
 	if err != nil {
 		return EnrollmentPreview{}, err
 	}
-	if err := requireHuman(principal, domain.PermissionAgentCredentialIssue, domain.AgentResource(agent.AgentSlug)); err != nil {
+	if err := requireEnrollmentAuthority(principal, agent); err != nil {
 		return EnrollmentPreview{}, err
 	}
 	if agent.Status != domain.AgentActive {
@@ -848,8 +865,21 @@ func (s *Service) PreviewAgentEnrollment(ctx context.Context, principal domain.P
 	return result, nil
 }
 
+// requireEnrollmentAuthority says whether the member may attach an
+// instance to the agent: their own instance of a personal agent always,
+// a service agent's instance only with credential issuance on it.
+func requireEnrollmentAuthority(principal domain.Principal, agent domain.Agent) error {
+	if agent.Kind == domain.AgentPersonal {
+		return nil
+	}
+	return requireHuman(principal, domain.PermissionAgentCredentialIssue, domain.AgentResource(agent.AgentSlug))
+}
+
+// ListEnrollmentAgents is what the member may connect the pending
+// instance to: every active personal agent, and the service agents their
+// credential issuance permission names.
 func (s *Service) ListEnrollmentAgents(ctx context.Context, principal domain.Principal, query string, offset, limit int) (domain.EnrollmentAgents, error) {
-	if !humanMember(principal) || !authorization.HoldsAnywhere(principal, domain.PermissionAgentCredentialIssue) {
+	if !humanMember(principal) {
 		return domain.EnrollmentAgents{}, domain.ErrForbidden
 	}
 	return s.agents.ListEnrollmentAgents(ctx, application.ListEnrollmentAgentsInput{OrganizationID: principal.OrganizationID, Scope: authorization.Scope(principal, domain.PermissionAgentCredentialIssue), Query: strings.TrimSpace(query), Offset: offset, Limit: limit})
@@ -859,7 +889,11 @@ func (s *Service) AuthorizeAgentEnrollment(ctx context.Context, principal domain
 	if !humanMember(principal) {
 		return domain.AgentInstance{}, domain.ErrForbidden
 	}
-	if err := s.requireAgentPermission(ctx, principal, domain.PermissionAgentCredentialIssue, application.LookupAgentSlugInput{AgentID: agentID}); err != nil {
+	agent, err := s.agents.GetAgent(ctx, application.GetAgentInput{OrganizationID: principal.OrganizationID, AgentID: agentID})
+	if err != nil {
+		return domain.AgentInstance{}, err
+	}
+	if err := requireEnrollmentAuthority(principal, agent); err != nil {
 		return domain.AgentInstance{}, err
 	}
 	return s.agents.AuthorizeAgentEnrollment(ctx, application.AuthorizeAgentEnrollmentInput{

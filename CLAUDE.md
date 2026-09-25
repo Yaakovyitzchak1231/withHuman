@@ -204,6 +204,33 @@ recorded in this file with both the reason and the replacement rule.
   is one concrete enrolled runtime, and every agent credential is bound to an
   instance. Enrollment records are temporary bootstrap state. Do not model
   devices, installations, or service accounts as alternate agent identities.
+- An agent has a `kind`, chosen at creation and immutable (a database
+  trigger refuses the flip): `service` for an agent the organization runs
+  (a support bot; instances belong to nobody, administrators enroll them
+  with `agent.credential.issue`, provisioner tokens mint them) and
+  `personal` for one people run for themselves (a coding assistant; the
+  guided setup creates its runtime agents as personal). An instance of a
+  personal agent carries `agent_instances.membership_id`, the member who
+  enrolled it, and a trigger holds the rule that an owner exists exactly
+  when the agent is personal. Ownership is what changes: any active
+  member may enroll their own instance of a personal agent (the
+  enrollment routes are `self`, `ListEnrollmentAgents` always lists
+  personal agents and narrows service agents by the issuance scope,
+  `requireEnrollmentAuthority` is the one rule), a personal agent has no
+  provisioner tokens (`ErrPersonalAgent`), an organization key cannot
+  register a personal instance (`ErrAgentOwnerRequired`), the credential
+  resolves to a principal whose `MembershipID` is the owner and refuses
+  while the owner's membership is not active, a request made by the
+  instance copies the owner into `approval_requests.requester_membership_id`
+  (product reads add `requester_display_name`), and deprovisioning the
+  member disables their instances and revokes their credentials in the
+  same transaction as their personal API keys
+  (`disableMembershipAgentInstances`, audited `agent_instance.disabled`
+  with reason `membership_deprovisioned`). The requester is recorded but
+  not yet fed into the decision's self-approval check
+  (`RequesterMembershipID` stays empty in `decisions.go`), because
+  `allow_self_approval` defaults to false and a person's own coding agent
+  must stay approvable by them until routing decides otherwise.
 - Raw session and agent credentials are displayed once. Persist
   only their hashes. Opaque token payloads use URL-safe base64 and can contain
   underscores, so parsers must split only the two structural separators.

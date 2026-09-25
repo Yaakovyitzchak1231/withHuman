@@ -92,7 +92,7 @@ func TestScopedGrantsAgainstRealPostgres(t *testing.T) {
 	// Nothing about the agent hands a team a role: the team that manages
 	// the type gets its admin row through the assignment API like any
 	// other grant.
-	refundBot, err := store.CreateAgent(ctx, application.CreateAgentInput{
+	refundBot, err := store.CreateAgent(ctx, application.CreateAgentInput{Kind: domain.AgentService,
 		OrganizationID: orgID, ActorID: ownerMembershipID, Name: "refund bot", AgentSlug: "refund-bot",
 		AgentQuota: application.UnlimitedQuota(), Now: now,
 	})
@@ -132,7 +132,7 @@ func TestScopedGrantsAgainstRealPostgres(t *testing.T) {
 	// refund-bot, and the refusal leaves the team's row at that scope
 	// untouched. Another refund agent gets a slug of its own and is a
 	// principal outside the refund-bot scope.
-	if _, err := store.CreateAgent(ctx, application.CreateAgentInput{
+	if _, err := store.CreateAgent(ctx, application.CreateAgentInput{Kind: domain.AgentService,
 		OrganizationID: orgID, ActorID: ownerMembershipID, Name: "refund bot two", AgentSlug: "refund-bot",
 		AgentQuota: application.UnlimitedQuota(), Now: now,
 	}); !errors.Is(err, domain.ErrAgentSlugTaken) {
@@ -141,7 +141,7 @@ func TestScopedGrantsAgainstRealPostgres(t *testing.T) {
 	if count := assignmentRows(t, ctx, store, domain.PrincipalTeam, refunds.ID, domain.RoleAdminID, refundScope); count != 1 {
 		t.Fatalf("refunds admin rows after the refused agent = %d, want 1", count)
 	}
-	if _, err := store.CreateAgent(ctx, application.CreateAgentInput{
+	if _, err := store.CreateAgent(ctx, application.CreateAgentInput{Kind: domain.AgentService,
 		OrganizationID: orgID, ActorID: ownerMembershipID, Name: "refund bot two", AgentSlug: "refund-bot-two",
 		AgentQuota: application.UnlimitedQuota(), Now: now,
 	}); err != nil {
@@ -150,7 +150,7 @@ func TestScopedGrantsAgainstRealPostgres(t *testing.T) {
 	if count := assignmentRows(t, ctx, store, domain.PrincipalTeam, refunds.ID, domain.RoleAdminID, refundScope); count != 1 {
 		t.Fatalf("refunds admin rows after second agent = %d, want 1", count)
 	}
-	if _, err := store.CreateAgent(ctx, application.CreateAgentInput{
+	if _, err := store.CreateAgent(ctx, application.CreateAgentInput{Kind: domain.AgentService,
 		OrganizationID: orgID, ActorID: ownerMembershipID, Name: "release bot", AgentSlug: "release-bot",
 		AgentQuota: application.UnlimitedQuota(), Now: now,
 	}); err != nil {
@@ -190,7 +190,7 @@ func TestScopedGrantsAgainstRealPostgres(t *testing.T) {
 	}
 
 	// Enrollment attaches multiple instances to the existing principal.
-	enrolledAgent, err := store.CreateAgent(ctx, application.CreateAgentInput{OrganizationID: orgID, ActorID: ownerMembershipID, Name: "enrolled bot", AgentSlug: "claude-code", AgentQuota: application.UnlimitedQuota(), Now: now})
+	enrolledAgent, err := store.CreateAgent(ctx, application.CreateAgentInput{Kind: domain.AgentService, OrganizationID: orgID, ActorID: ownerMembershipID, Name: "enrolled bot", AgentSlug: "claude-code", AgentQuota: application.UnlimitedQuota(), Now: now})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -133,6 +133,9 @@ export function AgentScreen({ page }: { page: AgentPage }) {
   const canRevoke =
     resource !== null && can("agent.credential.revoke", resource);
   const canReadPipelines = resource !== null && can("pipeline.read", resource);
+  /* A personal agent's instances belong to people, so there is no fleet
+   * to mint for: no provisioner tokens, no provisioner tab. */
+  const personal = agent?.kind === "personal";
 
   async function act(action: () => Promise<unknown>, failure: string) {
     try {
@@ -351,6 +354,28 @@ export function AgentScreen({ page }: { page: AgentPage }) {
         </p>
       ),
     },
+    ...(personal
+      ? [
+          {
+            id: "owner",
+            label: "Owner",
+            info: "The member this instance belongs to. It acts on their behalf and is disabled when they leave the organization.",
+            width: 160,
+            cell: (instance: AgentInstanceDetail) =>
+              instance.owner_display_name ? (
+                <ReferenceChip
+                  reference={{
+                    kind: "person",
+                    id: instance.membership_id,
+                    name: instance.owner_display_name,
+                  }}
+                />
+              ) : (
+                <span className="text-body text-ink-faint">Unknown</span>
+              ),
+          } satisfies TableColumn<AgentInstanceDetail>,
+        ]
+      : []),
     {
       id: "seen",
       label: "Last seen",
@@ -482,6 +507,9 @@ export function AgentScreen({ page }: { page: AgentPage }) {
               >
                 <span className="font-mono text-[12px]">{agent.slug}</span>
               </Badge>
+              <Badge tone="neutral">
+                {personal ? "Personal agent" : "Service agent"}
+              </Badge>
               <div className="flex flex-wrap items-center gap-x-1 text-label font-normal text-ink-muted">
                 <span>
                   Created {formatRelative(agent.created_at)} ago
@@ -518,7 +546,7 @@ export function AgentScreen({ page }: { page: AgentPage }) {
               {canWrite || canIssue || canReadAudit || canReadPipelines ? (
                 <Menu
                   actions={[
-                    ...(canIssue
+                    ...(canIssue && !personal
                       ? [
                           {
                             id: "provisioner",
@@ -637,9 +665,11 @@ export function AgentScreen({ page }: { page: AgentPage }) {
           <Tab value="overview" className="px-0">
             Overview
           </Tab>
-          <Tab value="provisioners" className="px-0">
-            Provisioner tokens
-          </Tab>
+          {personal ? null : (
+            <Tab value="provisioners" className="px-0">
+              Provisioner tokens
+            </Tab>
+          )}
           <Tab value="instances" className="px-0">
             Instances{" "}
             <span className="text-micro text-ink-muted">
@@ -737,7 +767,9 @@ export function AgentScreen({ page }: { page: AgentPage }) {
                 search: { tab: "provisioners" },
               },
             ] as const
-          ).map((item) => (
+          )
+            .filter((item) => !personal || item.search.tab !== "provisioners")
+            .map((item) => (
             <Card key={item.title}>
               <Link
                 to="/agents/$agentSlug"

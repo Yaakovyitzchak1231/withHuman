@@ -160,7 +160,7 @@ func TestWebhookEndpointsAgainstRealPostgres(t *testing.T) {
 
 	// A webhook block in an active pipeline revision is a use; archiving
 	// is refused until a revision without the block replaces it.
-	if _, err := store.CreateAgent(ctx, application.CreateAgentInput{
+	if _, err := store.CreateAgent(ctx, application.CreateAgentInput{Kind: domain.AgentService,
 		OrganizationID: orgID, ActorID: ownerMembershipID, Name: "billing-agent", AgentSlug: "billing",
 		AgentQuota: application.UnlimitedQuota(), Now: now,
 	}); err != nil {

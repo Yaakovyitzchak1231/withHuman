@@ -201,6 +201,9 @@ func (a directoryApplier) applyUser(ctx context.Context, externalID string, data
 		if err := a.store.revokeMembershipAPIKeys(ctx, a.tx, domain.ID(a.organizationID), domain.ID(membershipID), domain.ActorSystem, "", a.input.Now); err != nil {
 			return err
 		}
+		if err := a.store.disableMembershipAgentInstances(ctx, a.tx, domain.ID(a.organizationID), domain.ID(membershipID), domain.ActorSystem, "", a.input.Now); err != nil {
+			return err
+		}
 	}
 	return a.audit(ctx, "membership."+auditVerb(targetStatus), membershipID, map[string]any{
 		"external_id": externalID, "email": data.Email,

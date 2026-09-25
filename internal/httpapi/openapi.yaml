@@ -1592,6 +1592,11 @@ paths:
                   type: string
                   example: Support bot
                   description: "A display name. Reviewers see it on every request the agent makes. It can be changed later and must be unique among the organization's live agents."
+                kind:
+                  type: string
+                  enum: [service, personal]
+                  default: service
+                  description: "Whose behalf the agent's instances act on. `service` for an agent the organization runs, `personal` for one people run for themselves; see the Agent schema. It cannot be changed later."
       responses:
         "201":
           description: The new agent
@@ -1845,6 +1850,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/AgentInstanceCredential" }
+        "400": { $ref: "#/components/responses/Error", description: "An organization key tried to register an instance of a personal agent, which belongs to a person (`agent_owner_required`)" }
         "403": { $ref: "#/components/responses/Error", description: "You cannot issue credentials" }
         "404": { $ref: "#/components/responses/Error", description: "No such agent" }
         "409": { $ref: "#/components/responses/Error", description: "The agent is archived (`agent_archived`)" }
@@ -1872,6 +1878,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/AgentProvisionerCredential" }
+        "400": { $ref: "#/components/responses/Error", description: "The agent is personal, and personal agents have no provisioner tokens (`personal_agent`)" }
         "403": { $ref: "#/components/responses/Error", description: "You cannot issue credentials" }
         "404": { $ref: "#/components/responses/Error", description: "No such agent" }
         "409": { $ref: "#/components/responses/Error", description: "The agent is archived (`agent_archived`)" }
@@ -1978,7 +1985,8 @@ paths:
     post:
       summary: Preview an enrollment in the current organization
       operationId: previewAgentEnrollment
-      x-withhuman-permission: agent.credential.issue
+      description: "Shows what a pending code would connect. Any member may connect their own instance of a personal agent; a service agent needs `agent.credential.issue` on it, and a code that requests one the member may not issue for answers 403."
+      x-withhuman-permission: self
       x-withhuman-credential-kinds: [session]
       security: [{ cookieAuth: [] }]
       requestBody:
@@ -2004,7 +2012,7 @@ paths:
     get:
       summary: Search agents eligible for instance enrollment
       operationId: listEnrollmentAgents
-      x-withhuman-permission: agent.credential.issue
+      x-withhuman-permission: self
       x-withhuman-credential-kinds: [session]
       security: [{ cookieAuth: [] }]
       parameters:
@@ -2022,7 +2030,7 @@ paths:
           description: Maximum number of agents to return.
       responses:
         "200":
-          description: Active agents within the person's credential issuance scope, sorted by name and ID
+          description: "Every active personal agent, plus the active service agents within the person's credential issuance scope, sorted by name and ID"
           content:
             application/json:
               schema:
@@ -2038,9 +2046,9 @@ paths:
   /api/v1/agent_enrollments/authorize:
     post:
       summary: Authorize a pending agent instance enrollment
-      description: "Attaches the instance to an existing active agent in the current organization. The selected agent must match any requested agent slug. The enrollment code identifies the retry: repeating the same organization and agent returns the same instance, including after token exchange; changing the target returns a conflict. Codes expire after ten minutes."
+      description: "Attaches the instance to an existing active agent in the current organization. The selected agent must match any requested agent slug. An instance of a personal agent belongs to the member authorizing it, and any active member may connect one; a service agent needs `agent.credential.issue` on it. The enrollment code identifies the retry: repeating the same organization and agent returns the same instance, including after token exchange; changing the target returns a conflict. Codes expire after ten minutes."
       operationId: authorizeAgentEnrollment
-      x-withhuman-permission: agent.credential.issue
+      x-withhuman-permission: self
       x-withhuman-credential-kinds: [session]
       security: [{ cookieAuth: [] }]
       requestBody:
@@ -6871,7 +6879,7 @@ components:
     Agent:
       type: object
       description: "An agent identity. The slug identifies it everywhere: URLs, role scopes, pipeline scopes, audit data and conditions. The name is a label for people."
-      required: [slug, organization_id, created_by_actor_id, name, status, created_at, updated_at]
+      required: [slug, organization_id, created_by_actor_id, name, kind, status, created_at, updated_at]
       properties:
         slug:
           type: string
@@ -6881,6 +6889,7 @@ components:
         organization_id: { type: string, format: uuid }
         created_by_actor_id: { type: string, format: uuid, description: The membership or organization-key actor that created the agent. }
         name: { type: string, example: Support bot, description: "The display name. Reviewers see it on every request. Editable, and unique among the organization's live agents." }
+        kind: { type: string, enum: [service, personal], description: "Whose behalf the agent's instances act on, chosen once. A `service` agent is one the organization runs, such as a support bot: its instances share one identity, administrators enroll them, and provisioner tokens mint them. A `personal` agent is one people run for themselves, such as a coding assistant: every instance belongs to the member who enrolled it, any active member may connect their own, and the instances are disabled when that member is removed. Personal agents have no provisioner tokens." }
         status: { type: string, enum: [active, disabled, archived], description: "A `disabled` agent's instances cannot authenticate until it is enabled again. An `archived` agent is retired: nothing of it authenticates, nothing can be enrolled under it, and its status cannot change until it is restored." }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
@@ -6893,6 +6902,7 @@ components:
         id: { type: string, format: uuid }
         organization_id: { type: string, format: uuid }
         agent_slug: { type: string, pattern: '^[a-z0-9][a-z0-9._-]{0,62}$', description: The slug of the agent this is an instance of. }
+        membership_id: { type: string, format: uuid, description: "The member this instance belongs to and acts for. Present exactly when the agent is `personal`." }
         name: { type: string, example: ci-runner-07, description: Unique within the agent. }
         status: { type: string, enum: [active, disabled], description: A disabled instance cannot create requests. }
         metadata: { type: object, additionalProperties: true, example: { region: eu-west }, description: The JSON stored when the instance was created. }
@@ -6933,6 +6943,7 @@ components:
         - type: object
           required: [credentials, recent_request_count, request_trend]
           properties:
+            owner_display_name: { type: string, description: "The name of the member a personal instance belongs to. Absent for a service agent's instance." }
             credentials:
               description: Every credential the instance has held, newest first. Tokens are never included.
               type: array
@@ -7188,6 +7199,7 @@ components:
         agent_instance_id: { type: string, format: uuid, description: The running copy of the agent that made the request. }
         agent_name: { type: string, example: support-agent, description: The agent's name when the request was made. }
         agent_instance_name: { type: string, example: ci-runner-07, description: The instance's name when the request was made. }
+        requester_membership_id: { type: string, format: uuid, description: "The member the instance acts for, when the agent is personal: the owner of the instance at the time the request was made. Absent for a service agent's request, and absent from the response that creates the request." }
         tool: { type: string, example: issue_refund, description: "The tool the agent wants to call, as the server that defines it names it." }
         server: { type: string, example: stripe, description: "The MCP server that defines the tool, as the adapter reported it. Absent for a runtime's built-in tools." }
         arguments: { example: { amount: 4900, reason: duplicate_charge }, description: The exact arguments the tool will run with if approved. }
@@ -7210,6 +7222,7 @@ components:
             claim:
               description: "The live claim on the request. Absent when nobody holds one."
               $ref: "#/components/schemas/Claim"
+            requester_display_name: { type: string, example: Chris, description: "The name of the member a personal instance acted for. Absent for a service agent's request." }
             presentation:
               description: "How to show the arguments: the resolved tool presentation, from the organization's own entries or the shipped catalog. Absent when neither names the tool, in which case the client renders the arguments by their shape. A reading aid only: the arguments stay the complete description of the action, and a presentation never hides one."
               $ref: "#/components/schemas/ResolvedToolPresentation"

@@ -104,7 +104,14 @@ export function AgentsScreen({
       grow: true,
       cell: (agent) => (
         <div className="min-w-0">
-          <p className="truncate text-body font-medium text-ink">{agent.name}</p>
+          <p className="truncate text-body font-medium text-ink">
+            {agent.name}
+            {agent.kind === "personal" ? (
+              <span className="ml-2 text-label font-normal text-ink-faint">
+                personal
+              </span>
+            ) : null}
+          </p>
           <p className="truncate font-mono text-[12px] text-ink-muted">{agent.slug}</p>
         </div>
       ),
