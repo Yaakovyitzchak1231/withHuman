@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/withHumanAI/withHuman/application"
 	"github.com/withHumanAI/withHuman/domain"
@@ -89,7 +88,7 @@ func (s *Store) MintAgentInstance(ctx context.Context, input application.MintAge
 		return domain.AgentInstance{}, fmt.Errorf("personal agents have no provisioner tokens: %w", domain.ErrPersonalAgent)
 	}
 	instance := domain.AgentInstance{
-		ID: domain.ID(uuid.NewString()), OrganizationID: domain.ID(organizationID), AgentID: domain.ID(agentID),
+		ID: input.InstanceID, OrganizationID: domain.ID(organizationID), AgentID: domain.ID(agentID),
 		AgentSlug: domain.AgentSlug(agentSlug),
 		Name:      input.InstanceName, Status: domain.AgentActive, Metadata: input.Metadata, CreatedAt: now, LastSeenAt: now,
 	}
@@ -110,10 +109,24 @@ func (s *Store) MintAgentInstance(ctx context.Context, input application.MintAge
 	if err := insertAgentCredential(ctx, tx, instance.OrganizationID, instance.ID, credential); err != nil {
 		return domain.AgentInstance{}, err
 	}
+	if delivery := input.Delivery; delivery != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO agent_instance_deliveries
+			(agent_instance_id, organization_id, type, url, registration_id, sealed_signing_secret, verified_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7)`, instance.ID, instance.OrganizationID, application.InstanceDeliveryWebhook,
+			delivery.URL, delivery.RegistrationID, delivery.SealedSigningSecret, delivery.VerifiedAt); err != nil {
+			return domain.AgentInstance{}, err
+		}
+		instance.Delivery = &domain.AgentInstanceDelivery{
+			Type: application.InstanceDeliveryWebhook, URL: delivery.URL, RegistrationID: delivery.RegistrationID,
+		}
+	}
+	if err := completeProvisioningKey(ctx, tx, provisionerID, input.IdempotencyKey, instance.ID, now); err != nil {
+		return domain.AgentInstance{}, err
+	}
 	if _, err := tx.Exec(ctx, `UPDATE agent_provisioners SET last_used_at = $2 WHERE id = $1`, provisionerID, now); err != nil {
 		return domain.AgentInstance{}, err
 	}
-	data, _ := json.Marshal(map[string]any{"provisioner_id": provisionerID, "name": instance.Name})
+	data, _ := json.Marshal(map[string]any{"provisioner_id": provisionerID, "name": instance.Name, "delivery": instance.Delivery})
 	if err := s.appendAuditEvent(ctx, tx, domain.AuditEvent{
 		OrganizationID: instance.OrganizationID, EventType: "agent_instance.minted",
 		ActorType: domain.ActorAgent, ActorID: instance.AgentID,
@@ -123,6 +136,37 @@ func (s *Store) MintAgentInstance(ctx context.Context, input application.MintAge
 		return domain.AgentInstance{}, err
 	}
 	return instance, tx.Commit(ctx)
+}
+
+// AuthenticateAgentProvisioner answers the provisioner a live token
+// belongs to without recording a use. Minting checks the token again in
+// its own transaction; this read only gates work that must happen first.
+func (s *Store) AuthenticateAgentProvisioner(ctx context.Context, input application.AuthenticateAgentProvisionerInput) (domain.AgentProvisioner, error) {
+	if err := input.Validate(); err != nil {
+		return domain.AgentProvisioner{}, err
+	}
+	var provisioner domain.AgentProvisioner
+	var storedHash []byte
+	var agentStatus string
+	err := s.pool.QueryRow(ctx, `SELECT p.id::text, p.organization_id::text, p.agent_id::text, a.slug, p.secret_hash, a.status
+      FROM agent_provisioners p
+      JOIN agents a ON a.id = p.agent_id AND a.organization_id = p.organization_id
+      JOIN organizations o ON o.id = p.organization_id
+     WHERE p.id = $1 AND p.revoked_at IS NULL AND p.expires_at > $2 AND o.status = 'active'`, input.ProvisionerID, input.Now).
+		Scan(&provisioner.ID, &provisioner.OrganizationID, &provisioner.AgentID, &provisioner.AgentSlug, &storedHash, &agentStatus)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.AgentProvisioner{}, domain.ErrUnauthenticated
+	}
+	if err != nil {
+		return domain.AgentProvisioner{}, err
+	}
+	if subtle.ConstantTimeCompare(storedHash, input.SecretHash) != 1 {
+		return domain.AgentProvisioner{}, domain.ErrUnauthenticated
+	}
+	if domain.AgentStatus(agentStatus) != domain.AgentActive {
+		return domain.AgentProvisioner{}, domain.ErrAgentInactive
+	}
+	return provisioner, nil
 }
 
 func (s *Store) RevokeAgentProvisioner(ctx context.Context, input application.RevokeAgentProvisionerInput) error {

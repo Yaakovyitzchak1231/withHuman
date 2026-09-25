@@ -13,6 +13,7 @@ import (
 	"github.com/withHumanAI/withHuman/config"
 	"github.com/withHumanAI/withHuman/db"
 	"github.com/withHumanAI/withHuman/entitlements"
+	"github.com/withHumanAI/withHuman/internal/aapdelivery"
 	"github.com/withHumanAI/withHuman/internal/approvalpipeline"
 	"github.com/withHumanAI/withHuman/internal/discord"
 	"github.com/withHumanAI/withHuman/internal/orchestration"
@@ -122,19 +123,17 @@ func RunWorker(ctx context.Context, options WorkerOptions) error {
 		plan = entitlements.NewUnlimited()
 	}
 	channels := append([]application.NotificationChannel{}, options.NotificationChannels...)
-	var slackSealer *secrets.Sealer
+	var sealer *secrets.Sealer
 	if cfg.SecretsKey != "" {
-		sealer, err := secrets.NewSealer(cfg.SecretsKey)
-		if err != nil {
+		if sealer, err = secrets.NewSealer(cfg.SecretsKey); err != nil {
 			return err
 		}
 		store.WithSealer(sealer)
-		slackSealer = sealer
 	}
 	if cfg.SlackConfigured() {
 		slackClient := slack.NewClient(slack.DefaultBaseURL, cfg.SlackClientID, cfg.SlackClientSecret)
 		channels = append(channels, notifications.NewSlackChannel(store, slackClient, cfg.PublicOrigin).WithEventDispatcher(orchestrator))
-		slackService := slackconnect.NewService(slackClient, slackClient, store, store, slackSealer, clock, logger, slackconnect.Config{PublicOrigin: cfg.PublicOrigin, AppID: cfg.SlackAppID, SigningSecret: cfg.SlackSigningSecret}).WithEventDispatcher(orchestrator)
+		slackService := slackconnect.NewService(slackClient, slackClient, store, store, sealer, clock, logger, slackconnect.Config{PublicOrigin: cfg.PublicOrigin, AppID: cfg.SlackAppID, SigningSecret: cfg.SlackSigningSecret}).WithEventDispatcher(orchestrator)
 		approvalWorker.RegisterWorkflow(orchestration.SlackEventsWorkflow)
 		approvalWorker.RegisterActivity(&orchestration.SlackActivities{Service: slackService, Repository: store, Temporal: orchestrator, Clock: clock})
 	}
@@ -186,6 +185,12 @@ func RunWorker(ctx context.Context, options WorkerOptions) error {
 	}
 	dispatcher := orchestration.NewApprovalWorkflowDispatcher(store, store, orchestrator, clock, logger)
 	go dispatcher.Run(ctx)
+	if cfg.WebhookConfigured() {
+		// Instances with an AAP receiver exist only when the server could
+		// seal their secrets, so without the key there is nothing to send.
+		webhookClient := webhookdelivery.NewClient(webhookdelivery.Policy{AllowInsecure: cfg.WebhookAllowInsecure, AllowPrivateNetworks: cfg.WebhookAllowPrivateNetworks})
+		go aapdelivery.NewDispatcher(store, webhookClient, sealer, clock, logger).Run(ctx)
+	}
 	logger.Info("withHuman worker started", "task_queue", cfg.TemporalTaskQueue, "health_address", cfg.WorkerHealthAddress)
 	if options.Ready != nil {
 		options.Ready()

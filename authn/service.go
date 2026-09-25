@@ -68,6 +68,7 @@ type Service struct {
 	onboarding    application.OnboardingRepository
 	apiKeys       application.APIKeyRepository
 	notifications application.NotificationDispatcher
+	deliveries    application.InstanceDeliveryVerifier
 }
 
 func NewService(identities application.IdentityRepository, agents application.AgentRepository, memberships application.MembershipRepository, activator OrganizationActivator, entitlements application.Entitlements, passwords PasswordHasher, clock application.Clock, config ServiceConfig) *Service {
@@ -80,6 +81,13 @@ func NewService(identities application.IdentityRepository, agents application.Ag
 	service := &Service{identities: identities, agents: agents, memberships: memberships, activator: activator, entitlements: entitlements, passwords: passwords, clock: clock, config: config}
 	service.local = NewLocalAuthenticator(identities, passwords, clock, config.PublicOrigin)
 	return service
+}
+
+// RegisterInstanceDeliveries wires the AAP receiver verifier. Without it,
+// minting an instance with delivery configuration is refused as
+// unconfigured.
+func (s *Service) RegisterInstanceDeliveries(verifier application.InstanceDeliveryVerifier) {
+	s.deliveries = verifier
 }
 
 // RegisterRoles wires the role repository, which just-in-time admission
@@ -987,44 +995,6 @@ func (s *Service) CreateAgentProvisioner(ctx context.Context, principal domain.P
 		Provisioner: provisioner,
 		Credential:  domain.IssuedCredential{ID: provisionerID, Token: "whp_" + string(provisionerID) + "_" + secret, ExpiresAt: expiresAt},
 	}, nil
-}
-
-// MintAgentInstance registers a runtime and issues its credential using a
-// provisioner token instead of a human authorization. The instance name is
-// optional and the credential TTL is the smaller of the requested TTL and
-// the configured credential TTL.
-func (s *Service) MintAgentInstance(ctx context.Context, token, instanceName string, metadata json.RawMessage, requestedTTLSeconds int64) (domain.AgentInstanceCredential, error) {
-	provisionerID, secret, err := ParseOpaqueToken(token, "whp")
-	if err != nil {
-		return domain.AgentInstanceCredential{}, domain.ErrUnauthenticated
-	}
-	if requestedTTLSeconds < 0 {
-		return domain.AgentInstanceCredential{}, fmt.Errorf("requested TTL must not be negative: %w", domain.ErrInvalid)
-	}
-	metadata, err = normalizeMetadata(metadata)
-	if err != nil {
-		return domain.AgentInstanceCredential{}, err
-	}
-	ttl := s.config.CredentialTTL
-	if requested := time.Duration(requestedTTLSeconds) * time.Second; requested > 0 && requested < ttl {
-		ttl = requested
-	}
-	credential, record, err := s.newCredentialWithTTL(ttl)
-	if err != nil {
-		return domain.AgentInstanceCredential{}, err
-	}
-	instance, err := s.agents.MintAgentInstance(ctx, application.MintAgentInstanceInput{
-		ProvisionerID: domain.ID(provisionerID),
-		SecretHash:    HashToken(secret),
-		InstanceName:  strings.TrimSpace(instanceName),
-		Metadata:      metadata,
-		Credential:    record,
-		Now:           s.clock.Now(),
-	})
-	if err != nil {
-		return domain.AgentInstanceCredential{}, err
-	}
-	return domain.AgentInstanceCredential{AgentInstance: instance, Credential: credential}, nil
 }
 
 func (s *Service) RevokeAgentProvisioner(ctx context.Context, principal domain.Principal, provisionerID domain.ID) error {

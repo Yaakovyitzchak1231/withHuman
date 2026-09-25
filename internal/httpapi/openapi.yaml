@@ -653,30 +653,107 @@ paths:
   /api/aap/v1/instances:
     post:
       summary: Create an agent instance
-      description: "Creates a new instance of the agent the provisioner token belongs to and returns it together with its agent credential. Use this from a fleet or platform that starts agent replicas itself, so each replica gets a credential of its own. The bearer token must be a provisioner token (`whp_`); an agent credential is rejected."
+      description: "Creates a new instance of the agent the provisioner token belongs to and returns it together with its agent credential. Use this from a fleet or platform that starts agent replicas itself, so each replica gets a credential of its own. The bearer token must be a provisioner token (`whp_`); an agent credential is rejected. Requires an `Idempotency-Key` header scoped to the provisioner: repeating the same submission with the same key within seven days answers `200` with the original instance and credential, without creating another instance, renewing the credential or verifying the receiver again. Reusing a key with different input answers `409` with code `idempotency_conflict`, a key whose attempt is still running answers `409` with code `idempotency_in_progress`, and replaying a key whose instance was deleted answers `409` with code `instance_deleted`. Pass `delivery` to use the Agent Approval Protocol's asynchronous mode: before the instance is created, withHuman sends a signed `webhook.verification` message to the receiver, which must answer `200` with the same `challenge` within ten seconds, or the call fails with `422` and code `webhook_verification_failed` and no instance is created (the same key may be retried). A malformed or non-public receiver URL answers `400` with code `invalid_webhook_url`. Afterwards, every request of the instance that becomes approved, denied, expired or cancelled sends one signed `request.resolved` notification to the receiver, retried with backoff for up to seven days until it answers `2xx`; notifications wait while the instance is disabled. The notification carries only IDs; read the decision with `GET /api/aap/v1/requests/{id}`. Both messages are signed with the Standard Webhooks scheme (`webhook-id`, `webhook-timestamp` and `webhook-signature` headers). Requires the deployment's secrets key; without it, delivery is refused with `501`."
       operationId: mintAgentInstance
       x-withhuman-permission: public
       tags: [Agent Approval Protocol]
       security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: false
         content:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               properties:
                 instance_name: { type: string, example: ci-runner-07, description: "A name for the instance, unique within the agent. Reviewers see it next to the agent's name." }
                 instance_metadata: { type: object, additionalProperties: true, example: { region: eu-west }, description: "Any JSON object to store with the instance, such as a region or pod name." }
                 ttl_seconds: { type: integer, format: int64, minimum: 0, example: 86400, description: "How long the credential stays valid, in seconds. A value above the provider's default is reduced to the default." }
+                delivery: { $ref: "#/components/schemas/AgentInstanceDeliveryInput" }
       responses:
         "201":
-          description: The new instance and its credential. The credential's token appears only in this response.
+          description: The new instance and its credential. Keep the credential's token; only a replay with the same provisioner token and idempotency key returns it again.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentInstanceCredential" }
+        "200":
+          description: The instance and credential an earlier submission with the same idempotency key created.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/AgentInstanceCredential" }
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
-        "409": { description: An instance with this name already exists for the agent }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "501": { $ref: "#/components/responses/Error" }
+  /api/aap/v1/instances/{id}:
+    get:
+      summary: Retrieve an agent instance
+      description: "Returns an instance of the provisioner token's agent with its receiver, if any. The signing secret and credentials are never returned. A deleted instance, or one of another agent, answers `404`."
+      operationId: getProvisionedInstance
+      x-withhuman-permission: public
+      tags: [Agent Approval Protocol]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The instance
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentInstance" }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+    patch:
+      summary: Update an agent instance
+      description: "Renames an instance of the provisioner token's agent, replaces its receiver, or removes it. A `delivery` object replaces the whole configuration, signing secret included, and is verified first exactly as at creation: the old configuration and name stay in place until verification succeeds, and a failure answers `422` with code `webhook_verification_failed`. Queued notifications then go to the new receiver with the new secret, with unchanged IDs and bodies. `delivery: null` removes the receiver and ends outstanding deliveries and retries. Requires an `Idempotency-Key` header scoped to the provisioner and the instance: repeating the same submission answers the original response without applying it again. A deleted instance answers `404`."
+      operationId: updateProvisionedInstance
+      x-withhuman-permission: public
+      tags: [Agent Approval Protocol]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              minProperties: 1
+              properties:
+                instance_name: { type: string, minLength: 1, example: ci-runner-07 }
+                delivery:
+                  description: Omit to keep the receiver, pass a complete configuration to replace it, or `null` to remove it.
+                  oneOf: [{ $ref: "#/components/schemas/AgentInstanceDeliveryInput" }, { type: "null" }]
+      responses:
+        "200":
+          description: The updated instance
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentInstance" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "501": { $ref: "#/components/responses/Error" }
+    delete:
+      summary: Delete an agent instance
+      description: "Retires an instance of the provisioner token's agent: its credentials are revoked, its receiver is removed with every outstanding delivery, and each of its pending requests is cancelled without a notification. Requests that already reached an outcome are unchanged. The instance stays listed in the product, disabled, and cannot be enabled again. Deleting it again answers `204`."
+      operationId: deleteProvisionedInstance
+      x-withhuman-permission: public
+      tags: [Agent Approval Protocol]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: The instance is deleted }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /api/aap/v1/requests:
     post:
       summary: Create an approval request
@@ -6908,6 +6985,25 @@ components:
         metadata: { type: object, additionalProperties: true, example: { region: eu-west }, description: The JSON stored when the instance was created. }
         created_at: { type: string, format: date-time }
         last_seen_at: { type: string, format: date-time, description: The last time this instance called the API. }
+        delivery: { $ref: "#/components/schemas/AgentInstanceDelivery" }
+    AgentInstanceDelivery:
+      type: object
+      description: The verified receiver of an instance using asynchronous mode, returned when the instance is created. The signing secret is never returned.
+      required: [type, url, registration_id]
+      properties:
+        type: { type: string, enum: [webhook] }
+        url: { type: string, format: uri, example: "https://harness.example.com/aap/events" }
+        registration_id: { type: string, format: uuid }
+    AgentInstanceDeliveryInput:
+      type: object
+      description: "A webhook receiver for asynchronous mode. Install the registration ID and signing secret on the receiver before calling: the verification message names the registration so the receiver can pick the secret before it knows the instance ID."
+      required: [type, url, registration_id, signing_secret]
+      additionalProperties: false
+      properties:
+        type: { type: string, enum: [webhook], description: The only delivery type offered. Another value answers `400` with code `unsupported_delivery_type`. }
+        url: { type: string, format: uri, example: "https://harness.example.com/aap/events", description: "The exact HTTPS receiver URL. Private, loopback and other non-public addresses are refused, and redirects are not followed." }
+        registration_id: { type: string, format: uuid, description: A UUID you generate for this configuration and associate with the secret on the receiver. It is echoed in the verification message. }
+        signing_secret: { type: string, writeOnly: true, pattern: '^whsec_[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$', description: "`whsec_` followed by 32 random bytes in padded base64. Use a separate secret for each instance. It is never returned." }
     AgentCredentialState:
       type: object
       description: One instance credential as the agent page shows it. The token is never included. A credential is live while it is neither expired nor revoked.

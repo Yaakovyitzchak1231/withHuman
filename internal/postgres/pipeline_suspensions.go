@@ -139,6 +139,9 @@ func (s *Store) ResumeApproval(ctx context.Context, input application.ResumeAppr
 			organizationID, requestID, decision.Status, decision.DecidedAt); err != nil {
 			return domain.ApprovalRequest{}, err
 		}
+		if err := recordRequestResolvedEvent(ctx, tx, organizationID, requestID); err != nil {
+			return domain.ApprovalRequest{}, err
+		}
 		if err := closeOpenClaims(ctx, tx, organizationID, requestID, domain.ClaimDecided, now); err != nil {
 			return domain.ApprovalRequest{}, err
 		}

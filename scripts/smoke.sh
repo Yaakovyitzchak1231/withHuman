@@ -160,19 +160,27 @@ provisioner=$(curl --silent --fail --cookie "$cookie_jar" --request POST "$app_a
 provisioner_id=$(printf '%s' "$provisioner" | jq -r .provisioner.id)
 provisioner_token=$(printf '%s' "$provisioner" | jq -r .credential.token)
 minted=$(curl --silent --fail --header "Authorization: Bearer $provisioner_token" --header 'Content-Type: application/json' \
+  --header "Idempotency-Key: smoke-mint-$unique" \
   --data '{"instance_metadata":{"region":"smoke"},"ttl_seconds":3600}' "$origin/api/aap/v1/instances")
 printf '%s' "$minted" | jq -e '.agent_instance.name | length > 0' >/dev/null
 minted_token=$(printf '%s' "$minted" | jq -r .credential.token)
+# A replay with the same key returns the same instance and credential.
+replayed=$(curl --silent --fail --header "Authorization: Bearer $provisioner_token" --header 'Content-Type: application/json' \
+  --header "Idempotency-Key: smoke-mint-$unique" \
+  --data '{"instance_metadata":{"region":"smoke"},"ttl_seconds":3600}' "$origin/api/aap/v1/instances")
+test "$(printf '%s' "$replayed" | jq -r .credential.token)" = "$minted_token"
 curl --silent --fail --header "Authorization: Bearer $minted_token" "$origin/api/v1/agent_instances/self" >/dev/null
 provisioner_on_instance_status=$(curl --silent --output /dev/null --write-out '%{http_code}' \
   --header "Authorization: Bearer $provisioner_token" "$origin/api/v1/agent_instances/self")
 test "$provisioner_on_instance_status" = "401"
 instance_token_mint_status=$(curl --silent --output /dev/null --write-out '%{http_code}' \
-  --header "Authorization: Bearer $minted_token" --request POST "$origin/api/aap/v1/instances")
+  --header "Authorization: Bearer $minted_token" --header "Idempotency-Key: smoke-instance-mint-$unique" \
+  --request POST "$origin/api/aap/v1/instances")
 test "$instance_token_mint_status" = "401"
 curl --silent --fail --cookie "$cookie_jar" --request DELETE "$app_api/agent-provisioners/$provisioner_id" >/dev/null
 revoked_mint_status=$(curl --silent --output /dev/null --write-out '%{http_code}' \
-  --header "Authorization: Bearer $provisioner_token" --request POST "$origin/api/aap/v1/instances")
+  --header "Authorization: Bearer $provisioner_token" --header "Idempotency-Key: smoke-revoked-mint-$unique" \
+  --request POST "$origin/api/aap/v1/instances")
 test "$revoked_mint_status" = "401"
 
 request=$(curl --silent --fail --header "Authorization: Bearer $token" --header 'Content-Type: application/json' \

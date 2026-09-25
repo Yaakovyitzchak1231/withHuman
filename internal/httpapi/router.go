@@ -221,12 +221,15 @@ func (a *API) router() *gin.Engine {
 	a.handle(auth, http.MethodPost, "/password/reset/preview", AccessPublic, a.previewPasswordReset)
 	a.handle(auth, http.MethodPost, "/password/reset/complete", AccessPublic, a.sameOrigin(), a.completePasswordReset)
 
-	// /api/aap/v1 is the AAP wire surface and nothing else. Minting carries
-	// its own authentication (a provisioner bearer); the runtime endpoints
+	// /api/aap/v1 is the AAP wire surface and nothing else. The instance
+	// endpoints carry their own authentication (a provisioner bearer); the runtime endpoints
 	// require an instance-bound credential. Browser-assisted enrollment is
 	// withHuman product UX and stays under /auth, outside the protocol.
 	aap := router.Group("/api/aap/v1")
 	a.handle(aap, http.MethodPost, "/instances", AccessPublic, a.mintAgentInstance)
+	a.handle(aap, http.MethodGet, "/instances/:id", AccessPublic, a.getProvisionedInstance)
+	a.handle(aap, http.MethodPatch, "/instances/:id", AccessPublic, a.updateProvisionedInstance)
+	a.handle(aap, http.MethodDelete, "/instances/:id", AccessPublic, a.deleteProvisionedInstance)
 	aapRuntime := aap.Group("", a.machineAuth())
 	a.handle(aapRuntime, http.MethodPost, "/requests", string(domain.PermissionRequestCreate), a.createApproval)
 	a.handle(aapRuntime, http.MethodGet, "/requests/:id", string(domain.PermissionRequestRead), a.getApproval)
@@ -980,30 +983,6 @@ func (a *API) revokeAgentProvisioner(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
-func (a *API) mintAgentInstance(c *gin.Context) {
-	bearer := c.GetHeader("Authorization")
-	if !strings.HasPrefix(bearer, "Bearer ") {
-		a.writeError(c, domain.ErrUnauthenticated)
-		return
-	}
-	var request struct {
-		InstanceName     string          `json:"instance_name"`
-		InstanceMetadata json.RawMessage `json:"instance_metadata"`
-		TTLSeconds       int64           `json:"ttl_seconds"`
-	}
-	if c.Request.ContentLength != 0 && !bind(c, &request) {
-		return
-	}
-	result, err := a.auth.MintAgentInstance(c.Request.Context(),
-		strings.TrimSpace(strings.TrimPrefix(bearer, "Bearer ")),
-		request.InstanceName, request.InstanceMetadata, request.TTLSeconds)
-	if err != nil {
-		a.writeError(c, err)
-		return
-	}
-	c.JSON(http.StatusCreated, result)
-}
-
 func (a *API) revokeCredential(c *gin.Context) {
 	if err := a.auth.RevokeCredential(c.Request.Context(), currentPrincipal(c), domain.ID(c.Param("id"))); err != nil {
 		a.writeError(c, err)
@@ -1473,6 +1452,16 @@ func WriteError(c *gin.Context, logger *slog.Logger, err error) {
 		status, errorType, code = http.StatusBadRequest, "invalid_request", refused.Code
 	case errors.Is(err, domain.ErrWebhookUnconfigured):
 		status, errorType, code = http.StatusNotImplemented, "dependency", "webhook_unconfigured"
+	case errors.Is(err, domain.ErrUnsupportedDeliveryType):
+		status, errorType, code = http.StatusBadRequest, "invalid_request", "unsupported_delivery_type"
+	case errors.Is(err, domain.ErrWebhookVerificationFailed):
+		status, errorType, code = http.StatusUnprocessableEntity, "invalid_request", "webhook_verification_failed"
+	case errors.Is(err, domain.ErrInvalidWebhookURL):
+		status, errorType, code = http.StatusBadRequest, "invalid_request", "invalid_webhook_url"
+	case errors.Is(err, domain.ErrInstanceDeleted):
+		status, errorType, code = http.StatusConflict, "conflict", "instance_deleted"
+	case errors.Is(err, domain.ErrIdempotencyInProgress):
+		status, errorType, code = http.StatusConflict, "conflict", "idempotency_in_progress"
 	case errors.Is(err, domain.ErrOnboardingExpired):
 		status, errorType, code = http.StatusGone, "conflict", "onboarding_session_expired"
 	case errors.Is(err, domain.ErrOnboardingState):

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -65,6 +66,9 @@ func (s *Store) InitializeApproval(ctx context.Context, input application.Initia
 			decision.OrganizationID, decision.Status, decision.Note, decision.Channel, decision.Auth.Method,
 			decision.Auth.Assurance, decision.Auth.AuthenticatedAt, decision.IdempotencyKey,
 			decision.DecidedAt); err != nil {
+			return domain.ApprovalRequest{}, err
+		}
+		if err := recordRequestResolvedEvent(ctx, tx, decision.OrganizationID, decision.RequestID); err != nil {
 			return domain.ApprovalRequest{}, err
 		}
 	}
@@ -285,6 +289,9 @@ func (s *Store) ExpireApproval(ctx context.Context, input application.ExpireAppr
 	if _, err := tx.Exec(ctx, `UPDATE approval_requests SET status='expired',updated_at=$3 WHERE organization_id=$1 AND id=$2`, organizationID, requestID, now); err != nil {
 		return domain.ApprovalRequest{}, err
 	}
+	if err := recordRequestResolvedEvent(ctx, tx, organizationID, requestID); err != nil {
+		return domain.ApprovalRequest{}, err
+	}
 	if err := closeOpenClaims(ctx, tx, organizationID, requestID, domain.ClaimExpired, now); err != nil {
 		return domain.ApprovalRequest{}, err
 	}
@@ -342,38 +349,49 @@ func (s *Store) CancelApproval(ctx context.Context, input application.CancelAppr
 	default:
 		return domain.ApprovalRequest{}, domain.ErrAlreadyTerminal
 	}
-	decisionID := domain.ID(uuid.NewString())
-	key := "cancellation:" + string(requestID)
-	if _, err := tx.Exec(ctx, `INSERT INTO decisions
-		(id,request_id,organization_id,source,status,channel,auth_method,auth_assurance,authenticated_at,credential_id,idempotency_key,decided_at)
-		VALUES ($1,$2,$3,'agent','cancelled','aap',$4,$5,$6,NULLIF($7::text,'')::uuid,$8,$9)`, decisionID, requestID, organizationID,
-		input.Auth.Method, input.Auth.Assurance, input.Auth.AuthenticatedAt, input.Auth.CredentialID, key, now); err != nil {
-		return domain.ApprovalRequest{}, err
-	}
-	if _, err := tx.Exec(ctx, `UPDATE approval_requests SET status='cancelled',updated_at=$3 WHERE organization_id=$1 AND id=$2`, organizationID, requestID, now); err != nil {
-		return domain.ApprovalRequest{}, err
-	}
-	// A claim that already lapsed closes as lapsed with its own event, as
-	// on a decision; only a still-live claim is closed by the cancellation.
-	if err := s.lapseStaleClaims(ctx, tx, organizationID, requestID, now); err != nil {
-		return domain.ApprovalRequest{}, err
-	}
-	if err := closeOpenClaims(ctx, tx, organizationID, requestID, domain.ClaimCancelled, now); err != nil {
-		return domain.ApprovalRequest{}, err
-	}
-	data, _ := json.Marshal(map[string]any{"agent_instance_id": instanceID, "agent_instance_name": instanceName})
-	if err := s.appendAuditEvent(ctx, tx, domain.AuditEvent{
-		OrganizationID: organizationID, EventType: "approval.cancelled",
-		ActorType: domain.ActorAgent, ActorID: domain.ID(agentID),
-		SubjectType: "approval_request", SubjectID: requestID,
-		Data: data, OccurredAt: now,
-	}); err != nil {
+	if err := s.cancelLockedApproval(ctx, tx, organizationID, requestID, domain.ID(agentID), instanceID, instanceName, input.Auth, now); err != nil {
 		return domain.ApprovalRequest{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return domain.ApprovalRequest{}, err
 	}
 	return s.GetApproval(ctx, application.GetApprovalInput{OrganizationID: organizationID, RequestID: requestID})
+}
+
+// cancelLockedApproval records the cancellation of a pending request the
+// caller's transaction has locked: the terminal decision (source agent,
+// channel aap), the status, the claims, the request.resolved event when
+// the instance still has a receiver, and approval.cancelled.
+func (s *Store) cancelLockedApproval(ctx context.Context, tx pgx.Tx, organizationID, requestID, agentID domain.ID, instanceID, instanceName string, auth domain.AuthContext, now time.Time) error {
+	decisionID := domain.ID(uuid.NewString())
+	key := "cancellation:" + string(requestID)
+	if _, err := tx.Exec(ctx, `INSERT INTO decisions
+		(id,request_id,organization_id,source,status,channel,auth_method,auth_assurance,authenticated_at,credential_id,idempotency_key,decided_at)
+		VALUES ($1,$2,$3,'agent','cancelled','aap',$4,$5,$6,NULLIF($7::text,'')::uuid,$8,$9)`, decisionID, requestID, organizationID,
+		auth.Method, auth.Assurance, auth.AuthenticatedAt, auth.CredentialID, key, now); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE approval_requests SET status='cancelled',updated_at=$3 WHERE organization_id=$1 AND id=$2`, organizationID, requestID, now); err != nil {
+		return err
+	}
+	if err := recordRequestResolvedEvent(ctx, tx, organizationID, requestID); err != nil {
+		return err
+	}
+	// A claim that already lapsed closes as lapsed with its own event, as
+	// on a decision; only a still-live claim is closed by the cancellation.
+	if err := s.lapseStaleClaims(ctx, tx, organizationID, requestID, now); err != nil {
+		return err
+	}
+	if err := closeOpenClaims(ctx, tx, organizationID, requestID, domain.ClaimCancelled, now); err != nil {
+		return err
+	}
+	data, _ := json.Marshal(map[string]any{"agent_instance_id": instanceID, "agent_instance_name": instanceName})
+	return s.appendAuditEvent(ctx, tx, domain.AuditEvent{
+		OrganizationID: organizationID, EventType: "approval.cancelled",
+		ActorType: domain.ActorAgent, ActorID: agentID,
+		SubjectType: "approval_request", SubjectID: requestID,
+		Data: data, OccurredAt: now,
+	})
 }
 
 func (s *Store) CountPendingApprovals(ctx context.Context, input application.CountPendingApprovalsInput) (int64, error) {
