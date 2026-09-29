@@ -52,13 +52,14 @@ Unknown fields are refused everywhere. Every block has this envelope:
 - A config may carry `escalation_path` (a path key) only where the block
   can hand the request to a person; it overrides the revision's
   `default_escalation_path` for that block.
-- `ask_agent_owner: true` beside `escalation_path` sends the request to
-  the person who owns the agent instance that made it instead. The path
-  is then the fallback, used only when the request has no owner able to
-  decide (a service agent, or an owner who was deactivated), so it is
-  required. The owner is the only reviewer: the request never moves to
-  the path because the owner is slow. The revision's default takes the
-  same pair as `default_ask_agent_owner` with `default_escalation_path`.
+- `ask_agent_owner: true` sends the request to the person who owns the
+  agent instance that made it. `escalation_path` beside it, if set, is
+  the fallback, used only when the request has no owner able to decide
+  (a service agent, or an owner who was deactivated); without one the
+  fallback is the pipeline default, else any authorized reviewer. The
+  owner is the only reviewer: the request never moves to the fallback
+  because the owner is slow. The revision's default takes the same pair
+  as `default_ask_agent_owner` with an optional `default_escalation_path`.
   A block that names its own path without the flag does not ask the
   owner, even when the default does.
 

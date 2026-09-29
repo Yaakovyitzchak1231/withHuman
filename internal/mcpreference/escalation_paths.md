@@ -5,7 +5,7 @@ to a person, in what order, and what happens when nobody answers. A
 pipeline block names a path by key (`escalation_path`), and a pipeline
 revision names one for fall-through (`default_escalation_path`). A path
 can be shared by many pipelines. Beside `ask_agent_owner` (or
-`default_ask_agent_owner`) the path is only the fallback for requests
+`default_ask_agent_owner`) a path is only the fallback for requests
 whose agent has no owner able to decide; the owner reviews the rest. Who is notified and who may decide are
 the same set: every target on the branches the request reaches.
 

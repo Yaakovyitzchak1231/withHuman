@@ -1,7 +1,7 @@
 # withHuman: reviewer routing and escalation
 
-Status: implemented · Last updated: 2026-09-29 (agent-owner route;
-self-approval policy removed)
+Status: implemented · Last updated: 2026-09-29 (agent-owner route with an
+optional fallback; self-approval policy removed)
 
 ## Summary
 
@@ -191,13 +191,16 @@ pipeline revision's default (`default_ask_agent_owner` with
 `default_escalation_path`). The organization pipeline may use it too:
 it runs for every agent, and service agents take the fallback.
 
-**The fallback is required.** Revision creation refuses
-`ask_agent_owner` without `escalation_path` on the same object, and
-`default_ask_agent_owner` without `default_escalation_path`, as an
-invalid document; the database holds the default's rule too. The path is
-an ordinary named path, so activation and archive guards treat it
-exactly like any other. An edition's block kind joins the route by
-implementing `approvalblock.OwnerRoutedConfig` beside `RoutedConfig`.
+**The fallback is optional.** A path beside `ask_agent_owner` (or
+`default_ask_agent_owner`) is the fallback. Without one the route falls
+back to what the defaults would have given it: the enclosing pipeline
+defaults' paths, their own owner flags aside, else any authorized
+reviewer (the default queue). The router resolves and pins that fallback
+when the request arrives, so an `agent_owner` snapshot may pin no path;
+a handoff then leaves the request to the default queue. A named path is
+an ordinary path, so activation and archive guards treat it exactly like
+any other. An edition's block kind joins the route by implementing
+`approvalblock.OwnerRoutedConfig` beside `RoutedConfig`.
 
 **Resolution.** At routing time the router reads the request's owner:
 

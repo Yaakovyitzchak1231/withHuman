@@ -2,23 +2,21 @@ package approvalblock_test
 
 import (
 	"encoding/json"
-	"errors"
 	"testing"
 
 	"github.com/withHumanAI/withHuman/approvalblock"
 )
 
-func TestValidateRouteRequiresTheFallbackPath(t *testing.T) {
-	if err := approvalblock.ValidateRoute("", true); !errors.Is(err, approvalblock.ErrAgentOwnerFallbackRequired) {
-		t.Fatalf("asking the owner without a path = %v", err)
-	}
+// Asking the owner needs no path: without one it falls back to the
+// pipeline default. A path, when given, must still be key-shaped.
+func TestValidateRouteChecksOnlyThePathShape(t *testing.T) {
 	if err := approvalblock.ValidateRoute("Not A Key", false); err == nil {
 		t.Fatal("a malformed path key was accepted")
 	}
 	for _, route := range []struct {
 		path string
 		ask  bool
-	}{{"", false}, {"platform", false}, {"platform", true}} {
+	}{{"", false}, {"", true}, {"platform", false}, {"platform", true}} {
 		if err := approvalblock.ValidateRoute(route.path, route.ask); err != nil {
 			t.Fatalf("route %+v: %v", route, err)
 		}
@@ -65,14 +63,14 @@ func TestOwnerRoutesRoundTripInEveryRoutedConfig(t *testing.T) {
 	}
 }
 
-func TestAnOwnerRouteWithoutItsPathIsInvalid(t *testing.T) {
+func TestAnOwnerRouteWithoutAPathIsValid(t *testing.T) {
 	var definition approvalblock.Definition
 	document := `{"id":"ask","name":"Ask","type":"outcome","enabled":true,"timeout":"50ms","max_attempts":1,
 		"config":{"outcome":"human","reason":"A person decides.","ask_agent_owner":true}}`
 	if err := json.Unmarshal([]byte(document), &definition); err != nil {
 		t.Fatal(err)
 	}
-	if err := definition.Validate(); err == nil {
-		t.Fatal("an owner route without its fallback path was accepted")
+	if err := definition.Validate(); err != nil || !definition.AskAgentOwner() || definition.EscalationPath() != "" {
+		t.Fatalf("an owner route without a path = ask %v, path %q, %v", definition.AskAgentOwner(), definition.EscalationPath(), err)
 	}
 }

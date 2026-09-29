@@ -557,11 +557,18 @@ func humanReviewRoute(effective *effectivePipeline, terminal terminalBlock, rout
 
 // routeSection is humanReviewRoute plus the index of the section that
 // supplied the path, -1 for none.
+// A route that asks the agent's owner without a path of its own falls back
+// to the path the defaults would have given it, their own owner flags
+// aside because the owner is already the first choice.
 func routeSection(effective *effectivePipeline, terminal terminalBlock, route Route, routeFrom int) (*application.HumanReviewRoute, int) {
-	if route.EscalationPath != "" {
+	if route.EscalationPath != "" || route.AskAgentOwner {
 		owner := effective.Owner[terminal.Position]
+		path := route.EscalationPath
+		if path == "" {
+			path = defaultPath(effective, routeFrom)
+		}
 		return &application.HumanReviewRoute{
-			PathKey:            route.EscalationPath,
+			PathKey:            path,
 			AskAgentOwner:      route.AskAgentOwner,
 			Reason:             domain.RoutingReasonBlockEscalation,
 			PipelineRevisionID: effective.Sections[owner].Revision.ID,
@@ -569,24 +576,39 @@ func routeSection(effective *effectivePipeline, terminal terminalBlock, route Ro
 		}, owner
 	}
 	for index := routeFrom; index >= 0; index = effective.Sections[index].Enclosing {
-		path := effective.Sections[index].Revision.DefaultEscalationPath
-		if path == "" {
+		revision := effective.Sections[index].Revision
+		if revision.DefaultEscalationPath == "" && !revision.DefaultAskAgentOwner {
 			continue
 		}
+		path := revision.DefaultEscalationPath
+		if path == "" {
+			path = defaultPath(effective, effective.Sections[index].Enclosing)
+		}
 		return &application.HumanReviewRoute{
-			PathKey: path, AskAgentOwner: effective.Sections[index].Revision.DefaultAskAgentOwner,
+			PathKey: path, AskAgentOwner: revision.DefaultAskAgentOwner,
 			Reason:             domain.RoutingReasonPipelineDefault,
-			PipelineRevisionID: effective.Sections[index].Revision.ID,
+			PipelineRevisionID: revision.ID,
 		}, index
 	}
 	return &application.HumanReviewRoute{Reason: domain.RoutingReasonNoEscalation}, -1
+}
+
+// defaultPath is the first default path from the section at from outward,
+// "" when none names one.
+func defaultPath(effective *effectivePipeline, from int) string {
+	for index := from; index >= 0; index = effective.Sections[index].Enclosing {
+		if path := effective.Sections[index].Revision.DefaultEscalationPath; path != "" {
+			return path
+		}
+	}
+	return ""
 }
 
 // entryDefaultRoute is the entry pipeline's default alone: what a request
 // inherits when the run never entered another pipeline, or could not be
 // flattened at all.
 func entryDefaultRoute(entry domain.RequestApprovalPipelineRevision) *application.HumanReviewRoute {
-	if entry.DefaultEscalationPath == "" {
+	if entry.DefaultEscalationPath == "" && !entry.DefaultAskAgentOwner {
 		return &application.HumanReviewRoute{Reason: domain.RoutingReasonNoEscalation}
 	}
 	return &application.HumanReviewRoute{

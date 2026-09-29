@@ -100,7 +100,9 @@ func TestAgentOwnerRoutingAgainstRealPostgres(t *testing.T) {
 		t.Fatalf("an unknown owner = %+v", got)
 	}
 
-	pinToOwner := func(key string) domain.ApprovalRequest {
+	// pinToOwner routes a request to chris, with the platform path pinned
+	// as the fallback unless withoutPath.
+	pinToOwnerWith := func(key string, withoutPath bool) domain.ApprovalRequest {
 		t.Helper()
 		request := domain.ApprovalRequest{
 			Timeout: "1h", ID: domain.ID(uuid.NewString()), OrganizationID: orgID,
@@ -116,6 +118,9 @@ func TestAgentOwnerRoutingAgainstRealPostgres(t *testing.T) {
 			EscalationPathKey: "platform", EscalationPathRevisionID: fallback.ID,
 			Urgency: "standard", Facts: map[string]bool{}, CreatedAt: now,
 		}
+		if withoutPath {
+			initialization.Routing.EscalationPathKey, initialization.Routing.EscalationPathRevisionID = "", ""
+		}
 		stored, err := store.InitializeApproval(ctx, initialization)
 		if err != nil {
 			t.Fatalf("InitializeApproval: %v", err)
@@ -125,6 +130,7 @@ func TestAgentOwnerRoutingAgainstRealPostgres(t *testing.T) {
 		}
 		return stored
 	}
+	pinToOwner := func(key string) domain.ApprovalRequest { return pinToOwnerWith(key, false) }
 	routingState := func(membershipID, requestID domain.ID) application.ApprovalRoutingState {
 		t.Helper()
 		state, err := store.GetApprovalRoutingState(ctx, application.GetApprovalRoutingStateInput{
@@ -201,6 +207,11 @@ func TestAgentOwnerRoutingAgainstRealPostgres(t *testing.T) {
 
 	t.Run("suspending the owner hands the request to the fallback", func(t *testing.T) {
 		request := pinToOwner("owner-handoff")
+		// An owner route without a fallback path hands off to the queue.
+		unpathed := pinToOwnerWith("owner-handoff-unpathed", true)
+		if got := recipients(unpathed.ID); got.Outcome != domain.RoutingAgentOwner || !slices.Equal(got.MembershipIDs(), []domain.ID{chrisID}) {
+			t.Fatalf("recipients before the handoff = %v %v", got.Outcome, got.MembershipIDs())
+		}
 		if _, err := store.SetMembershipStatus(ctx, application.SetMembershipStatusInput{
 			OrganizationID: orgID, MembershipID: chrisID, Status: domain.MembershipSuspended,
 			ActorMembershipID: ownerMembershipID, Now: now,
@@ -222,6 +233,16 @@ func TestAgentOwnerRoutingAgainstRealPostgres(t *testing.T) {
 		}
 		if !escalated(request.ID) {
 			t.Fatal("the fallback must be walked after a handoff")
+		}
+		if got := recipients(unpathed.ID); got.Outcome != domain.RoutingDefaultQueue || !slices.Contains(got.MembershipIDs(), platformID) ||
+			slices.Contains(got.MembershipIDs(), chrisID) {
+			t.Fatalf("an unpathed handoff must reach every reviewer who may decide: %v %v", got.Outcome, got.MembershipIDs())
+		}
+		if escalated(unpathed.ID) {
+			t.Fatal("an unpathed handoff has no path to walk")
+		}
+		if unpathedView := view(unpathed.ID); unpathedView.AgentOwnerHandedOffAt == nil || len(unpathedView.Targets) != 0 {
+			t.Fatalf("routing view of an unpathed handoff = %+v", unpathedView)
 		}
 		handedOff := view(request.ID)
 		if handedOff.AgentOwnerHandedOffAt == nil || len(handedOff.Targets) != 1 || handedOff.Targets[0].ID != platformID {
@@ -269,10 +290,12 @@ func TestAgentOwnerRoutingAgainstRealPostgres(t *testing.T) {
 		if err != nil || !read.DefaultAskAgentOwner || read.DefaultEscalationPath != "platform" {
 			t.Fatalf("revision = %+v, %v", read, err)
 		}
-		if _, err := store.Pool().Exec(ctx, `INSERT INTO request_approval_pipelines
-			(id, organization_id, pipeline_key, name, revision, is_active, block_ids, default_ask_agent_owner, created_by_actor_id, created_at)
-			VALUES ($1, $2, $3, 'Entry pipeline', 99, false, '{}', true, $4, $5)`, uuid.NewString(), orgID, domain.EntryPipelineKey, ownerMembershipID, now); err == nil {
-			t.Fatal("the database accepted an owner route without its fallback path")
+		unpathed, err := store.CreateRequestApprovalPipelineRevision(ctx, application.CreateRequestApprovalPipelineRevisionInput{
+			ID: domain.ID(uuid.NewString()), OrganizationID: orgID, PipelineKey: domain.EntryPipelineKey, Name: "Entry pipeline",
+			DefaultAskAgentOwner: true, CreatedByActorID: ownerMembershipID, Now: now,
+		})
+		if err != nil || !unpathed.DefaultAskAgentOwner || unpathed.DefaultEscalationPath != "" {
+			t.Fatalf("an owner route without a fallback path is a valid default: %+v, %v", unpathed, err)
 		}
 	})
 }

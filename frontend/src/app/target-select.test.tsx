@@ -17,11 +17,22 @@ describe("the route picker's agent-owner choice", () => {
     expect(owner.getAttribute("aria-disabled")).not.toBe("true");
   });
 
-  it("stays listed but disabled, saying why, when there is no path to fall back to", () => {
-    open([]);
+  it("is offered without any path, falling back to the pipeline default", () => {
+    const changes: ReviewerTarget[] = [];
+    render(<TargetSelect directory={[]} value={null} onChange={(next) => next && changes.push(next)} fallbackLabel="Pipeline default" aria-label="Escalation path" />);
+    fireEvent.click(screen.getByRole("combobox", { name: "Escalation path" }));
     const owner = screen.getByRole("option", { name: /The agent's owner/ });
-    expect(owner.getAttribute("aria-disabled")).toBe("true");
-    expect(owner.textContent).toContain("Create an escalation path first");
+    expect(owner.getAttribute("aria-disabled")).not.toBe("true");
+    fireEvent.click(owner);
+    expect(changes).toEqual([{ type: "agent_owner", id: "", name: "" }]);
+  });
+
+  it("offers the pipeline default and the paths as the owner's fallback", () => {
+    render(<TargetSelect directory={[{ type: "escalation_path", id: "on-call", name: "On call" }]} value={{ type: "agent_owner", id: "", name: "" }}
+      onChange={() => undefined} fallbackLabel="Pipeline default" aria-label="Escalation path" />);
+    fireEvent.click(screen.getByRole("combobox", { name: "Escalation path fallback" }));
+    expect(screen.getByRole("option", { name: /Pipeline default/ })).toBeTruthy();
+    expect(screen.getByRole("option", { name: /On call/ })).toBeTruthy();
   });
 
   it("is not offered in a picker of people and teams", () => {

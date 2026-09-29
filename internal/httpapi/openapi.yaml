@@ -6250,7 +6250,7 @@ components:
           description: The escalation path for requests that reach a person from this pipeline without a block naming a path.
         default_ask_agent_owner:
           type: boolean
-          description: "Send requests that reach a person without a block naming a path to the person who owns the agent instance that made them, instead of `default_escalation_path`. The path is then the fallback, used only for a request whose agent has no owner able to decide it."
+          description: "Send requests that reach a person without a block naming a path to the person who owns the agent instance that made them, instead of `default_escalation_path`. The path, if any, is then the fallback for a request whose agent has no owner able to decide it; without one the fallback is the enclosing pipeline's default, else any authorized reviewer."
         created_by_actor_id: { type: string, format: uuid, description: The membership or organization-key actor that created the revision. }
         created_at: { type: string, format: date-time }
         archived_at: { type: string, format: date-time, description: "Present when the pipeline was archived. An archived revision can be read but never activated." }
@@ -6275,7 +6275,7 @@ components:
           description: The escalation path for requests that reach a person from this pipeline without a block naming a path.
         default_ask_agent_owner:
           type: boolean
-          description: "Send requests that reach a person without a block naming a path to the person who owns the agent instance that made them, instead of `default_escalation_path`. The path is then the fallback, used only for a request whose agent has no owner able to decide it."
+          description: "Send requests that reach a person without a block naming a path to the person who owns the agent instance that made them, instead of `default_escalation_path`. The path, if any, is then the fallback for a request whose agent has no owner able to decide it; without one the fallback is the enclosing pipeline's default, else any authorized reviewer."
         created_by_actor_id: { type: string, format: uuid, description: The membership or organization-key actor that created the revision. }
         created_at: { type: string, format: date-time }
         archived_at: { type: string, format: date-time, description: "Present when the pipeline was archived." }
@@ -6302,7 +6302,7 @@ components:
           description: "The escalation path for requests that reach a person from this pipeline without a block naming a path. That includes requests that run out of it. A delegated pipeline without one inherits the defaults of the pipelines that delegated into it, nearest first; with none anywhere, any reviewer who can decide may take the request from the queue. The path must exist when the revision is created, and be active when it is activated."
         default_ask_agent_owner:
           type: boolean
-          description: "Send those requests to the person who owns the agent instance that made them instead. `default_escalation_path` is then the fallback, used only for a request whose agent has no owner able to decide it (a service agent, or an owner who was deactivated), and is required. The owner is the only reviewer: the request never moves to the path because the owner has not answered."
+          description: "Send those requests to the person who owns the agent instance that made them instead. `default_escalation_path`, if set, is then the fallback for a request whose agent has no owner able to decide it (a service agent, or an owner who was deactivated); without it the fallback is the enclosing pipeline's default, else any authorized reviewer. The owner is the only reviewer: the request never moves to the path because the owner has not answered."
     RequestApprovalPipelineCreate:
       type: object
       additionalProperties: false
@@ -6326,7 +6326,7 @@ components:
           description: "The escalation path for requests that reach a person from this pipeline without a block naming a path, as in a document."
         default_ask_agent_owner:
           type: boolean
-          description: "Send those requests to the person who owns the agent instance that made them instead. `default_escalation_path` is then the fallback, used only for a request whose agent has no owner able to decide it (a service agent, or an owner who was deactivated), and is required. The owner is the only reviewer: the request never moves to the path because the owner has not answered."
+          description: "Send those requests to the person who owns the agent instance that made them instead. `default_escalation_path`, if set, is then the fallback for a request whose agent has no owner able to decide it (a service agent, or an owner who was deactivated); without it the fallback is the enclosing pipeline's default, else any authorized reviewer. The owner is the only reviewer: the request never moves to the path because the owner has not answered."
     RequestApprovalBlockDefinition:
       description: One block of a pipeline document. The type picks the kind of block and the shape of its config. These are the kinds every edition has (`outcome`, `branch`, `delegate`, `webhook`); "if this, then that" is a branch whose blocks end in an outcome block; an edition may add kinds of its own with their own config shapes (the hosted edition adds `llm_judge`), and a document naming a kind this deployment lacks is refused as invalid.
       oneOf:
@@ -6497,7 +6497,7 @@ components:
           description: "Where the request goes when none of the branch's blocks decides. Defaults to the pipeline's default path. Blocks inside the branch that name no path of their own use the pipeline's default, not this one."
         ask_agent_owner:
           type: boolean
-          description: "Send the request to the person who owns the agent instance that made it, instead of `escalation_path`. The path is then the fallback, used only when the request has no owner able to decide it, and is required."
+          description: "Send the request to the person who owns the agent instance that made it, instead of `escalation_path`. The path, if set, is then the fallback when the request has no owner able to decide it; without one the fallback is the pipeline default."
     StoredBranchBlockConfig:
       type: object
       additionalProperties: false
@@ -6517,7 +6517,7 @@ components:
           description: Where the request goes when none of the branch's blocks decides.
         ask_agent_owner:
           type: boolean
-          description: "Send the request to the person who owns the agent instance that made it, instead of `escalation_path`. The path is then the fallback, used only when the request has no owner able to decide it, and is required."
+          description: "Send the request to the person who owns the agent instance that made it, instead of `escalation_path`. The path, if set, is then the fallback when the request has no owner able to decide it; without one the fallback is the pipeline default."
     DelegateBlockDefinition:
       type: object
       additionalProperties: false
@@ -6607,7 +6607,7 @@ components:
           description: "Where the request goes when the endpoint answers `human`, or when the call fails. Defaults to the pipeline's default path."
         ask_agent_owner:
           type: boolean
-          description: "Send the request to the person who owns the agent instance that made it, instead of `escalation_path`. The path is then the fallback, used only when the request has no owner able to decide it, and is required."
+          description: "Send the request to the person who owns the agent instance that made it, instead of `escalation_path`. The path, if set, is then the fallback when the request has no owner able to decide it; without one the fallback is the pipeline default."
     OutcomeBlockConfig:
       type: object
       additionalProperties: false
@@ -6629,7 +6629,7 @@ components:
           description: "Where the request goes for a `human` outcome. Allowed only when `outcome` is `human`. Defaults to the pipeline's default path."
         ask_agent_owner:
           type: boolean
-          description: "Send the request to the person who owns the agent instance that made it, instead of `escalation_path`. The path is then the fallback, used only when the request has no owner able to decide it, and is required."
+          description: "Send the request to the person who owns the agent instance that made it, instead of `escalation_path`. The path, if set, is then the fallback when the request has no owner able to decide it; without one the fallback is the pipeline default."
     CELCondition:
       description: A condition tree. A leaf tests one field. all and any combine conditions. some and every test the items of a list field.
       oneOf:

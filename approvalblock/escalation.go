@@ -7,10 +7,6 @@ import (
 
 var escalationPathKeyPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`)
 
-// ErrAgentOwnerFallbackRequired refuses asking the agent's owner without
-// naming the escalation path a request without an owner falls back to.
-var ErrAgentOwnerFallbackRequired = errors.New("ask_agent_owner requires escalation_path as the fallback")
-
 // ValidEscalationPathKey reports whether key has the shape of an
 // escalation path key. Whether the path exists is a repository question
 // answered at revision creation and activation.
@@ -18,12 +14,10 @@ func ValidEscalationPathKey(key string) bool {
 	return escalationPathKeyPattern.MatchString(key)
 }
 
-// ValidateRoute checks one route: an optional escalation path key, and
-// asking the agent's owner only beside the path it falls back to.
+// ValidateRoute checks one route: an optional escalation path key, which
+// is the fallback when the route asks the agent's owner. Asking the owner
+// without a path falls back to the pipeline default.
 func ValidateRoute(escalationPath string, askAgentOwner bool) error {
-	if askAgentOwner && escalationPath == "" {
-		return ErrAgentOwnerFallbackRequired
-	}
 	if escalationPath != "" && !ValidEscalationPathKey(escalationPath) {
 		return errors.New("escalation_path must match ^[a-z0-9][a-z0-9._-]{0,62}$")
 	}

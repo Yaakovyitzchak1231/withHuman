@@ -364,7 +364,17 @@ describe("the agent-owner route", () => {
     expect(document).not.toHaveProperty("default_ask_agent_owner");
   });
 
-  it("refuses a JSON default that asks the owner without a fallback", () => {
-    expect(() => parseDocument(JSON.stringify({ blocks: [], default_ask_agent_owner: true }))).toThrow("default_escalation_path");
+  it("asks the owner without a path, falling back to the pipeline default", () => {
+    const unpathed = { type: "agent_owner" as const, id: "", name: "" };
+    const block = { ...outcome(), outcome: "human" as const, target: unpathed };
+    const document = documentFromDrafts([block], unpathed);
+    expect(document.blocks[0].config).toMatchObject({ ask_agent_owner: true });
+    expect(document.blocks[0].config).not.toHaveProperty("escalation_path");
+    expect(document).toMatchObject({ default_ask_agent_owner: true });
+    expect(document).not.toHaveProperty("default_escalation_path");
+    const restored = draftsFromBlocks(document.blocks, [payments])[0];
+    expect(restored.kind === "outcome" ? restored.target : undefined).toEqual(unpathed);
+    const parsed = parseDocument(JSON.stringify({ blocks: [], default_ask_agent_owner: true }));
+    expect(parsed.default_ask_agent_owner).toBe(true);
   });
 });

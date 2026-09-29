@@ -18,15 +18,6 @@ func validOptionalEscalationPathKey(value string) error {
 	return validEscalationPathKey(value)
 }
 
-// agentOwnerFallback refuses asking the agent's owner without the path a
-// request that has no owner falls back to.
-func agentOwnerFallback(pathKey string, askAgentOwner bool) error {
-	if askAgentOwner && pathKey == "" {
-		return invalidField("default escalation path", "is required as the fallback when the agent's owner is asked")
-	}
-	return nil
-}
-
 func positiveDocumentVersion(version int) error {
 	if version <= 0 {
 		return invalidField("document version", "must be positive")
@@ -57,8 +48,9 @@ func validPathKeys(keys []string) error {
 // revision that supplied it, which may be a delegated pipeline's.
 type HumanReviewRoute struct {
 	PathKey string
-	// AskAgentOwner sends the request to the agent's owner first; PathKey
-	// is then the fallback for a request without an owner able to decide.
+	// AskAgentOwner sends the request to the agent's owner first; PathKey,
+	// possibly empty, is then the fallback for a request without an owner
+	// able to decide.
 	AskAgentOwner      bool
 	Reason             string
 	PipelineRevisionID domain.ID
