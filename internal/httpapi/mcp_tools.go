@@ -52,7 +52,7 @@ type mcpCreatePipelineInput struct {
 type mcpUpdatePipelineInput struct {
 	PipelineKey           string           `json:"pipeline_key" jsonschema:"The pipeline to replace ('entry' for the entry pipeline)."`
 	Name                  string           `json:"name,omitempty" jsonschema:"A new display name for the pipeline. Omit to keep the current one."`
-	Blocks                []map[string]any `json:"blocks" jsonschema:"The complete ordered block list for the new revision (it replaces the current blocks, so include the ones to keep). Each block: id (key-shaped, unique across the whole pipeline including blocks inside branches), name, type (always | cel | webhook | branch | delegate, or a kind this deployment adds; see read_reference), enabled: true, timeout (for example 50ms), max_attempts (1 for always, cel, branch and delegate), and config for its type; a branch holds its own ordered blocks in config.blocks, a delegate names the pipeline it hands matching requests to in config.pipeline_key. See read_reference topic pipeline_blocks. An empty list sends every request to human review."`
+	Blocks                []map[string]any `json:"blocks" jsonschema:"The complete ordered block list for the new revision (it replaces the current blocks, so include the ones to keep). Each block: id (key-shaped, unique across the whole pipeline including blocks inside branches), name, type (outcome | branch | delegate | webhook, or a kind this deployment adds; see read_reference), enabled: true, timeout (for example 50ms), max_attempts (1 for outcome, branch and delegate), and config for its type; a branch holds its own ordered blocks in config.blocks, a delegate names the pipeline it hands matching requests to in config.pipeline_key. See read_reference topic pipeline_blocks. An empty list sends every request to human review."`
 	DefaultEscalationPath string           `json:"default_escalation_path,omitempty" jsonschema:"Escalation path key that takes human exits which name no path of their own, and requests the pipeline hands to a person by running out of blocks. Omit to inherit the defaults of the pipelines that delegate into this one, or, for the entry pipeline, to leave them to any authorized reviewer."`
 	DefaultAskAgentOwner  bool             `json:"default_ask_agent_owner,omitempty" jsonschema:"Send those requests to the person who owns the agent instance that made them instead, with default_escalation_path as the fallback for requests from agents without an owner (service agents). Requires default_escalation_path."`
 	Activate              *bool            `json:"activate,omitempty" jsonschema:"Activate the new revision right away so new requests use it. Defaults to true. False saves a draft revision you can activate later with activate_pipeline_revision."`
@@ -125,7 +125,7 @@ type mcpSaveWebhookEndpointInput struct {
 }
 
 type mcpReferenceInput struct {
-	Topic string `json:"topic" jsonschema:"One of: pipeline_blocks (block envelope and each type's config), conditions (the condition tree cel blocks and request conditions use: fields, operators, values), escalation_paths (path document: nodes, targets, timing, working hours, repeat)."`
+	Topic string `json:"topic" jsonschema:"One of: pipeline_blocks (block envelope and each type's config), conditions (the condition tree branches, delegates and request conditions use: fields, operators, values), escalation_paths (path document: nodes, targets, timing, working hours, repeat)."`
 }
 
 func (a *API) registerMCPTools(server *mcp.Server) {
@@ -308,9 +308,9 @@ func (a *API) registerMCPTools(server *mcp.Server) {
 	addMCPTool(a, server, &mcp.Tool{
 		Name: "update_pipeline",
 		Description: "Save a new revision of a pipeline (the entry pipeline, or one a delegate hands requests to) and activate it (unless activate is false). " +
-			"Blocks run in order and the first to decide wins: always blocks decide every request, cel blocks decide when their condition matches, webhook blocks ask a service of yours (and a kind this deployment adds may ask a model), " +
-			"branch blocks run their own blocks only for requests their condition matches, and delegate blocks hand matching requests to another pipeline by key; a request that enters a branch or a delegated pipeline is decided inside it or goes to a human, and nothing after the block runs for it. " +
-			"A request no block decides falls through to human review, so end with an always block whose outcome is approve when the rest should be automatic. " +
+			"Blocks run in order and the first to decide wins: outcome blocks decide every request that reaches them, webhook blocks ask a service of yours (and a kind this deployment adds may ask a model), " +
+			"branch blocks run their own blocks only for requests their condition matches (so \"if this, then that\" is a branch holding an outcome block), and delegate blocks hand matching requests to another pipeline by key; a request that enters a branch or a delegated pipeline is decided inside it or goes to a human, and nothing after the block runs for it. " +
+			"A request no block decides falls through to human review, so end with an outcome block whose outcome is approve when the rest should be automatic. " +
 			"Every escalation path a block or the default names, and every pipeline a delegate names, must exist; activation additionally requires each to be active and refuses a delegation cycle. Call read_reference (pipeline_blocks) first.",
 		Annotations: mcpAdditive,
 	}, func(call *mcpCall, input mcpUpdatePipelineInput) (*mcp.CallToolResult, any, error) {

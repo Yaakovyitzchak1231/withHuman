@@ -28,7 +28,7 @@ import {
   PipelineConnector,
   PipelineEntryCard,
   PipelineTerminusCard,
-} from "@/ds/components/policy-block";
+} from "@/ds/components/pipeline-flow";
 import { ReferenceChip } from "./reference-chip";
 import { TargetBadge, agentOwnerLabel, type ReviewerTarget } from "@/ds/components/reviewer-target";
 import type { WebhookEndpointOption } from "@/ds/components/webhook-block";
@@ -52,14 +52,12 @@ import {
   type RequestApprovalPipelineRevisionSummary,
   type RequestApprovalPipelineSummary,
   type RevisionPage,
-  type StoredRequestApprovalBlock,
 } from "../types";
 import { emptyRevisionPage, useRevisionPages } from "./revision-pages";
 import { blockProblemLabel } from "./block-errors";
 import { blockKind, extensions } from "./extensions";
 import {
   defaultSample,
-  delegatedKeys,
   documentFromDrafts,
   draftsFromBlocks,
   knownBlockTypes,
@@ -81,13 +79,12 @@ import {
 } from "./pipeline-tree";
 import { pipelineLink } from "./pipeline-link";
 import { PipelineUseList } from "./pipeline-uses";
-import { runFromPreview, type TestRun } from "./pipeline-replay";
+import { foldDelegations, runFromPreview, type TestRun } from "./pipeline-replay";
 import {
   PipelineRail,
   RailProvider,
   UnreachableNotice,
   useRailEditor,
-  type DelegateTarget,
   type RailState,
 } from "./pipeline-rail";
 import { useTitle } from "./use-title";
@@ -103,7 +100,7 @@ const FIXED_FIELD_PATHS = new Set(FIXED_FIELDS.map((field) => field.path));
 /*
  * One pipeline, viewed or edited in place. The rail keeps the same
  * scaffolding in both modes: entry, this pipeline's blocks with their
- * exits, branches and delegate wells, and the terminus that owns the
+ * exits, branches' wells and delegates' exits, and the terminus that owns the
  * pipeline default. Edit swaps the read-only rows for editable cards
  * where they stand; Create revision commits a new immutable revision,
  * which stays inactive until activated from the history below. Every
@@ -145,9 +142,6 @@ export interface PipelineViewPage {
   /* Every pipeline the viewer may read, live or archived, for the
    * delegate picker and for naming targets. */
   pipelines: PipelineOption[];
-  /* The active revisions of the pipelines this one's delegate blocks
-   * hand to, by key, for the wells under them. */
-  delegates: Record<string, DelegateTarget>;
   /* The active pipeline revisions whose delegate blocks hand requests
    * here. Empty for the entry pipeline. */
   uses: PipelineUse[];
@@ -234,42 +228,6 @@ export function pipelineOptions(summaries: RequestApprovalPipelineSummary[]): Pi
     }));
 }
 
-/* A delegated pipeline's active revision as the rail draws it. */
-export function delegateTarget(revision: RequestApprovalPipelineRevision, roster: ReviewerTarget[]): DelegateTarget {
-  return {
-    name: revision.name,
-    blocks: draftsFromBlocks(revision.blocks, roster),
-    defaultTarget: pathTarget(revision.default_escalation_path, roster, revision.default_ask_agent_owner),
-  };
-}
-
-/* The active revisions of the given pipelines, by key; a key the
- * viewer cannot read, or that has no active revision, is left out. */
-export async function loadDelegateTargets(keys: string[], roster: ReviewerTarget[]): Promise<Record<string, DelegateTarget>> {
-  const entries = await Promise.all(
-    keys.map((key) =>
-      api.activeRequestApprovalPipeline(key).then(
-        (revision) => [key, delegateTarget(revision, roster)] as const,
-        () => null,
-      ),
-    ),
-  );
-  return Object.fromEntries(entries.filter((entry): entry is readonly [string, DelegateTarget] => entry !== null));
-}
-
-/* The keys every delegate block in the given revisions names. */
-function delegatedKeysOf(revisions: (RequestApprovalPipelineRevision | null)[]): string[] {
-  const keys = new Set<string>();
-  const walk = (blocks: StoredRequestApprovalBlock[]) => {
-    for (const block of blocks) {
-      if (block.type === "delegate") keys.add(block.config.pipeline_key);
-      if (block.type === "branch") walk(block.config.blocks);
-    }
-  };
-  for (const revision of revisions) if (revision) walk(revision.blocks);
-  return [...keys];
-}
-
 export async function loadPipelineView(pipelineKey: string, revision?: number): Promise<PipelineViewPage> {
   const [pipeline, roster, summaries, uses, availability, suggestions] = await Promise.all([
     loadPipelineRevisions(pipelineKey).then(async (own) => ({
@@ -313,15 +271,10 @@ export async function loadPipelineView(pipelineKey: string, revision?: number): 
     loadBlockAvailability(),
     loadPipelineSuggestions(),
   ]);
-  const delegates = await loadDelegateTargets(
-    delegatedKeysOf([pipeline.displayed, pipeline.latest, pipeline.linkedRevision]),
-    roster,
-  );
   return {
     ...pipeline,
     roster,
     pipelines: pipelineOptions(summaries),
-    delegates,
     uses,
     ...availability,
     ...suggestions,
@@ -428,9 +381,7 @@ export function PipelineViewScreen({
   /* The pipeline's name under edit: renaming is a revision too. */
   const [draftName, setDraftName] = useState(pipelineName);
   const [baselineName, setBaselineName] = useState(pipelineName);
-  /* The one expanded card, as `${pipeline key}/${block id}`, so a
-   * delegated pipeline's well and this one never open each other's
-   * cards. */
+  /* The one expanded card, as `${pipeline key}/${block id}`. */
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
   const [mode, setMode] = useState<"blocks" | "json">("blocks");
   const [jsonText, setJsonText] = useState("");
@@ -438,7 +389,8 @@ export function PipelineViewScreen({
   const [saving, setSaving] = useState(false);
 
   /* Testing: a dialog collects the sample, then the rail replays the
-   * evaluation block by block, delegated pipelines included. */
+   * evaluation block by block; a delegated pipeline's run shows on the
+   * delegate that handed the request there. */
   const [testOpen, setTestOpen] = useState(false);
   const [test, setTest] = useState<TestRun | null>(null);
   const [cursor, setCursor] = useState(0);
@@ -509,24 +461,6 @@ export function PipelineViewScreen({
   ), [page.valueSuggestions, sampleText, savedConditions]);
   const railBlocks = editing ? (jsonDraft?.blocks ?? draft) : viewBlocks;
   const reachability = pipelineReachability(railBlocks);
-
-  /* The wells under delegate blocks draw the targets' active revisions.
-   * The loader brought the saved ones; a target first named while
-   * editing is fetched here, once. */
-  const [delegates, setDelegates] = useState(page.delegates);
-  useEffect(() => setDelegates(page.delegates), [page]);
-  const wanted = delegatedKeys(railBlocks).filter((key) => !(key in delegates) && key !== pipelineKey);
-  const wantedKey = wanted.join("\n");
-  useEffect(() => {
-    if (!wantedKey) return;
-    let stale = false;
-    void loadDelegateTargets(wantedKey.split("\n"), roster).then((loaded) => {
-      if (!stale) setDelegates((current) => ({ ...loaded, ...current }));
-    });
-    return () => {
-      stale = true;
-    };
-  }, [wantedKey, roster]);
 
   /* A sample handed over by the overview's Test request replays as soon
    * as the pipeline is on screen. The ref keeps StrictMode's doubled
@@ -696,7 +630,9 @@ export function PipelineViewScreen({
   }
 
   /* One preview runs the whole effective pipeline: this document, and the
-   * active revision of every pipeline its delegates hand to. */
+   * active revision of every pipeline its delegates hand to. The rail
+   * draws only this one, so what ran inside a delegated pipeline is
+   * folded onto the delegate that handed the request there. */
   async function runTestWith(text: string): Promise<string | null> {
     try {
       const sample = JSON.parse(text) as ReturnType<typeof defaultSample>;
@@ -707,7 +643,8 @@ export function PipelineViewScreen({
         sample,
       );
       setTestOpen(false);
-      setTest(runFromPreview(preview));
+      const delegateIds = new Set(walkDrafts(blocks).flatMap(({ block }) => (block.kind === "delegate" ? [block.id] : [])));
+      setTest(foldDelegations(runFromPreview(preview), pipelineKey, delegateIds));
       setCursor(0);
       return null;
     } catch (reason) {
@@ -841,7 +778,6 @@ export function PipelineViewScreen({
     directory,
     endpoints: endpointOptions,
     pipelines,
-    delegates,
     onOpenPipeline: (key) => void navigate(pipelineLink(key)),
     tools: page.toolSchemas,
     suggestions,
@@ -1383,7 +1319,6 @@ function checkDocumentBlocks(blocks: unknown[], path: number[], keys: Map<string
       type?: string;
       config?: {
         when?: unknown;
-        on_match?: string;
         outcome?: string;
         endpoint_key?: unknown;
         allowed_outcomes?: unknown;
@@ -1399,7 +1334,7 @@ function checkDocumentBlocks(blocks: unknown[], path: number[], keys: Map<string
       keys.set(block.id, label);
     }
     switch (block.type) {
-      case "always":
+      case "outcome":
         if (!["approve", "deny", "human"].includes(block.config?.outcome ?? "")) {
           throw new Error(`${label} needs config.outcome set to "approve", "deny", or "human".`);
         }
@@ -1412,16 +1347,6 @@ function checkDocumentBlocks(blocks: unknown[], path: number[], keys: Map<string
           throw new Error(`${label} is missing config.allowed_outcomes.`);
         }
         break;
-      case "cel": {
-        if (!block.config?.when) {
-          throw new Error(`${label} is missing config.when.`);
-        }
-        const outcome = block.config.on_match;
-        if (outcome !== "approve" && outcome !== "deny" && outcome !== "human") {
-          throw new Error(`${label} needs on_match of approve, deny, or human.`);
-        }
-        break;
-      }
       case "branch":
         if (!block.config?.when) {
           throw new Error(`${label} is missing config.when.`);
@@ -1454,7 +1379,7 @@ function checkDocumentBlocks(blocks: unknown[], path: number[], keys: Map<string
   }
 }
 
-/* The types as a sentence lists them: "always", "branch", or "cel". */
+/* The types as a sentence lists them: "branch", "delegate", or "outcome". */
 function listTypes(types: string[]): string {
   const quoted = types.map((type) => `"${type}"`);
   return `${quoted.slice(0, -1).join(", ")}, or ${quoted[quoted.length - 1]}`;

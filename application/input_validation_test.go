@@ -93,8 +93,8 @@ func TestPortInputsAcceptCompleteValues(t *testing.T) {
 		CreatedAt:      now,
 	}
 	block := RequestApprovalBlockSnapshotInput{
-		ID: "block-1", BlockKey: "small-refund", Name: "Small refund", BlockType: "cel",
-		ConfigVersion: 1, Config: json.RawMessage(`{"on_match":"approve"}`), TimeoutMS: 50, MaxAttempts: 1,
+		ID: "block-1", BlockKey: "small-refund", Name: "Small refund", BlockType: "outcome",
+		ConfigVersion: 1, Config: json.RawMessage(`{"outcome":"approve"}`), TimeoutMS: 50, MaxAttempts: 1,
 	}
 	expectedRevision := int64(1)
 

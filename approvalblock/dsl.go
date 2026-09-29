@@ -13,23 +13,6 @@ import (
 
 type Option func(*Definition)
 
-func Define(id string, options ...Option) *Definition {
-	definition := &Definition{
-		ID:          id,
-		Type:        TypeCEL,
-		Enabled:     true,
-		Timeout:     DefaultTimeout.String(),
-		MaxAttempts: 1,
-		CEL:         &CELConfig{},
-	}
-	for _, option := range options {
-		if option != nil {
-			option(definition)
-		}
-	}
-	return definition
-}
-
 func Name(name string) Option {
 	return func(definition *Definition) { definition.Name = name }
 }
@@ -48,20 +31,10 @@ func MaxAttempts(attempts int) Option {
 	return func(definition *Definition) { definition.MaxAttempts = attempts }
 }
 
-func OnMatch(outcome Outcome) Option {
-	return func(definition *Definition) {
-		if definition.CEL != nil {
-			definition.CEL.OnMatch = outcome
-		}
-	}
-}
-
-// When sets the condition of a cel block, a branch, or a delegate.
+// When sets the condition of a branch or a delegate.
 func When(condition Condition) Option {
 	return func(definition *Definition) {
 		switch {
-		case definition.CEL != nil:
-			definition.CEL.When = condition
 		case definition.Branch != nil:
 			definition.Branch.When = condition
 		case definition.Delegate != nil:
@@ -75,10 +48,8 @@ func When(condition Condition) Option {
 func Reason(reason string) Option {
 	return func(definition *Definition) {
 		switch {
-		case definition.Always != nil:
-			definition.Always.Reason = reason
-		case definition.CEL != nil:
-			definition.CEL.Reason = reason
+		case definition.Outcome != nil:
+			definition.Outcome.Reason = reason
 		case definition.Webhook != nil:
 			definition.Webhook.Reason = reason
 		case definition.Branch != nil:

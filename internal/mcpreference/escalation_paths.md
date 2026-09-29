@@ -53,7 +53,7 @@ Condition kinds (1 to 10 per node, each exactly one kind):
 - `{ "type": "urgency", "urgency": "standard" | "interrupt" }` tests the
   request's current urgency.
 - `{ "type": "request", "when": <condition tree> }` tests the request
-  itself with the same tree `cel` blocks use (see the `conditions`
+  itself with the same tree branch conditions use (see the `conditions`
   topic); evaluated once when the request is routed.
 
 ## defer nodes

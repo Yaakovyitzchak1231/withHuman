@@ -211,7 +211,7 @@ export function DelegateBlockCard({
 }
 
 /* The read-only face of a delegate: who enters, and the pipeline they
- * continue in. The rail draws that pipeline's blocks beneath it. */
+ * continue in. That pipeline's blocks are its own page's business. */
 export function DelegateBlockSummaryCard({
   block,
   pipelines,

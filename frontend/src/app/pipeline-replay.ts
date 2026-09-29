@@ -106,6 +106,27 @@ export function runFromPreview(preview: RequestApprovalPipelinePreview): TestRun
   };
 }
 
+/*
+ * A run as the page of one pipeline replays it. A delegate hands the
+ * request to its target and nothing after it runs, so every step past
+ * the one entering a delegate belongs to the target (or to pipelines it
+ * delegates to in turn), which the page does not draw. Those steps and
+ * the delegate's own end are folded onto the delegate: it becomes the
+ * terminal step when the request ended anywhere inside it.
+ */
+export function foldDelegations(run: TestRun, section: RailSection, delegateIds: ReadonlySet<string>): TestRun {
+  const steps: TestStep[] = [];
+  let entered: TestStep | undefined;
+  for (const step of run.steps) {
+    if (entered) continue;
+    steps.push(step);
+    if (step.section === section && delegateIds.has(step.blockId) && step.outcome === "enter" && !step.endOfBranch) {
+      entered = step;
+    }
+  }
+  return entered ? { ...run, steps, terminalKey: entered.key } : run;
+}
+
 /* The replayed step for a key, once the replay has reached it. */
 export function stepAt(run: TestRun | null, cursor: number, key: string): TestStep | undefined {
   if (!run) return undefined;
@@ -128,7 +149,7 @@ export function statusAt(run: TestRun | null, cursor: number, key: string): Test
 }
 
 /* Which exit of a block a test step took: the answer for a webhook,
- * "match" for conditions and Always, "enter" when a branch's or
+ * "match" for an Outcome block, "enter" when a branch's or
  * delegate's conditions were met, "continue" when it fell through, and
  * whatever a registered kind reads from its own metadata. A failed
  * evaluation took none. */
@@ -149,8 +170,7 @@ export function takenExit(step: TestStep | undefined, block: BlockDraft): string
     case "webhook":
       /* The endpoint's answer is the exit. */
       return step.outcome;
-    case "cel":
-    case "always":
+    case "outcome":
       return "match";
   }
 }

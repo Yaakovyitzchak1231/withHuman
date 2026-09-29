@@ -41,8 +41,8 @@ func TestRequestApprovalPipelinesAgainstRealPostgres(t *testing.T) {
 		seedPipelineTestScope(t, ctx, store, scope.organization, scope.membership, scope.pipelineKey, now)
 	}
 	firstBlocks := []application.RequestApprovalBlockSnapshotInput{
-		pipelineTestBlock("small-refund", `{"on_match":"approve","threshold":1000}`),
-		pipelineTestBlock("manual-review", `{"on_match":"human"}`),
+		pipelineTestBlock("small-refund", `{"outcome":"approve","threshold":1000}`),
+		pipelineTestBlock("manual-review", `{"outcome":"human"}`),
 	}
 
 	firstRevision := createPipelineTestRevision(t, ctx, store, firstOrg, firstMembership, "billing", firstBlocks, now)
@@ -50,8 +50,8 @@ func TestRequestApprovalPipelinesAgainstRealPostgres(t *testing.T) {
 		t.Fatalf("first authored revision = %+v, want inactive revision 2", firstRevision)
 	}
 	reusedInputs := []application.RequestApprovalBlockSnapshotInput{
-		pipelineTestBlock("small-refund", `{"threshold":1000,"on_match":"approve"}`),
-		pipelineTestBlock("manual-review", `{"on_match":"human"}`),
+		pipelineTestBlock("small-refund", `{"threshold":1000,"outcome":"approve"}`),
+		pipelineTestBlock("manual-review", `{"outcome":"human"}`),
 	}
 	secondRevision := createPipelineTestRevision(t, ctx, store, firstOrg, firstMembership, "billing", reusedInputs, now.Add(time.Second))
 	if secondRevision.Revision != 3 {
@@ -81,7 +81,7 @@ func TestRequestApprovalPipelinesAgainstRealPostgres(t *testing.T) {
 
 	t.Run("tenant isolation", func(t *testing.T) {
 		otherRevision := createPipelineTestRevision(t, ctx, store, secondOrg, secondMembership, "billing",
-			[]application.RequestApprovalBlockSnapshotInput{pipelineTestBlock("small-refund", `{"on_match":"approve","threshold":1000}`)}, now)
+			[]application.RequestApprovalBlockSnapshotInput{pipelineTestBlock("small-refund", `{"outcome":"approve","threshold":1000}`)}, now)
 		if otherRevision.BlockIDs[0] == firstRevision.BlockIDs[0] {
 			t.Fatal("content hash deduplication crossed organization boundary")
 		}
@@ -142,7 +142,7 @@ func TestRequestApprovalPipelinesAgainstRealPostgres(t *testing.T) {
 		if _, err := store.Pool().Exec(ctx, `INSERT INTO request_approval_blocks
 			(id, organization_id, block_key, name, block_type, config_version, config, timeout_ms,
 			 max_attempts, created_by_actor_id, created_at)
-			VALUES ($1, $2, 'small-refund', 'Changed snapshot', 'cel', 1, '{"on_match":"deny"}', 50, 1, $3, $4)`,
+			VALUES ($1, $2, 'small-refund', 'Changed snapshot', 'outcome', 1, '{"outcome":"deny"}', 50, 1, $3, $4)`,
 			duplicateKeyBlockID, firstOrg, firstMembership, now); err != nil {
 			t.Fatalf("insert duplicate logical key snapshot: %v", err)
 		}
@@ -151,9 +151,9 @@ func TestRequestApprovalPipelinesAgainstRealPostgres(t *testing.T) {
 	})
 
 	thirdRevision := createPipelineTestRevision(t, ctx, store, firstOrg, firstMembership, "billing",
-		[]application.RequestApprovalBlockSnapshotInput{pipelineTestBlock("deny-large", `{"on_match":"deny"}`)}, now.Add(2*time.Second))
+		[]application.RequestApprovalBlockSnapshotInput{pipelineTestBlock("deny-large", `{"outcome":"deny"}`)}, now.Add(2*time.Second))
 	fourthRevision := createPipelineTestRevision(t, ctx, store, firstOrg, firstMembership, "billing",
-		[]application.RequestApprovalBlockSnapshotInput{pipelineTestBlock("human-default", `{"on_match":"human"}`)}, now.Add(3*time.Second))
+		[]application.RequestApprovalBlockSnapshotInput{pipelineTestBlock("human-default", `{"outcome":"human"}`)}, now.Add(3*time.Second))
 	if thirdRevision.Revision != 4 || fourthRevision.Revision != 5 {
 		t.Fatalf("repository did not resume monotonic revisions after rejected inserts: %d, %d", thirdRevision.Revision, fourthRevision.Revision)
 	}
@@ -235,12 +235,12 @@ func TestRequestApprovalPipelinesAgainstRealPostgres(t *testing.T) {
 
 	t.Run("entry pipeline", func(t *testing.T) {
 		entryFirst := createPipelineTestRevision(t, ctx, store, secondOrg, secondMembership, domain.EntryPipelineKey,
-			[]application.RequestApprovalBlockSnapshotInput{pipelineTestBlock("entry-small-refund", `{"on_match":"approve"}`)}, now.Add(2*time.Second))
+			[]application.RequestApprovalBlockSnapshotInput{pipelineTestBlock("entry-small-refund", `{"outcome":"approve"}`)}, now.Add(2*time.Second))
 		if entryFirst.Revision != 2 || entryFirst.PipelineKey != domain.EntryPipelineKey || entryFirst.Name != entryPipelineName {
 			t.Fatalf("entry revision = %+v, want revision 2 of the entry pipeline", entryFirst)
 		}
 		entrySecond := createPipelineTestRevision(t, ctx, store, secondOrg, secondMembership, domain.EntryPipelineKey,
-			[]application.RequestApprovalBlockSnapshotInput{pipelineTestBlock("entry-manual", `{"on_match":"human"}`)}, now.Add(3*time.Second))
+			[]application.RequestApprovalBlockSnapshotInput{pipelineTestBlock("entry-manual", `{"outcome":"human"}`)}, now.Add(3*time.Second))
 		if entrySecond.Revision != 3 {
 			t.Fatalf("the entry pipeline did not keep its own revision sequence: %+v", entrySecond)
 		}
@@ -390,7 +390,7 @@ func seedPipelineTestScope(t *testing.T, ctx context.Context, store *Store, orga
 
 func pipelineTestBlock(key, config string) application.RequestApprovalBlockSnapshotInput {
 	return application.RequestApprovalBlockSnapshotInput{
-		ID: domain.ID(uuid.NewString()), BlockKey: key, Name: key, BlockType: "cel",
+		ID: domain.ID(uuid.NewString()), BlockKey: key, Name: key, BlockType: "outcome",
 		ConfigVersion: 1, Config: json.RawMessage(config), TimeoutMS: 50, MaxAttempts: 1,
 	}
 }
@@ -487,7 +487,7 @@ func TestPipelinesAreKeyedAgainstRealPostgres(t *testing.T) {
 
 	created, err := store.CreateRequestApprovalPipeline(ctx, application.CreateRequestApprovalPipelineInput{
 		ID: domain.ID(uuid.NewString()), OrganizationID: orgID, PipelineKey: "payments", Name: "Payments",
-		Blocks:           []application.RequestApprovalBlockSnapshotInput{pipelineTestBlock("small", `{"on_match":"approve"}`)},
+		Blocks:           []application.RequestApprovalBlockSnapshotInput{pipelineTestBlock("small", `{"outcome":"approve"}`)},
 		CreatedByActorID: membershipID, Now: now,
 	})
 	if err != nil || created.Revision != 1 || !created.IsActive || created.Name != "Payments" || len(created.BlockIDs) != 1 {

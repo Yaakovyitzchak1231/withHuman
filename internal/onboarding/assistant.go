@@ -399,7 +399,7 @@ func historyBytes(history []application.ToolUseMessage) int {
 // assistantToolCatalog is what the model may call: the setup's own
 // branch-scoped tools and the test prompt tool.
 func (s *Service) assistantToolCatalog() []application.ToolUseTool {
-	blockSchema := `"blocks":{"type":"array","items":{"type":"object","additionalProperties":true},"description":"The agent's complete ordered rule list (it replaces the current blocks, so include the ones to keep). Each block: id (key-shaped, unique across the whole entry pipeline; prefix it with the agent slug), name, type (always | cel | webhook | branch, or a kind this deployment adds), enabled: true, timeout (for example 50ms), max_attempts (1 for always, cel and branch), and config for its type. See the grammar in your instructions. An empty list makes every call from the agent run."}`
+	blockSchema := `"blocks":{"type":"array","items":{"type":"object","additionalProperties":true},"description":"The agent's complete ordered rule list (it replaces the current blocks, so include the ones to keep). Each block: id (key-shaped, unique across the whole entry pipeline; prefix it with the agent slug), name, type (outcome | branch | webhook, or a kind this deployment adds), enabled: true, timeout (for example 50ms), max_attempts (1 for outcome and branch), and config for its type. See the grammar in your instructions. An empty list makes every call from the agent run."}`
 	return []application.ToolUseTool{
 		{
 			Name:        getRulesTool,
@@ -408,7 +408,7 @@ func (s *Service) assistantToolCatalog() []application.ToolUseTool {
 		},
 		{
 			Name: updateRulesTool,
-			Description: "Replace one agent's rules with a new block list and activate them at once. Blocks run in order and the first to decide wins; a request no block decides waits for a person, so end with an always block whose outcome is approve when everything else should run. " +
+			Description: "Replace one agent's rules with a new block list and activate them at once. Blocks run in order and the first to decide wins; a request no block decides waits for a person, so end with an outcome block whose outcome is approve when everything else should run. " +
 				"Set escalation_path to the setup's path on every block whose outcome can be human. Nothing outside the agent's branch changes.",
 			InputSchema: json.RawMessage(`{"type":"object","properties":{"agent_slug":{"type":"string","description":"The agent, by slug, exactly as listed."},` + blockSchema + `},"required":["agent_slug","blocks"],"additionalProperties":false}`),
 		},
@@ -570,10 +570,7 @@ func (turn *assistantTurn) previewRules(ctx context.Context, slug string, raw js
 	if err != nil {
 		return toolError(err.Error())
 	}
-	inside := false
-	for _, block := range branch.Branch.Blocks {
-		inside = inside || block.ID == preview.TerminalBlockKey
-	}
+	inside := holdsBlock(branch.Branch.Blocks, preview.TerminalBlockKey)
 	answer := map[string]any{
 		"outcome": preview.Outcome, "reason_code": preview.ReasonCode,
 		"decided_outside_your_rules": preview.TerminalBlockKey != "" && preview.TerminalBlockKey != branch.ID && !inside,
@@ -592,6 +589,21 @@ func (turn *assistantTurn) previewRules(ctx context.Context, slug string, raw js
 	return toolAnswer(answer)
 }
 
+// holdsBlock reports whether key names one of blocks or a block nested in
+// one of them: a rule is a branch whose outcome block decides, so the
+// deciding block usually sits a level or more below the agent's branch.
+func holdsBlock(blocks []approvalblock.Definition, key string) bool {
+	for _, block := range blocks {
+		if block.ID == key {
+			return true
+		}
+		if block.Branch != nil && holdsBlock(block.Branch.Blocks, key) {
+			return true
+		}
+	}
+	return false
+}
+
 // withPathOnHumanExits makes the person the reviewer of every human exit
 // the model wrote without naming one: blocks inside a branch never
 // inherit the branch's path, so each names the setup's path itself.
@@ -602,14 +614,10 @@ func withPathOnHumanExits(blocks []approvalblock.Definition, pathKey string) []a
 	out := make([]approvalblock.Definition, len(blocks))
 	for index, block := range blocks {
 		switch {
-		case block.Always != nil && block.Always.Outcome == approvalblock.Human && block.Always.EscalationPath == "":
-			always := *block.Always
-			always.EscalationPath, always.AskAgentOwner = pathKey, true
-			block.Always = &always
-		case block.CEL != nil && block.CEL.OnMatch == approvalblock.Human && block.CEL.EscalationPath == "":
-			cel := *block.CEL
-			cel.EscalationPath, cel.AskAgentOwner = pathKey, true
-			block.CEL = &cel
+		case block.Outcome != nil && block.Outcome.Outcome == approvalblock.Human && block.Outcome.EscalationPath == "":
+			outcome := *block.Outcome
+			outcome.EscalationPath, outcome.AskAgentOwner = pathKey, true
+			block.Outcome = &outcome
 		case block.Webhook != nil && block.Webhook.EscalationPath == "":
 			webhook := *block.Webhook
 			webhook.EscalationPath, webhook.AskAgentOwner = pathKey, true
@@ -832,7 +840,7 @@ func assistantSystemPrompt(session domain.OnboardingSession, editionGrammar stri
 ## How to work
 
 1. Read the agent's current rules with get_agent_rules first: the person may have refined them in an earlier message, and update_agent_rules replaces the whole block list.
-2. Write the rules as blocks. Put the blocks that send calls to a person first, then end with an always block whose outcome is approve when everything else should run without asking; when the person wants everything reviewed, end with always human instead. A request no block decides waits for a person.
+2. Write the rules as blocks. "If this, then that" is a branch whose condition tests the request and whose blocks end in an outcome block. Put the branches that send calls to a person first, then end with an outcome block whose outcome is approve when everything else should run without asking; when the person wants everything reviewed, end with an outcome block of human instead. A request no block decides waits for a person.
 3. Save with update_agent_rules for each agent the request concerns. Do not touch an agent the person did not mention.
 4. Check with preview_agent_rules: at least one sample that should wait for a person and one that should run. Fix and save again when an outcome is wrong. When the answer says the decision was made outside your rules, a block the organization placed before the agent's branch decided; say so instead of fighting it.
 5. Call set_test_prompt once per agent you changed, with a harmless call your rules send to a person. It is refused if the sample would not reach a person.
@@ -840,7 +848,7 @@ func assistantSystemPrompt(session domain.OnboardingSession, editionGrammar stri
 
 Writing rules:
 - Conditions test the request. /request/tool is the tool name; /request/arguments/<field> are the call's arguments, with the argument names listed above (a shell tool's command text is usually /request/arguments/command). Use regex (RE2) for command patterns, in for lists of tool names, starts_with for prefixes.
-- A shell rule like "kubectl commands that change the cluster" is a cel block on the shell tool with a regex over the command, for example ` + "`kubectl\\s+(apply|delete|scale|rollout|patch|edit|create|replace)`" + `. Read-only verbs (get, describe, logs) stay out of it.
+- A shell rule like "kubectl commands that change the cluster" is a branch on the shell tool with a regex over the command, holding one outcome block of human, for example ` + "`kubectl\\s+(apply|delete|scale|rollout|patch|edit|create|replace)`" + `. Read-only verbs (get, describe, logs) stay out of it.
 - Name blocks as short verb-first labels ("Review kubectl changes"); reasons are one full sentence a reviewer reads ("kubectl commands that change the cluster wait for a person.").
 - Every block id is key-shaped and unique across the whole entry pipeline, so prefix it with the agent slug ("codex-review-kubectl"); every condition id is a UUID you generate, unique across the revision.
 - Rules reflect what the person asked, nothing more. If the request is too vague to act on, ask one short question instead of guessing.

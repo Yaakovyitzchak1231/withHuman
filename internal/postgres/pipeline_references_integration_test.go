@@ -75,11 +75,10 @@ func TestPipelineReferenceGuardsAgainstRealPostgres(t *testing.T) {
 		activatePath(t, "fallback")
 		payments := createRoutingTestPathRevision(t, ctx, store, orgID, membershipID, "payments", routingTestPathDocument(), now)
 		review := pipelineTestBlock("manual-review", `{"outcome":"human","escalation_path":"payments"}`)
-		review.BlockType = "always"
 		revision, err := store.CreateRequestApprovalPipelineRevision(ctx, application.CreateRequestApprovalPipelineRevisionInput{
 			ID: domain.ID(uuid.NewString()), OrganizationID: orgID, PipelineKey: "billing", Name: "Billing",
 			Blocks: []application.RequestApprovalBlockSnapshotInput{
-				pipelineTestBlock("auto-approve", `{"on_match":"approve"}`),
+				pipelineTestBlock("auto-approve", `{"outcome":"approve"}`),
 				review,
 			},
 			DefaultEscalationPath: "fallback", CreatedByActorID: membershipID, Now: now,
@@ -214,7 +213,7 @@ func TestPipelineReferenceGuardsAgainstRealPostgres(t *testing.T) {
 			block.BlockType = "branch"
 			return block
 		}
-		review := pipelineTestBlock("inside-review", `{"on_match":"human","escalation_path":"inside-path"}`)
+		review := pipelineTestBlock("inside-review", `{"outcome":"human","escalation_path":"inside-path"}`)
 		hook := func(reason string) application.RequestApprovalBlockSnapshotInput {
 			config, _ := json.Marshal(map[string]any{"endpoint_key": "branch-fraud", "allowed_outcomes": []string{"next"}, "reason": reason})
 			block := pipelineTestBlock("fraud-hook", string(config))
@@ -269,7 +268,7 @@ func TestPipelineReferenceGuardsAgainstRealPostgres(t *testing.T) {
 		// A revision that changes one nested block reuses the unchanged
 		// branch and sibling snapshots.
 		next := createPipelineTestRevision(t, ctx, store, orgID, membershipID, "support", []application.RequestApprovalBlockSnapshotInput{
-			branchBlock("Refunds nobody decided."), pipelineTestBlock("inside-review", `{"on_match":"human","escalation_path":"inside-path"}`), hook("Checked again."),
+			branchBlock("Refunds nobody decided."), pipelineTestBlock("inside-review", `{"outcome":"human","escalation_path":"inside-path"}`), hook("Checked again."),
 		}, now)
 		if next.BlockIDs[0] != revision.BlockIDs[0] || next.BlockIDs[1] != revision.BlockIDs[1] || next.BlockIDs[2] == revision.BlockIDs[2] {
 			t.Fatalf("snapshot reuse across revisions: before %v after %v", revision.BlockIDs, next.BlockIDs)
@@ -402,7 +401,7 @@ func TestPipelineReferenceGuardsAgainstRealPostgres(t *testing.T) {
 			seedPipelineTestScope(t, ctx, store, orgID, membershipID, pipelineKey, now)
 			activatePath(t, key)
 			revision := createPipelineTestRevision(t, ctx, store, orgID, membershipID, pipelineKey, []application.RequestApprovalBlockSnapshotInput{
-				pipelineTestBlock("review", `{"on_match":"human","escalation_path":"`+key+`"}`),
+				pipelineTestBlock("review", `{"outcome":"human","escalation_path":"`+key+`"}`),
 			}, now)
 			var wait sync.WaitGroup
 			var activateErr, archiveErr error

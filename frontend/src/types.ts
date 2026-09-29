@@ -657,34 +657,20 @@ export interface RevisionPage<Item> {
 export type PipelineOutcome = "next" | "approve" | "deny" | "human";
 
 /* Block definitions are a discriminated union on `type`; each variant
- * carries its own config shape and envelope limits. */
-export interface AlwaysBlockDefinition {
+ * carries its own config shape and envelope limits. An outcome block
+ * decides every request that reaches it; "if X, then this outcome" is a
+ * branch on X holding one. */
+export interface OutcomeBlockDefinition {
   id: string;
   name: string;
-  type: "always";
+  type: "outcome";
   enabled: true;
   timeout: string;
   max_attempts: 1;
   config: {
     outcome: Exclude<PipelineOutcome, "next">;
     reason: string;
-    escalation_path?: string;
-    ask_agent_owner?: boolean;
-  };
-}
-
-export interface CELBlockDefinition {
-  id: string;
-  name: string;
-  type: "cel";
-  enabled: true;
-  timeout: string;
-  max_attempts: 1;
-  config: {
-    when: Record<string, unknown>;
-    on_match: Exclude<PipelineOutcome, "next">;
-    reason: string;
-    /* The escalation path a human match hands the request to; absent
+    /* The escalation path a human outcome hands the request to; absent
      * inherits the pipeline default. */
     escalation_path?: string;
     /* Ask the agent's owner instead, with escalation_path as the
@@ -727,6 +713,7 @@ export interface BranchBlockConfig<Child> {
   when: Record<string, unknown>;
   /* At least one child, of any type, branches included. */
   blocks: Child[];
+  /* Optional: empty sends a generated explanation. */
   reason: string;
   escalation_path?: string;
   ask_agent_owner?: boolean;
@@ -771,21 +758,14 @@ export interface DelegateBlockDefinition {
  * other; the pipeline editor reads it through the block-kind registry,
  * so the union stays core's. */
 export type RequestApprovalBlockDefinition =
-  | AlwaysBlockDefinition
-  | CELBlockDefinition
+  | OutcomeBlockDefinition
   | WebhookBlockDefinition
   | BranchBlockDefinition
   | DelegateBlockDefinition;
 
 export type RequestApprovalBlockType = RequestApprovalBlockDefinition["type"];
 
-export interface StoredAlwaysBlock extends AlwaysBlockDefinition {
-  snapshot_id: string;
-  config_version: 1;
-  content_hash: string;
-}
-
-export interface StoredCELBlock extends CELBlockDefinition {
+export interface StoredOutcomeBlock extends OutcomeBlockDefinition {
   snapshot_id: string;
   config_version: 1;
   content_hash: string;
@@ -813,8 +793,7 @@ export interface StoredDelegateBlock extends DelegateBlockDefinition {
 }
 
 export type StoredRequestApprovalBlock =
-  | StoredAlwaysBlock
-  | StoredCELBlock
+  | StoredOutcomeBlock
   | StoredWebhookBlock
   | StoredBranchBlock
   | StoredDelegateBlock;

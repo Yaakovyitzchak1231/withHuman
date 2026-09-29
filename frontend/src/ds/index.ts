@@ -232,19 +232,23 @@ export {
   type OutcomeSelectProps,
 } from "./components/outcome-select";
 export {
+  OutcomeBlockCard,
+  OutcomeBlockSummaryCard,
+  type OutcomeBlockCardProps,
+  type OutcomeBlockDraft,
+} from "./components/outcome-block";
+export {
   PipelineAddSlot,
   PipelineBranchEndCard,
   PipelineBranchWell,
-  PipelineConditionExits,
   PipelineConnector,
+  PipelineDelegateExits,
   PipelineEntryCard,
+  PipelineExits,
   PipelineTerminusCard,
-  PolicyBlockCard,
-  PolicyBlockSummaryCard,
   type PipelineAddChoice,
-  type PolicyBlockCardProps,
-  type PolicyBlockDraft,
-} from "./components/policy-block";
+  type PipelineExit,
+} from "./components/pipeline-flow";
 export {
   TargetBadge,
   agentOwnerLabel,

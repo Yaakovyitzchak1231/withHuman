@@ -4,6 +4,8 @@ Status: accepted · Last updated: 2026-09-29 (a branch's end may ask the agent's
 
 > **Amended 2026-09-29.** The `delegate` block (`when` + `pipeline_key`) is a branch whose body is another pipeline; it shares the branch cursor, the `enter` evidence and the `end_of_branch` closing event. See [16-pipeline-delegation.md](16-pipeline-delegation.md).
 
+> **Amended 2026-09-29.** The standalone `cel` block type is gone and the `always` block is renamed `outcome`. "If this, then that" is a branch whose blocks end in an outcome block; a branch's `reason` is optional, and the editor does not draw a branch end nothing can reach. The CEL condition engine described here stays and evaluates every branch and delegate condition. See [16-pipeline-delegation.md](16-pipeline-delegation.md#blocks-after-the-redesign).
+
 > **Prototype.** Same caveat as
 > [00-general-design.md](00-general-design.md): everything here can change
 > without migration paths or backwards-compatibility constraints. Optimize for

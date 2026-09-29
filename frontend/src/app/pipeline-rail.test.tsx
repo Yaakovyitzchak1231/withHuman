@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { BlockDraft, BranchDraft } from "./pipeline-blocks";
 import { dropIndex, PipelineRail, RailProvider, useRailEditor, type RailState } from "./pipeline-rail";
-import { runFromPreview } from "./pipeline-replay";
+import { foldDelegations, runFromPreview } from "./pipeline-replay";
 import { pipelineReachability, walkDrafts } from "./pipeline-tree";
 
 beforeEach(() => vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} }));
@@ -13,17 +13,21 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function cel(id: string, name = id): BlockDraft {
+/* A block that tests a condition and lets everything else continue: a
+ * delegate, whose matches leave for another pipeline. */
+function check(id: string, name = id): BlockDraft {
   return {
-    kind: "cel",
+    kind: "delegate",
     id,
     name,
     enabled: true,
-    outcome: "approve",
     when: { id: `${id}-when`, all: [{ id: `${id}-leaf`, field: "/request/arguments/amount_cents", operator: "less_than", value: 1000 }] },
-    reason: "Small amounts are fine.",
-    target: null,
+    pipelineKey: "billing",
   };
+}
+
+function outcome(id: string, name = id): BlockDraft {
+  return { kind: "outcome", id, name, enabled: true, outcome: "approve", reason: "Small amounts are fine.", target: null };
 }
 
 function branch(id: string, name: string, blocks: BlockDraft[]): BranchDraft {
@@ -40,9 +44,9 @@ function branch(id: string, name: string, blocks: BlockDraft[]): BranchDraft {
 }
 
 const blocks = (): BlockDraft[] => [
-  cel("first", "Staging never waits"),
-  branch("refunds", "Refunds", [cel("small", "Approve small refunds")]),
-  cel("last", "Deny deletes"),
+  check("first", "Staging never waits"),
+  branch("refunds", "Refunds", [check("small", "Approve small refunds")]),
+  check("last", "Deny deletes"),
 ];
 
 function state(drafts: BlockDraft[], overrides: Partial<RailState> = {}): RailState {
@@ -107,7 +111,7 @@ describe("the rail", () => {
   });
 
   it("uses the rail's own last words under a branch that comes last", () => {
-    const drafts = [cel("first"), branch("refunds", "Refunds", [cel("small")])];
+    const drafts = [check("first"), branch("refunds", "Refunds", [check("small")])];
     render(
       <RailProvider value={state(drafts)}>
         <PipelineRail blocks={drafts} lastLabel="Otherwise, ask the default reviewers" />
@@ -115,6 +119,32 @@ describe("the rail", () => {
     );
     expect(screen.queryByText("Otherwise, skip this branch and check the next block")).toBeNull();
     expect(screen.getByText("Otherwise, ask the default reviewers")).toBeTruthy();
+  });
+
+  it("draws no end, and no warning, under a branch an Outcome block inside decides", () => {
+    const drafts = [branch("refunds", "Refunds", [outcome("small", "Approve small refunds")]), check("last", "Deny deletes")];
+    render(
+      <RailProvider value={state(drafts)}>
+        <PipelineRail blocks={drafts} lastLabel="Otherwise" />
+      </RailProvider>,
+    );
+    const well = screen.getByRole("group", { name: "Blocks in “Refunds”" });
+    expect(within(well).getByText("Every request")).toBeTruthy();
+    expect(screen.queryByText("No block in “Refunds” decided.")).toBeNull();
+    expect(screen.queryByText("Unreachable")).toBeNull();
+    expect(screen.getByText("Otherwise, skip this branch and check the next block")).toBeTruthy();
+  });
+
+  it("warns about blocks after an Outcome block, which nothing reaches", () => {
+    const drafts = [branch("refunds", "Refunds", [outcome("small", "Approve small refunds"), check("dead", "Never runs")])];
+    render(
+      <RailProvider value={state(drafts)}>
+        <PipelineRail blocks={drafts} lastLabel="Otherwise" />
+      </RailProvider>,
+    );
+    expect(screen.getByText("Unreachable")).toBeTruthy();
+    expect(screen.getByText(/an earlier Outcome block/)).toBeTruthy();
+    expect(screen.queryByText("No block in “Refunds” decided.")).toBeNull();
   });
 
   it("rings the end card when the test ran out of the branch", () => {
@@ -153,23 +183,38 @@ describe("a delegate on the rail", () => {
     pipelineKey: "billing",
   });
 
-  it("draws the target's active blocks read only in its well, under the target's key", () => {
-    const drafts = [delegate(), cel("last", "Deny deletes")];
-    const run = runFromPreview({
-      outcome: "approve",
-      reason_code: "block_outcome",
-      terminal_block_id: "small",
-      blocks: [
-        { block_id: "to-billing", pipeline_key: "entry", position: 0, outcome: "enter", cost: 1, trace: [] },
-        { block_id: "small", pipeline_key: "billing", position: 1, outcome: "approve", cost: 1, trace: [] },
-      ],
-    });
+  it("draws one card and an exit into the target, never the target's blocks", () => {
+    const drafts = [delegate(), { ...outcome("last", "Deny deletes"), outcome: "deny" as const }];
+    render(
+      <RailProvider value={state(drafts, { section: "entry", pipelines: [{ key: "billing", name: "Billing", active: true }] })}>
+        <PipelineRail blocks={drafts} lastLabel="Otherwise" />
+      </RailProvider>,
+    );
+    expect(screen.queryByRole("group", { name: "Blocks in “Billing”" })).toBeNull();
+    expect(screen.getByText("Continue in Billing")).toBeTruthy();
+    expect(screen.getByText("Otherwise, check the next block")).toBeTruthy();
+  });
+
+  it("carries what the target concluded on the delegate when a test entered it", () => {
+    const drafts = [delegate(), { ...outcome("last", "Deny deletes"), outcome: "deny" as const }];
+    const run = foldDelegations(
+      runFromPreview({
+        outcome: "approve",
+        reason_code: "block_outcome",
+        terminal_block_id: "small",
+        blocks: [
+          { block_id: "to-billing", pipeline_key: "entry", position: 0, outcome: "enter", cost: 1, trace: [] },
+          { block_id: "small", pipeline_key: "billing", position: 1, outcome: "approve", cost: 1, trace: [] },
+        ],
+      }),
+      "entry",
+      new Set(["to-billing"]),
+    );
     render(
       <RailProvider
         value={state(drafts, {
           section: "entry",
           pipelines: [{ key: "billing", name: "Billing", active: true }],
-          delegates: { billing: { name: "Billing", blocks: [cel("small", "Approve small refunds")], defaultTarget: null } },
           run,
           cursor: run.steps.length,
         })}
@@ -177,30 +222,12 @@ describe("a delegate on the rail", () => {
         <PipelineRail blocks={drafts} lastLabel="Otherwise" />
       </RailProvider>,
     );
-    const well = screen.getByRole("group", { name: "Blocks in “Billing”" });
-    expect(within(well).getByText("Approve small refunds")).toBeTruthy();
-    expect(within(well).getByText("No block in “Billing” decided.")).toBeTruthy();
-    /* The target's block is terminal because the replay keyed it to the
-     * target pipeline, not to the pipeline being viewed. */
-    const card = within(well).getByText("Approve small refunds").closest("[data-block-card]") as HTMLElement;
+    const card = screen.getByText("Billing requests").closest("[data-block-card]") as HTMLElement;
     expect(card.className).toContain("ring-approve");
-    expect(screen.getByText("Otherwise, skip this pipeline and check the next block")).toBeTruthy();
-  });
-
-  it("names a target it cannot show, and refuses to draw a cycle", () => {
-    render(
-      <RailProvider value={state([delegate()], { section: "entry" })}>
-        <PipelineRail blocks={[delegate()]} lastLabel="Otherwise" />
-      </RailProvider>,
-    );
-    expect(screen.getByText(/You cannot view that pipeline/)).toBeTruthy();
-    cleanup();
-    render(
-      <RailProvider value={state([delegate()], { section: "billing", enclosing: ["entry"] })}>
-        <PipelineRail blocks={[delegate()]} lastLabel="Otherwise" />
-      </RailProvider>,
-    );
-    expect(screen.getByText("Cycle")).toBeTruthy();
+    expect(screen.getByText("Approved there")).toBeTruthy();
+    /* The delegate's exit is lit; the block after it never ran. */
+    expect(screen.getByText("If conditions are met").className.split(" ")).toContain("text-ink");
+    expect(screen.getByText("Every request").className.split(" ")).toContain("text-ink-muted");
   });
 });
 
@@ -209,12 +236,12 @@ describe("editing the rail", () => {
     const onChange = vi.fn();
     render(<Editor initial={blocks()} onChange={onChange} />);
     fireEvent.click(screen.getByRole("combobox", { name: "Add block to this branch" }));
-    fireEvent.click(await screen.findByText("Conditions block"));
+    fireEvent.click(await screen.findByText("Outcome block"));
     await waitFor(() => expect(onChange).toHaveBeenCalled());
     const drafts = onChange.mock.lastCall![0] as BlockDraft[];
     const refunds = drafts[1];
     if (refunds.kind !== "branch") throw new Error("expected the branch");
-    expect(refunds.blocks.map((block) => block.kind)).toEqual(["cel", "cel"]);
+    expect(refunds.blocks.map((block) => block.kind)).toEqual(["delegate", "outcome"]);
     expect(drafts).toHaveLength(3);
   });
 

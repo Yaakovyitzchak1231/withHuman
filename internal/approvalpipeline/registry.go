@@ -14,8 +14,6 @@ import (
 	"github.com/withHumanAI/withHuman/domain"
 )
 
-const celConfigVersion = 1
-
 // BlockRegistry maps block types to their runtimes. The composition root
 // constructs it once with every dependency a runtime needs; compiled state,
 // management, and execution share the same instance so a block compiles the
@@ -56,17 +54,7 @@ func NewBlockRegistry(options ...BlockRegistryOption) *BlockRegistry {
 		}
 	}
 	registry.register(blockruntime.Runtime{
-		Type: approvalblock.TypeAlways, ConfigVersion: 1, Fingerprint: AlwaysRuntimeFingerprint, Compile: compileAlwaysBlock,
-	})
-	registry.register(blockruntime.Runtime{
-		Type: approvalblock.TypeCEL, ConfigVersion: celConfigVersion, Fingerprint: CELRuntimeFingerprint,
-		Compile: func(definition approvalblock.Definition) (RequestApprovalBlock, error) {
-			compiled, err := CompileCELBlock(definition)
-			if err != nil {
-				return nil, err
-			}
-			return compiled, nil
-		},
+		Type: approvalblock.TypeOutcome, ConfigVersion: 1, Fingerprint: OutcomeRuntimeFingerprint, Compile: compileOutcomeBlock,
 	})
 	registry.register(blockruntime.Runtime{
 		Type: approvalblock.TypeWebhook, ConfigVersion: webhookConfigVersion, Fingerprint: WebhookRuntimeFingerprint,

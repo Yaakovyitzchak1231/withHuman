@@ -18,6 +18,7 @@ import (
 
 const (
 	gateBlockName    = "Review tools chosen in setup"
+	askBlockName     = "Ask about these tools"
 	approveBlockName = "Approve every other tool"
 	pathKeyPrefix    = "notify-"
 	pathEscalateAft  = "1h"
@@ -87,6 +88,7 @@ const EntryPipelineKey = domain.EntryPipelineKey
 
 const (
 	gateBlockSuffix    = "-gate-selected-tools"
+	askBlockSuffix     = "-ask-about-selected-tools"
 	approveBlockSuffix = "-approve-the-rest"
 	conditionNamespace = "withhuman/onboarding/"
 )
@@ -102,9 +104,9 @@ func conditionID(runtime, purpose string) string {
 	return uuid.NewSHA1(uuid.NameSpaceOID, []byte(conditionNamespace+runtime+"/"+purpose)).String()
 }
 
-// StartingBlocks builds the two-block starting body for one runtime: the
-// suggested tools go to a human through the path, and an always block
-// approves everything else. The setup assistant replaces it with the
+// StartingBlocks builds the two-block starting body for one runtime: a
+// branch whose outcome block sends the suggested tools to a human through
+// the path, and an outcome block that approves everything else. The setup assistant replaces it with the
 // person's own rules; without an assistant it is what the setup leaves
 // behind. The explicit approve block matters because running out of a
 // branch is an implicit human outcome, and the adapter policy is shared
@@ -118,21 +120,23 @@ func conditionID(runtime, purpose string) string {
 // this needs a human".
 func StartingBlocks(runtime string, selected []string, pathKey string) []approvalblock.Definition {
 	tools := Union(selected)
-	rest := approvalblock.DefineAlways(runtime+approveBlockSuffix, approvalblock.Approve,
+	rest := approvalblock.DefineOutcome(runtime+approveBlockSuffix, approvalblock.Approve,
 		approvalblock.Name(approveBlockName),
 		approvalblock.Reason("This tool was not suggested for human approval during the guided setup."),
 	)
 	if len(tools) == 0 {
 		return []approvalblock.Definition{*rest}
 	}
-	gate := approvalblock.Define(runtime+gateBlockSuffix,
-		approvalblock.Name(gateBlockName),
-		approvalblock.When(approvalblock.ConditionID(conditionID(runtime, "gate"), approvalblock.Field("/request/tool").In(tools...))),
-		approvalblock.OnMatch(approvalblock.Human),
+	ask := approvalblock.DefineOutcome(runtime+askBlockSuffix, approvalblock.Human,
+		approvalblock.Name(askBlockName),
 		approvalblock.Reason("This tool was suggested for human approval during the guided setup."),
 	)
-	gate.CEL.EscalationPath = pathKey
-	gate.CEL.AskAgentOwner = true
+	ask.Outcome.EscalationPath = pathKey
+	ask.Outcome.AskAgentOwner = true
+	gate := approvalblock.DefineBranch(runtime+gateBlockSuffix, []approvalblock.Definition{*ask},
+		approvalblock.Name(gateBlockName),
+		approvalblock.When(approvalblock.ConditionID(conditionID(runtime, "gate"), approvalblock.Field("/request/tool").In(tools...))),
+	)
 	return []approvalblock.Definition{*gate, *rest}
 }
 
@@ -162,7 +166,7 @@ func runtimeName(runtime string) string {
 
 // EntryBlocks upserts the runtime branches into an entry document: a
 // top-level block whose id equals a branch's id is replaced in place; a
-// new branch is inserted before the first top-level always block (which
+// new branch is inserted before the first top-level outcome block (which
 // would make it unreachable) or appended. Every other block stays where
 // it was.
 func EntryBlocks(existing []approvalblock.Definition, branches ...approvalblock.Definition) []approvalblock.Definition {
@@ -181,7 +185,7 @@ func EntryBlocks(existing []approvalblock.Definition, branches ...approvalblock.
 		}
 		at := len(blocks)
 		for index, block := range blocks {
-			if block.Type == approvalblock.TypeAlways {
+			if block.Type == approvalblock.TypeOutcome {
 				at = index
 				break
 			}
@@ -218,7 +222,7 @@ func StartingShape(runtime string, branch approvalblock.Definition) bool {
 	case 1:
 		return body[0].ID == runtime+approveBlockSuffix
 	case 2:
-		return body[0].ID == runtime+gateBlockSuffix && body[0].CEL != nil && body[1].ID == runtime+approveBlockSuffix
+		return body[0].ID == runtime+gateBlockSuffix && body[0].Branch != nil && body[1].ID == runtime+approveBlockSuffix
 	}
 	return false
 }
@@ -236,7 +240,7 @@ func GatedToolsOf(entry []approvalblock.Definition, runtime string) []string {
 		return []string{}
 	}
 	var tools []string
-	if err := json.Unmarshal(branch.Branch.Blocks[0].CEL.When.Value, &tools); err != nil {
+	if err := json.Unmarshal(branch.Branch.Blocks[0].Branch.When.Value, &tools); err != nil {
 		return nil
 	}
 	return tools

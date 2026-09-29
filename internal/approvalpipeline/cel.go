@@ -19,15 +19,17 @@ import (
 	"github.com/withHumanAI/withHuman/approvalblock"
 )
 
-const CELRuntimeFingerprint = "cel-go/v0.25.0;withhuman-cel-block/v3;limits/v1"
+// ConditionEngineFingerprint versions the condition engine every branch
+// and delegate condition compiles with; their runtime fingerprints carry
+// it, so an engine change is a runtime change.
+const ConditionEngineFingerprint = "cel-go/v0.25.0;withhuman-conditions/v3;limits/v1"
 
-type CompiledCELBlock struct {
-	definition approvalblock.Definition
-	when       compiledWhen
-}
+// conditionBudget is the budget key every condition evaluation spends,
+// whichever block the condition belongs to.
+const conditionBudget approvalblock.BlockType = "condition"
 
 // compiledWhen is one compiled condition envelope with the envelope timeout
-// that bounds an evaluation. Conditions blocks and branches share it.
+// that bounds an evaluation. Branches and delegates share it.
 type compiledWhen struct {
 	timeout time.Duration
 	root    *compiledCondition
@@ -49,7 +51,7 @@ func compileWhen(condition approvalblock.Condition, timeout time.Duration) (comp
 // runs the condition against the block input, returning the value-free
 // evidence even when evaluation fails.
 func (when compiledWhen) evaluate(ctx context.Context, input RequestApprovalBlockInput) (bool, BlockEvidence, error) {
-	if err := input.Budget.Consume(approvalblock.TypeCEL, approvalblock.MaximumCELBlocksPerRequest); err != nil {
+	if err := input.Budget.Consume(conditionBudget, approvalblock.MaximumConditionsPerRequest); err != nil {
 		return false, BlockEvidence{}, executionError(ErrorResourceLimit, err)
 	}
 	if ctx == nil {
@@ -87,51 +89,6 @@ type compiledCondition struct {
 	children []*compiledCondition
 	where    *compiledCondition
 	source   string
-}
-
-func CompileCELBlock(definition approvalblock.Definition) (*CompiledCELBlock, error) {
-	if err := definition.Validate(); err != nil {
-		return nil, fmt.Errorf("validate CEL block: %w", err)
-	}
-	if definition.Type != approvalblock.TypeCEL || definition.CEL == nil {
-		return nil, fmt.Errorf("validate CEL block: definition is not a cel block")
-	}
-	timeout, _ := time.ParseDuration(definition.Timeout)
-	when, err := compileWhen(definition.CEL.When, timeout)
-	if err != nil {
-		return nil, fmt.Errorf("compile CEL block: %w", err)
-	}
-	cloned, err := cloneDefinition(definition)
-	if err != nil {
-		return nil, fmt.Errorf("clone CEL block definition: %w", err)
-	}
-	return &CompiledCELBlock{definition: cloned, when: when}, nil
-}
-
-func (block *CompiledCELBlock) Definition() approvalblock.Definition {
-	definition, err := cloneDefinition(block.definition)
-	if err != nil {
-		panic("validated CEL block definition could not be cloned")
-	}
-	return definition
-}
-
-func (block *CompiledCELBlock) Evaluate(ctx context.Context, input RequestApprovalBlockInput) (RequestApprovalBlockResult, error) {
-	if !block.definition.Enabled {
-		return RequestApprovalBlockResult{Outcome: BlockNext}, nil
-	}
-	matched, evidence, err := block.when.evaluate(ctx, input)
-	if err != nil {
-		return RequestApprovalBlockResult{Evidence: evidence}, err
-	}
-	if !matched {
-		return RequestApprovalBlockResult{Outcome: BlockNext, Evidence: evidence}, nil
-	}
-	return RequestApprovalBlockResult{
-		Outcome:  blockOutcome(block.definition.CEL.OnMatch),
-		Reason:   block.definition.CEL.Reason,
-		Evidence: evidence,
-	}, nil
 }
 
 type conditionCompiler struct {

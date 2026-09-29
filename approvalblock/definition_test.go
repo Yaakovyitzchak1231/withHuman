@@ -15,16 +15,18 @@ const (
 	amountID = "833f08e6-c7b4-47c6-927b-1d27a93cd957"
 )
 
-func TestDSLProducesCanonicalCELBlockDocument(t *testing.T) {
-	block := approvalblock.Define(
+func TestDSLProducesCanonicalConditionalBranchDocument(t *testing.T) {
+	block := approvalblock.DefineBranch(
 		"small-refund",
+		[]approvalblock.Definition{
+			*approvalblock.DefineOutcome("approve-small-refund", approvalblock.Approve,
+				approvalblock.Name("Approve"), approvalblock.Reason("Small refunds are pre-authorized.")),
+		},
 		approvalblock.Name("Approve small refunds"),
-		approvalblock.OnMatch(approvalblock.Approve),
 		approvalblock.When(approvalblock.ConditionID(rootID, approvalblock.All(
 			approvalblock.ConditionID(toolID, approvalblock.Field("/request/tool").In("stripe.refund", "stripe.partial_refund")),
 			approvalblock.ConditionID(amountID, approvalblock.Field("/request/arguments/amount_cents").LessThan(1000)),
 		))),
-		approvalblock.Reason("Small refunds are pre-authorized."),
 	)
 
 	document, err := block.JSON()
@@ -35,14 +37,17 @@ func TestDSLProducesCanonicalCELBlockDocument(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if parsed.ID != "small-refund" || parsed.Type != approvalblock.TypeCEL || !parsed.Enabled {
+	if parsed.ID != "small-refund" || parsed.Type != approvalblock.TypeBranch || !parsed.Enabled {
 		t.Fatalf("unexpected block envelope: %+v", parsed)
 	}
-	if parsed.Timeout != "50ms" || parsed.MaxAttempts != 1 || parsed.CEL.OnMatch != approvalblock.Approve {
-		t.Fatalf("unexpected CEL defaults/config: %+v", parsed)
+	if parsed.Timeout != "50ms" || parsed.MaxAttempts != 1 || parsed.Branch.Reason != "" {
+		t.Fatalf("unexpected branch defaults/config: %+v", parsed)
 	}
-	if len(parsed.CEL.When.All) != 2 || parsed.CEL.When.All[0].ID != toolID {
-		t.Fatalf("condition tree did not round trip: %+v", parsed.CEL.When)
+	if len(parsed.Branch.When.All) != 2 || parsed.Branch.When.All[0].ID != toolID {
+		t.Fatalf("condition tree did not round trip: %+v", parsed.Branch.When)
+	}
+	if len(parsed.Branch.Blocks) != 1 || parsed.Branch.Blocks[0].Outcome == nil || parsed.Branch.Blocks[0].Outcome.Outcome != approvalblock.Approve {
+		t.Fatalf("outcome inside the branch did not round trip: %+v", parsed.Branch.Blocks)
 	}
 	var generic map[string]any
 	if err := json.Unmarshal(document, &generic); err != nil {
@@ -50,6 +55,21 @@ func TestDSLProducesCanonicalCELBlockDocument(t *testing.T) {
 	}
 	if generic["timeout"] != "50ms" {
 		t.Fatalf("timeout is not encoded as a duration string: %s", document)
+	}
+}
+
+// The cel block and the always block are gone: a condition is a branch,
+// a fixed decision an outcome block.
+func TestRetiredBlockTypesAreUnknown(t *testing.T) {
+	for _, document := range []string{
+		`{"id":"small-refund","name":"Small refunds","type":"cel","enabled":true,"timeout":"50ms","max_attempts":1,
+			"config":{"when":{"id":"` + rootID + `","field":"/request/tool","operator":"equals","value":"stripe.refund"},"on_match":"approve","reason":"Small."}}`,
+		`{"id":"remaining","name":"Remaining","type":"always","enabled":true,"timeout":"50ms","max_attempts":1,
+			"config":{"outcome":"approve","reason":"Fine."}}`,
+	} {
+		if _, err := approvalblock.Parse([]byte(document)); err == nil || !strings.Contains(err.Error(), "unknown block type") {
+			t.Fatalf("got %v, want unknown block type for %s", err, document)
+		}
 	}
 }
 
@@ -176,13 +196,16 @@ func TestParseRejectsUnknownFieldsAndInvalidRegex(t *testing.T) {
 	}
 }
 
+// validBlock is a branch guarding condition; its one outcome block makes
+// it a complete "if this, then approve" rule.
 func validBlock(condition approvalblock.Condition) *approvalblock.Definition {
-	return approvalblock.Define(
+	return approvalblock.DefineBranch(
 		"test-block",
+		[]approvalblock.Definition{
+			*approvalblock.DefineOutcome("test-approve", approvalblock.Approve, approvalblock.Name("Approve"), approvalblock.Reason("Test reason.")),
+		},
 		approvalblock.Name("Test block"),
-		approvalblock.OnMatch(approvalblock.Approve),
 		approvalblock.When(condition),
-		approvalblock.Reason("Test reason."),
 	)
 }
 
@@ -208,14 +231,14 @@ func TestEnvelopeDispatchesConfigurationByType(t *testing.T) {
 	if _, present := generic["config"]; !present {
 		t.Fatalf("configuration is not encoded under config: %s", document)
 	}
-	for _, key := range []string{"cel", "CEL"} {
+	for _, key := range []string{"branch", "Branch", "outcome", "Outcome"} {
 		if _, present := generic[key]; present {
 			t.Fatalf("variant pointer leaked onto the wire as %q: %s", key, document)
 		}
 	}
 
 	t.Run("unknown type is rejected", func(t *testing.T) {
-		unknown := strings.Replace(string(document), `"type":"cel"`, `"type":"code"`, 1)
+		unknown := strings.Replace(string(document), `"type":"branch"`, `"type":"code"`, 1)
 		if _, err := approvalblock.Parse([]byte(unknown)); err == nil || !strings.Contains(err.Error(), "unknown block type") {
 			t.Fatalf("got %v, want unknown block type error", err)
 		}
@@ -228,8 +251,8 @@ func TestEnvelopeDispatchesConfigurationByType(t *testing.T) {
 	})
 	t.Run("missing variant fails validation", func(t *testing.T) {
 		copy := *block
-		copy.CEL = nil
-		if err := copy.Validate(); err == nil || !strings.Contains(err.Error(), "cel configuration") {
+		copy.Branch = nil
+		if err := copy.Validate(); err == nil || !strings.Contains(err.Error(), "branch configuration") {
 			t.Fatalf("got %v, want missing configuration error", err)
 		}
 	})

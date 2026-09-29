@@ -19,21 +19,22 @@ import {
   walkDrafts,
 } from "./pipeline-tree";
 
-function cel(id: string): BlockDraft {
+/* A block that tests a condition and never stops the rail: requests it
+ * does not match go on, and the ones it matches leave for another
+ * pipeline. */
+function check(id: string): BlockDraft {
   return {
-    kind: "cel",
+    kind: "delegate",
     id,
     name: id,
     enabled: true,
-    outcome: "approve",
     when: { id: `${id}-when`, all: [{ id: `${id}-leaf`, field: "/request/arguments/amount_cents", operator: "less_than", value: 1000 }] },
-    reason: "Small amounts are fine.",
-    target: null,
+    pipelineKey: "billing",
   };
 }
 
-function always(id: string): BlockDraft {
-  return { kind: "always", id, name: id, enabled: true, outcome: "human", reason: "Everything else waits.", target: null };
+function outcome(id: string): BlockDraft {
+  return { kind: "outcome", id, name: id, enabled: true, outcome: "human", reason: "Everything else waits.", target: null };
 }
 
 function branch(id: string, blocks: BlockDraft[]): BranchDraft {
@@ -51,7 +52,7 @@ function branch(id: string, blocks: BlockDraft[]): BranchDraft {
 
 /* [a, refunds [small, large [huge], tiny], b] */
 function tree(): BlockDraft[] {
-  return [cel("a"), branch("refunds", [cel("small"), branch("large", [cel("huge")]), cel("tiny")]), cel("b")];
+  return [check("a"), branch("refunds", [check("small"), branch("large", [check("huge")]), check("tiny")]), check("b")];
 }
 
 const ids = (drafts: BlockDraft[]) => walkDrafts(drafts).map(({ block }) => block.id);
@@ -113,9 +114,9 @@ describe("structural edits", () => {
 
   it("removes, inserts and appends at depth", () => {
     expect(shape(removeDraft(tree(), "large"))).toEqual(["a", { refunds: ["small", "tiny"] }, "b"]);
-    expect(shape(insertAfter(tree(), "huge", cel("new")))).toEqual(["a", { refunds: ["small", { large: ["huge", "new"] }, "tiny"] }, "b"]);
-    expect(shape(appendToRail(tree(), "refunds", cel("new")))).toEqual(["a", { refunds: ["small", { large: ["huge"] }, "tiny", "new"] }, "b"]);
-    expect(shape(appendToRail(tree(), null, cel("new")))).toEqual(["a", { refunds: ["small", { large: ["huge"] }, "tiny"] }, "b", "new"]);
+    expect(shape(insertAfter(tree(), "huge", check("new")))).toEqual(["a", { refunds: ["small", { large: ["huge", "new"] }, "tiny"] }, "b"]);
+    expect(shape(appendToRail(tree(), "refunds", check("new")))).toEqual(["a", { refunds: ["small", { large: ["huge"] }, "tiny", "new"] }, "b"]);
+    expect(shape(appendToRail(tree(), null, check("new")))).toEqual(["a", { refunds: ["small", { large: ["huge"] }, "tiny"] }, "b", "new"]);
   });
 
   it("reorders within one rail only", () => {
@@ -153,9 +154,9 @@ describe("counting changes", () => {
   it("counts each nested block changed, added, removed or moved once", () => {
     const baseline = tree();
     expect(changedBlockCount(baseline, tree())).toBe(0);
-    expect(changedBlockCount(baseline, updateDraft(tree(), "huge", (block) => ({ ...block, reason: "Other." })))).toBe(1);
+    expect(changedBlockCount(baseline, updateDraft(tree(), "huge", (block) => ({ ...block, name: "Other" })))).toBe(1);
     expect(changedBlockCount(baseline, updateDraft(tree(), "refunds", (block) => ({ ...block, name: "Refunds" })))).toBe(1);
-    expect(changedBlockCount(baseline, appendToRail(tree(), "large", cel("new")))).toBe(1);
+    expect(changedBlockCount(baseline, appendToRail(tree(), "large", check("new")))).toBe(1);
     expect(changedBlockCount(baseline, removeDraft(tree(), "large"))).toBe(2);
     expect(changedBlockCount(baseline, moveIntoBranchAbove(tree(), "b"))).toBe(1);
     expect(changedBlockCount(baseline, reorderRail(tree(), "refunds", 0, 2))).toBe(1);
@@ -163,9 +164,9 @@ describe("counting changes", () => {
 });
 
 describe("reachability", () => {
-  it("lets an Always inside a branch block its later siblings and the branch end, not what follows the branch", () => {
-    const stop = always("inner-stop");
-    const drafts = [branch("refunds", [cel("small"), stop, cel("after-stop")]), cel("after-branch")];
+  it("lets an Outcome block inside a branch block its later siblings and the branch end, not what follows the branch", () => {
+    const stop = outcome("inner-stop");
+    const drafts = [branch("refunds", [check("small"), stop, check("after-stop")]), check("after-branch")];
     const reachability = pipelineReachability(drafts);
     expect([...reachability.blockedBy.keys()]).toEqual(["after-stop"]);
     expect(reachability.blockedBy.get("after-stop")).toBe(stop);
@@ -173,24 +174,24 @@ describe("reachability", () => {
     expect(reachability.stoppedBy).toBeUndefined();
   });
 
-  it("keeps a nested branch's Always inside that branch", () => {
-    const stop = always("deep-stop");
-    const drafts = [branch("outer", [branch("inner", [stop, cel("dead")]), cel("alive")])];
+  it("keeps a nested branch's Outcome block inside that branch", () => {
+    const stop = outcome("deep-stop");
+    const drafts = [branch("outer", [branch("inner", [stop, check("dead")]), check("alive")])];
     const reachability = pipelineReachability(drafts);
     expect([...reachability.blockedBy.keys()]).toEqual(["dead"]);
     expect([...reachability.endBlockedBy.keys()]).toEqual(["inner"]);
   });
 
-  it("passes a top-level Always to a later branch's blocks and end", () => {
-    const stop = always("stop");
-    const reachability = pipelineReachability([stop, branch("refunds", [cel("small")]), cel("b")]);
+  it("passes a top-level Outcome block to a later branch's blocks and end", () => {
+    const stop = outcome("stop");
+    const reachability = pipelineReachability([stop, branch("refunds", [check("small")]), check("b")]);
     expect([...reachability.blockedBy.keys()]).toEqual(["refunds", "small", "b"]);
     expect(reachability.endBlockedBy.get("refunds")).toBe(stop);
     expect(reachability.stoppedBy).toBe(stop);
   });
 
   it("leaves a branch alone when nothing before it stops the rail", () => {
-    const reachability = pipelineReachability([branch("refunds", [cel("small")])]);
+    const reachability = pipelineReachability([branch("refunds", [check("small")])]);
     expect(reachability.blockedBy.size).toBe(0);
     expect(reachability.stoppedBy).toBeUndefined();
   });

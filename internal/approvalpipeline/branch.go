@@ -15,7 +15,7 @@ import (
 // BranchRuntimeFingerprint versions branch semantics: enter or skip on the
 // condition, commit on entry, and the closing human outcome when nothing
 // inside decides.
-const BranchRuntimeFingerprint = "withhuman-branch-block/v1;limits/v1"
+const BranchRuntimeFingerprint = "withhuman-branch-block/v1;limits/v1;" + ConditionEngineFingerprint
 
 const branchConfigVersion = 1
 

@@ -1,26 +1,14 @@
-import type { ToolSchema } from "@/ds/lib/tool-schema";
-import { useState, type ComponentProps, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { cn } from "@/ds/lib/cn";
 import { wellTone } from "@/ds/lib/well";
 import { Badge } from "./badge";
-import { BlockCard, type BlockMenuHandlers, type BlockPosition } from "./block-card";
-import { BlockSummaryCard, SummaryField, SummaryText } from "./block-summary";
-import {
-  ConditionBuilder,
-  ConditionSummary,
-  ConditionTree,
-  type ConditionNode,
-  type ConditionValueDetails,
-  type ConditionValueSuggestions,
-} from "./condition-builder";
 import { Button } from "./button";
-import { InfoLabel } from "./info-label";
 import { IconButton } from "./icon-button";
 import { Menu, MenuContent, MenuTrigger, type MenuAction } from "./menu";
-import { OutcomeSelect, type BlockOutcome } from "./outcome-select";
+import type { BlockOutcome } from "./outcome-select";
 import { TargetBadge, TargetSelect, type ReviewerTarget } from "./reviewer-target";
-import { TextField } from "./text-field";
 import {
+  ArrowUpRightIcon,
   CheckIcon,
   ChevronDownIcon,
   CornerDownRightIcon,
@@ -33,33 +21,20 @@ import {
 import { focusRing } from "@/ds/lib/focus";
 
 /*
- * One ordered block of an approval pipeline, editable in place. The
- * card collapses to a sentence a reviewer can skim and expands to the
- * full condition builder.
+ * The rail an approval pipeline is drawn on, whatever its blocks: where
+ * requests enter, the connectors between cards, the exits that fork off
+ * a block, a branch's well and end, the add slot, and the terminus that
+ * holds the pipeline default. The block cards themselves live with
+ * their kinds.
  */
 
-export interface PolicyBlockDraft {
-  id: string;
-  name: string;
-  enabled: boolean;
-  outcome: BlockOutcome;
-  when: ConditionNode;
-  reason: string;
-  /* Who is asked when the outcome is human. null or absent inherits
-   * the pipeline default from the terminus. */
-  target?: ReviewerTarget | null;
-}
-
-export type AlwaysBlockDraft = Omit<PolicyBlockDraft, "when"> & { when?: never };
-type FixedOutcomeBlockDraft = PolicyBlockDraft | AlwaysBlockDraft;
-
-const OUTCOME_ICONS: Record<BlockOutcome, typeof CheckIcon> = {
+export const OUTCOME_ICONS: Record<BlockOutcome, typeof CheckIcon> = {
   approve: CheckIcon,
   deny: XIcon,
   human: PersonIcon,
 };
 
-const OUTCOME_COPY: Record<BlockOutcome, string> = {
+export const OUTCOME_COPY: Record<BlockOutcome, string> = {
   approve: "Approve automatically",
   deny: "Deny automatically",
   human: "Ask a human",
@@ -68,8 +43,8 @@ const OUTCOME_COPY: Record<BlockOutcome, string> = {
 /* One way out of a block, drawn as a horizontal branch off the rail. */
 export interface PipelineExit {
   key: string;
-  /* Label on the branch: "match" for a conditions block, the answer
-   * for a webhook. */
+  /* Label on the branch: "every request" for an outcome block, the
+   * answer for a webhook. */
   label: string;
   outcome: BlockOutcome;
   /* For a human exit: the reviewers it names, or null for the pipeline
@@ -80,9 +55,9 @@ export interface PipelineExit {
 /*
  * The exit fork under a block: one horizontal branch per terminal exit,
  * each ending in a toned outcome chip, while the rail continues down
- * with whatever does not exit. A conditions block has one exit
- * (match); a webhook has one per answer that decides or asks a human.
- * Conditions live on the cards; consequences live on the exits,
+ * with whatever does not exit. An outcome block has one exit and no
+ * continue row; a webhook has one per answer that decides or asks a
+ * human. Conditions live on the cards; consequences live on the exits,
  * mirroring how the pipeline actually runs.
  */
 export function PipelineExits({
@@ -171,30 +146,70 @@ export function PipelineExits({
   );
 }
 
-/* A conditions block's fork: met conditions exit; otherwise continue. */
-export function PipelineConditionExits({
-  outcome,
-  target,
-  matched = false,
+const DELEGATED_COPY: Record<BlockOutcome, string> = {
+  approve: "Approved there",
+  deny: "Denied there",
+  human: "Sent to a human there",
+};
+
+/*
+ * A delegate block's fork: met conditions leave this pipeline for the
+ * named one, whose blocks are its owners' business and are not drawn
+ * here; otherwise the rail continues. After a test run that entered the
+ * target, the exit carries what the target concluded.
+ */
+export function PipelineDelegateExits({
+  pipeline,
+  taken,
+  result,
   continueLabel = "Otherwise, check the next block",
-  renderRoute,
-  defaultTarget,
 }: {
-  outcome: BlockOutcome;
-  target?: ReviewerTarget | null;
-  matched?: boolean;
+  /* The target pipeline as the exit names it, usually a reference. */
+  pipeline: ReactNode;
+  /* The exit a test run took: into the target, or past it. */
+  taken?: "enter" | "skip";
+  /* What the target concluded for a test request that entered it. */
+  result?: BlockOutcome;
   continueLabel?: ReactNode;
-  renderRoute?: (exit: PipelineExit) => ReactNode;
-  defaultTarget?: ReviewerTarget | null;
 }) {
+  const entered = taken === "enter";
+  const ResultIcon = result ? OUTCOME_ICONS[result] : undefined;
   return (
-    <PipelineExits
-      exits={[{ key: "match", label: "If conditions are met", outcome, target }]}
-      continueLabel={continueLabel}
-      matchedKey={matched ? "match" : undefined}
-      renderRoute={renderRoute}
-      defaultTarget={defaultTarget}
-    />
+    <div className="flex flex-col pl-[15px]">
+      <div className="flex items-center">
+        <span className="relative w-px shrink-0 self-stretch">
+          <span className="absolute top-0 bottom-0 w-px bg-edge-strong" />
+        </span>
+        <span
+          className={cn(
+            "h-px w-5 shrink-0 transition-colors duration-200",
+            entered ? "bg-accent" : "bg-edge-strong",
+          )}
+        />
+        <span className="flex min-w-0 flex-wrap items-center gap-y-1 py-1">
+          <PipelineFlowLabel label="If conditions are met" matched={entered} className="ml-2" />
+          <Badge
+            className="ml-1 min-w-0 max-w-full"
+            tone="accent"
+            icon={<ArrowUpRightIcon width={13} height={13} />}
+          >
+            <span className="truncate">Continue in {pipeline}</span>
+          </Badge>
+          {result && ResultIcon ? (
+            <>
+              <span className="mx-1 h-px w-3 shrink-0 bg-edge-strong" />
+              <Badge
+                tone={result === "approve" ? "approve" : result === "deny" ? "deny" : "warn"}
+                icon={<ResultIcon width={13} height={13} />}
+              >
+                {DELEGATED_COPY[result]}
+              </Badge>
+            </>
+          ) : null}
+        </span>
+      </div>
+      <PipelineFlowRow label={continueLabel} matched={taken === "skip"} />
+    </div>
   );
 }
 
@@ -281,151 +296,6 @@ export function PipelineBranchWell({
   );
 }
 
-/* Move up, Move down and the moves across a branch's edge are the
- * keyboard-reachable fallbacks for the grip, shown in the block menu. */
-export interface PolicyBlockCardProps<Block extends FixedOutcomeBlockDraft = PolicyBlockDraft>
-  extends BlockMenuHandlers {
-  block: Block;
-  position: BlockPosition;
-  expanded: boolean;
-  onExpandedChange: (expanded: boolean) => void;
-  onChange: (next: Block) => void;
-  /* Spread onto the grip handle; the parent wires its drag behavior.
-   * Without it the handle is not rendered. */
-  handleProps?: ComponentProps<"div">;
-  /* True while this card is the one being dragged. */
-  dragging?: boolean;
-  /* Candidate field paths for the condition builder. */
-  tools?: ToolSchema[];
-  suggestions?: string[];
-  valueSuggestions?: ConditionValueSuggestions;
-  valueDetails?: ConditionValueDetails;
-  /* The conditions of the branches this block sits in, which narrow the
-   * condition builder's field hints. */
-  scope?: ConditionNode[];
-  /* Teams and people a human outcome may name. Without it the block
-   * offers no reviewer choice and every human exit uses the default. */
-  directory?: ReviewerTarget[];
-  /* The resolved reviewer destination, included in the field help. */
-  describeRoute?: (target: ReviewerTarget | null) => string;
-}
-
-export function PolicyBlockCard(props: PolicyBlockCardProps) {
-  return <FixedOutcomeBlockCard {...props} />;
-}
-
-export function AlwaysBlockCard(props: PolicyBlockCardProps<AlwaysBlockDraft>) {
-  return <FixedOutcomeBlockCard {...props} />;
-}
-
-function FixedOutcomeBlockCard<Block extends FixedOutcomeBlockDraft>({
-  block,
-  position,
-  expanded,
-  onExpandedChange,
-  onChange,
-  handleProps,
-  dragging = false,
-  tools,
-  suggestions,
-  valueSuggestions,
-  valueDetails,
-  scope,
-  directory,
-  describeRoute,
-  ...menu
-}: PolicyBlockCardProps<Block>) {
-  return (
-    <BlockCard
-      {...menu}
-      position={position}
-      title={block.name || "Untitled block"}
-      subtitle={block.when ? <>Condition · <ConditionSummary node={block.when} /></> : "Always · Every remaining request"}
-      enabled={block.enabled}
-      expanded={expanded}
-      onExpandedChange={onExpandedChange}
-      handleProps={handleProps}
-      dragging={dragging}
-    >
-      {/* Reads in evaluation order: name, applicability, outcome,
-        * reviewers, and reason. */}
-      <TextField
-        label="Name"
-        value={block.name}
-        onChange={(event) => onChange({ ...block, name: event.target.value })}
-        className="max-w-[380px]"
-      />
-
-      {block.when ? (
-        <div className="flex flex-col gap-1.5">
-          <InfoLabel
-            className="text-label text-ink-secondary"
-            info="Choose the conditions the request must meet for this block to apply."
-            docsLinks={[{ href: "https://withhuman.ai/docs/web-app/conditions-blocks#conditions", label: "Writing conditions" }]}
-          >
-            When
-          </InfoLabel>
-          <ConditionBuilder
-            tools={tools}
-            value={block.when}
-            onChange={(when) => onChange({ ...block, when })}
-            suggestions={suggestions}
-            valueSuggestions={valueSuggestions}
-            valueDetails={valueDetails}
-            scope={scope}
-          />
-        </div>
-      ) : <p className="text-body text-ink-secondary">Applies to every request that reaches this block.</p>}
-
-      <div className="flex flex-col gap-1.5">
-        <InfoLabel
-          className="text-label text-ink-secondary"
-          info={block.when ? "Choose whether a matching request is approved, denied, or sent to a human. Requests that do not match continue to the next block." : "Choose what happens to every request that reaches this block. Pipeline processing stops here."}
-          docsLinks={[{ href: block.when ? "https://withhuman.ai/docs/web-app/conditions-blocks#match-outcomes" : "https://withhuman.ai/docs/web-app/approval-pipelines#always-blocks", label: "Choosing outcomes" }]}
-        >
-          {block.when ? "On match" : "Outcome"}
-        </InfoLabel>
-        <OutcomeSelect
-          aria-label={block.when ? "On match" : "Outcome"}
-          className="self-start"
-          value={block.outcome}
-          onValueChange={(outcome) => onChange({ ...block, outcome })}
-        />
-      </div>
-
-      {/* Only a human outcome has a "who". The row appears under the
-       * outcome so the sentence reads: on match, ask a human, these
-       * ones. */}
-      {block.outcome === "human" && directory ? (
-        <div className="flex flex-col gap-1.5">
-          <InfoLabel
-            className="text-label text-ink-secondary"
-            info={["The path decides who is asked and when. The pipeline default is set on the end of pipeline card.", describeRoute?.(block.target ?? null)].filter(Boolean).join(" ")}
-            docsLinks={[{ href: "https://withhuman.ai/docs/web-app/approval-pipelines#human-review", label: "Routing requests to reviewers" }]}
-          >
-            Escalation path
-          </InfoLabel>
-          <TargetSelect
-            directory={directory}
-            value={block.target ?? null}
-            onChange={(target) => onChange({ ...block, target })}
-            fallbackLabel="Pipeline default"
-          />
-        </div>
-      ) : null}
-
-      <TextField
-        label="Reason"
-        info="The explanation the agent receives when this block decides the request."
-        docsLinks={[{ href: block.when ? "https://withhuman.ai/docs/web-app/conditions-blocks#match-outcomes" : "https://withhuman.ai/docs/web-app/approval-pipelines#always-blocks", label: "Decision reasons" }]}
-        value={block.reason}
-        onChange={(event) => onChange({ ...block, reason: event.target.value })}
-        placeholder={block.when ? "Small priority refunds are pre-authorized." : "All remaining requests need human review."}
-      />
-    </BlockCard>
-  );
-}
-
 /* ---------------------------------------------------------------- */
 /* Rail framing: entry, sections, connectors, terminus              */
 /* ---------------------------------------------------------------- */
@@ -451,73 +321,6 @@ export function PipelineEntryCard({
         </div>
       </div>
     </div>
-  );
-}
-
-/* The read-only face of a fixed-outcome block, sharing the editor's
- * fields and omitting conditions for Always. */
-interface FixedOutcomeBlockSummaryCardProps {
-  block: FixedOutcomeBlockDraft;
-  position: BlockPosition;
-  /* Takes the user to the scope's own editor. */
-  onNavigate?: () => void;
-  expanded?: boolean;
-  /* Present when the card opens to its details. */
-  onExpandedChange?: (expanded: boolean) => void;
-  /* The resolved reviewer destination, shown under the path. */
-  describeRoute?: (target: ReviewerTarget | null) => string;
-}
-
-export function PolicyBlockSummaryCard(props: FixedOutcomeBlockSummaryCardProps & { block: PolicyBlockDraft }) {
-  return <FixedOutcomeBlockSummaryCard {...props} />;
-}
-
-export function AlwaysBlockSummaryCard(props: FixedOutcomeBlockSummaryCardProps & { block: AlwaysBlockDraft }) {
-  return <FixedOutcomeBlockSummaryCard {...props} />;
-}
-
-function FixedOutcomeBlockSummaryCard({
-  block,
-  position,
-  onNavigate,
-  expanded,
-  onExpandedChange,
-  describeRoute,
-}: FixedOutcomeBlockSummaryCardProps) {
-  const OutcomeIcon = OUTCOME_ICONS[block.outcome];
-  const route = block.outcome === "human" ? describeRoute?.(block.target ?? null) : undefined;
-  return (
-    <BlockSummaryCard
-      position={position}
-      title={block.name || "Untitled block"}
-      subtitle={block.when ? <>Condition · <ConditionSummary node={block.when} /></> : "Always · Every remaining request"}
-      enabled={block.enabled}
-      onNavigate={onNavigate}
-      expanded={expanded}
-      onExpandedChange={onExpandedChange}
-    >
-      <SummaryField label="When">
-        {block.when ? <ConditionTree node={block.when} /> : <p className="text-body text-ink-secondary">Applies to every request that reaches this block.</p>}
-      </SummaryField>
-
-      <SummaryField label={block.when ? "On match" : "Outcome"}>
-        <span className="flex items-center gap-1.5 text-body text-ink">
-          <OutcomeIcon width={13} height={13} className="shrink-0 text-ink-muted" />
-          {OUTCOME_COPY[block.outcome]}
-        </span>
-      </SummaryField>
-
-      {block.outcome === "human" ? (
-        <SummaryField label="Escalation path">
-          <TargetBadge target={block.target ?? null} fallbackLabel="Pipeline default" className="self-start" />
-          {route ? <p className="text-micro text-ink-muted">{route}</p> : null}
-        </SummaryField>
-      ) : null}
-
-      <SummaryField label="Reason">
-        <SummaryText empty="No reason given. The agent receives only the outcome.">{block.reason}</SummaryText>
-      </SummaryField>
-    </BlockSummaryCard>
   );
 }
 

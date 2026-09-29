@@ -16,19 +16,16 @@ import { BranchBlockCard, BranchBlockSummaryCard } from "@/ds/components/branch-
 import { DelegateBlockCard, DelegateBlockSummaryCard, type PipelineOption } from "@/ds/components/delegate-block";
 import type { ConditionNode, ConditionValueDetails, ConditionValueSuggestions } from "@/ds/components/condition-builder";
 import { ConfirmDialog } from "@/ds/components/confirm-dialog";
+import { OutcomeBlockCard, OutcomeBlockSummaryCard } from "@/ds/components/outcome-block";
 import {
-  AlwaysBlockCard,
-  AlwaysBlockSummaryCard,
   PipelineAddSlot,
   PipelineBranchEndCard,
   PipelineBranchWell,
-  PipelineConditionExits,
   PipelineConnector,
+  PipelineDelegateExits,
   PipelineExits,
-  PolicyBlockCard,
-  PolicyBlockSummaryCard,
   type PipelineAddChoice,
-} from "@/ds/components/policy-block";
+} from "@/ds/components/pipeline-flow";
 import { Referenced } from "@/ds/components/reference";
 import type { ReviewerTarget } from "@/ds/components/reviewer-target";
 import { UnknownBlockCard, UnknownBlockSummaryCard } from "@/ds/components/unknown-block";
@@ -41,14 +38,13 @@ import {
 import {
   AlertIcon,
   ArrowUpRightIcon,
-  BranchIcon,
   ChevronDownIcon,
   CornerDownRightIcon,
   SettingsIcon,
 } from "@/ds/icons";
 import { blockErrorLabel } from "./block-errors";
 import { blockKind, extensions, requireBlockKind } from "./extensions";
-import { duplicateDraft, newDraftBlock, type BlockDraft, type BranchDraft, type DelegateDraft } from "./pipeline-blocks";
+import { duplicateDraft, newDraftBlock, type BlockDraft, type BranchDraft } from "./pipeline-blocks";
 import {
   statusAt,
   stepAt,
@@ -66,7 +62,6 @@ import {
   insertAfter,
   moveIntoBranchAbove,
   moveOutOfBranch,
-  pipelineReachability,
   positionLabel,
   removeDraft,
   reorderRail,
@@ -79,22 +74,14 @@ import {
  * One pipeline drawn down its rail, in viewing and editing alike: each
  * block's card, what a test replay found there, and its exits. A
  * branch's blocks sit in an indented well under the branch, drawn by
- * the same rail one level down, and end in the branch's end card. A
- * delegate's well holds the target pipeline's active blocks, read only,
- * drawn by the same rail under the target's own key. The screen's state
+ * the same rail one level down, and end in the branch's end card when
+ * a request can get that far. A
+ * delegate is one card and an exit naming the pipeline matching requests
+ * continue in; that pipeline's blocks belong to its owners and are not
+ * drawn here. The screen's state
  * (mode, section, replay, edits) reaches every level through
  * RailContext rather than props.
  */
-
-/* A delegated pipeline's active revision, as the rail draws it inside
- * the delegate's well. */
-export interface DelegateTarget {
-  name: string;
-  blocks: BlockDraft[];
-  /* The target's own default escalation path, which its end uses before
-   * falling back to the delegating pipeline's. */
-  defaultTarget: ReviewerTarget | null;
-}
 
 export interface RailDragSource {
   /* The rail the drag started in: a branch's id, or null for the
@@ -121,19 +108,11 @@ export interface RailState {
   mode: "view" | "edit";
   /* The key of the pipeline this rail draws. */
   section: RailSection;
-  /* The keys of the pipelines this rail is drawn inside, outermost
-   * first: a delegate whose target is one of them (or the section
-   * itself) would draw forever, so it draws a notice instead. */
-  enclosing?: string[];
   reachability: Reachability;
   directory: ReviewerTarget[];
   endpoints: WebhookEndpointOption[];
   /* The pipelines a delegate may hand to, for its picker and labels. */
   pipelines?: PipelineOption[];
-  /* The active revisions of the pipelines delegates here hand to, by
-   * key, for the wells under them; a key not present draws as a mention
-   * alone (not loaded, or not readable). */
-  delegates?: Record<string, DelegateTarget>;
   onOpenPipeline?: (pipelineKey: string) => void;
   tools?: ToolSchema[];
   suggestions?: string[];
@@ -188,8 +167,12 @@ export function testRing(status: TestStatus, outcome: TestOutcome | undefined): 
 export function addChoices(availability: Record<string, boolean> = {}): PipelineAddChoice[] {
   const enabled = (type: string) => availability[type] ?? true;
   return [
-    { id: "always", label: "Always block", icon: <ChevronDownIcon width={14} height={14} /> },
-    { id: "cel", label: "Conditions block", icon: <BranchIcon width={14} height={14} /> },
+    {
+      id: "outcome",
+      label: "Outcome block",
+      icon: <ChevronDownIcon width={14} height={14} />,
+      info: "Approves, denies, or asks a human for every request that reaches it, and the pipeline stops. Put one in a branch to decide only the requests that match.",
+    },
     {
       id: "webhook",
       label: enabled("webhook") ? "Webhook block" : "Webhook block (unavailable)",
@@ -318,30 +301,7 @@ export function UnreachableNotice({ block, children }: { block: BlockDraft; chil
   return (
     <div className="my-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-micro text-ink-muted">
       <Badge tone="warn" icon={<AlertIcon width={12} height={12} />}>Unreachable</Badge>
-      <span>Requests stop at “{block.name || "Untitled block"}”, an earlier Always block. Always blocks match every request and therefore nothing will ever get this far. {children}</span>
-    </div>
-  );
-}
-
-function BranchEndUnreachableNotice() {
-  return (
-    <div className="my-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-micro text-ink-muted">
-      <Badge tone="warn" icon={<AlertIcon width={12} height={12} />}>Unreachable</Badge>
-      <span>Requests never reach the end of this branch, so its reason and reviewers are not used.</span>
-    </div>
-  );
-}
-
-/* A delegate whose target is this pipeline or one it is drawn inside:
- * the server refuses the cycle at activation; the rail says so instead
- * of drawing forever. */
-function DelegateCycleNotice({ pipelineKey }: { pipelineKey: string }) {
-  return (
-    <div className="my-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-micro text-ink-muted">
-      <Badge tone="deny" icon={<AlertIcon width={12} height={12} />}>Cycle</Badge>
-      <span>
-        <span className="font-mono text-[11px]">{pipelineKey}</span> is already part of this pipeline's chain. A revision delegating back to it cannot be activated.
-      </span>
+      <span>Requests stop at “{block.name || "Untitled block"}”, an earlier Outcome block. Outcome blocks decide every request that reaches them, so nothing will ever get this far. {children}</span>
     </div>
   );
 }
@@ -408,10 +368,11 @@ function BlockExits({
   continueLabel?: ReactNode;
   defaultTarget?: ReviewerTarget | null;
 }) {
+  const rail = useRail();
   const matchedKey = takenExit(step, block);
   switch (block.kind) {
-    case "always":
-      return <PipelineExits exits={[{ key: "match", label: "Always", outcome: block.outcome, target: block.target }]} matchedKey={matchedKey} defaultTarget={defaultTarget} />;
+    case "outcome":
+      return <PipelineExits exits={[{ key: "match", label: "Every request", outcome: block.outcome, target: block.target }]} matchedKey={matchedKey} defaultTarget={defaultTarget} />;
     case "edition":
       return <PipelineExits {...requireBlockKind(block.type).exits(block)} matchedKey={matchedKey} defaultTarget={defaultTarget} />;
     case "unknown":
@@ -419,18 +380,23 @@ function BlockExits({
       return <PipelineExits exits={[]} continueLabel={continueLabel ?? "Continue"} />;
     case "webhook":
       return <PipelineExits {...webhookExits(block)} matchedKey={matchedKey} defaultTarget={defaultTarget} />;
-    case "cel":
+    case "delegate": {
+      const pipeline = rail.pipelines?.find((option) => option.key === block.pipelineKey);
+      const terminal = statusAt(rail.run, rail.cursor, stepKey(rail.section, block.id)) === "terminal";
       return (
-        <PipelineConditionExits
-          outcome={block.outcome}
-          target={block.target}
-          matched={matchedKey === "match"}
+        <PipelineDelegateExits
+          pipeline={block.pipelineKey ? (
+            <Referenced reference={{ kind: "pipeline", pipelineKey: block.pipelineKey, name: pipeline?.name }} inline>
+              {pipeline?.name ?? <span className="font-mono text-[11px]">{block.pipelineKey}</span>}
+            </Referenced>
+          ) : "a pipeline"}
+          taken={matchedKey === "enter" ? "enter" : matchedKey === "continue" ? "skip" : undefined}
+          result={matchedKey === "enter" && terminal ? rail.run?.outcome : undefined}
           continueLabel={continueLabel}
-          defaultTarget={defaultTarget}
         />
       );
+    }
     case "branch":
-    case "delegate":
       return null;
   }
 }
@@ -535,8 +501,8 @@ function RailRow({
   const last = index === siblings.length - 1;
   const highlighted = rail.mode === "view" && rail.highlight?.id === block.id;
   const editing = rail.mode === "edit" && rail.editor !== undefined;
-  /* A rail that runs into an Always has no continue row under its last
-   * block; the add slot needs the room. */
+  /* A rail that runs into an Outcome block has no continue row under its
+   * last block; the add slot needs the room. */
   const railStopped = level.parent
     ? rail.reachability.endBlockedBy.has(level.parent.id)
     : rail.reachability.stoppedBy !== undefined;
@@ -583,15 +549,6 @@ function RailRow({
           continueLabel={last ? level.lastLabel : undefined}
           dimmed={level.dimmed || status === "unreached"}
         />
-      ) : block.kind === "delegate" ? (
-        <DelegateContents
-          delegate={block}
-          step={step}
-          blocked={blockedBy !== undefined}
-          level={level}
-          continueLabel={last ? level.lastLabel : undefined}
-          dimmed={level.dimmed || status === "unreached"}
-        />
       ) : !blockedBy ? (
         <BlockExits
           block={block}
@@ -605,7 +562,10 @@ function RailRow({
 }
 
 /* The well under a branch: its blocks, their add slot while editing,
- * and the branch's end. */
+ * and the branch's end. An end no request can reach (an Outcome block
+ * inside, or an earlier one, decides everything first) is not drawn at
+ * all: a branch holding one Outcome block is how "if this, approve" is
+ * written, so its rail simply ends at that block's exit. */
 function BranchContents({
   branch,
   step,
@@ -646,104 +606,9 @@ function BranchContents({
         emptyText="No blocks in this branch yet."
         dimmed={dimmed}
       />
-      {!endBlockedBy && (editing || branch.blocks.length === 0) ? <PipelineConnector /> : null}
-      {endBlockedBy ? <BranchEndUnreachableNotice /> : null}
-      <div
-        className={cn(
-          "rounded-lg transition-[box-shadow,opacity] duration-200",
-          testRing(endStatus, rail.run?.outcome),
-          endStatus === "unreached" && !dimmed && "opacity-40",
-        )}
-      >
-        <PipelineBranchEndCard
-          branchName={branch.name}
-          target={branch.target}
-          defaultTarget={rail.defaultTarget}
-          reason={branch.reason}
-        />
-      </div>
-    </PipelineBranchWell>
-  );
-}
-
-/* The well under a delegate: the target pipeline's active blocks, read
- * only under the target's own key, and where the target's end sends a
- * request nothing decided. Without the target (not loaded, or not
- * readable) the well names it and no more. */
-function DelegateContents({
-  delegate,
-  step,
-  blocked,
-  level,
-  continueLabel,
-  dimmed,
-}: {
-  delegate: DelegateDraft;
-  step?: TestStep;
-  blocked: boolean;
-  level: RailLevel;
-  continueLabel?: ReactNode;
-  dimmed: boolean;
-}) {
-  const rail = useRail();
-  const exit = takenExit(step, delegate);
-  const endStatus = statusAt(rail.run, rail.cursor, stepKey(rail.section, delegate.id, true));
-  const key = delegate.pipelineKey;
-  const option = rail.pipelines?.find((pipeline) => pipeline.key === key);
-  const target = key ? rail.delegates?.[key] : undefined;
-  const name = target?.name ?? option?.name ?? key;
-  const chain = [...(rail.enclosing ?? []), rail.section];
-  const cycle = key !== "" && chain.includes(key);
-  const mention = (
-    <Referenced reference={{ kind: "pipeline", pipelineKey: key, name: target?.name ?? option?.name }} inline>
-      {name ? <span className="text-ink">{name}</span> : <span className="text-ink-muted">a pipeline</span>}
-    </Referenced>
-  );
-  /* The target draws under its own key, read only, with its own
-   * reachability; its default reviewers come before this pipeline's. */
-  const targetRail: RailState | null = target && !cycle
-    ? {
-        ...rail,
-        mode: "view",
-        section: key,
-        enclosing: chain,
-        reachability: pipelineReachability(target.blocks),
-        defaultTarget: target.defaultTarget ?? rail.defaultTarget,
-        describeRoute: (chosen) => chosen ? "" : `Uses pipeline default: ${(target.defaultTarget ?? rail.defaultTarget)?.name ?? "Any authorized reviewer"}.`,
-        highlight: undefined,
-        editor: undefined,
-      }
-    : null;
-  return (
-    <PipelineBranchWell
-      name={name || "Untitled pipeline"}
-      depth={level.depth + 1}
-      taken={exit === "enter" ? "enter" : exit === "continue" ? "skip" : undefined}
-      blocked={blocked}
-      badge={<>Continue in {mention}</>}
-      continueLabel={continueLabel ?? "Otherwise, skip this pipeline and check the next block"}
-    >
-      {cycle ? (
-        <DelegateCycleNotice pipelineKey={key} />
-      ) : targetRail ? (
-        <RailProvider value={targetRail}>
-          <PipelineRail
-            blocks={target!.blocks}
-            lastLabel="Otherwise"
-            emptyText="No blocks in this pipeline yet."
-            dimmed={dimmed}
-          />
-        </RailProvider>
-      ) : (
-        <p className="rounded-lg border-hairline border-dashed border-edge px-4 py-3 text-body text-ink-muted">
-          {key
-            ? <>The blocks of {mention} run here. {option ? "Open the pipeline to see them." : "You cannot view that pipeline."}</>
-            : "Choose the pipeline matching requests continue in."}
-        </p>
-      )}
-      {key && !cycle ? (
+      {endBlockedBy ? null : (
         <>
-          {target && target.blocks.length === 0 ? <PipelineConnector /> : null}
+          {editing || branch.blocks.length === 0 ? <PipelineConnector /> : null}
           <div
             className={cn(
               "rounded-lg transition-[box-shadow,opacity] duration-200",
@@ -752,13 +617,14 @@ function DelegateContents({
             )}
           >
             <PipelineBranchEndCard
-              branchName={name}
-              target={target?.defaultTarget ?? null}
+              branchName={branch.name}
+              target={branch.target}
               defaultTarget={rail.defaultTarget}
+              reason={branch.reason}
             />
           </div>
         </>
-      ) : null}
+      )}
     </PipelineBranchWell>
   );
 }
@@ -791,14 +657,12 @@ function RailCard({
   const editor = rail.mode === "edit" ? rail.editor : undefined;
   if (!editor) {
     switch (block.kind) {
-      case "always":
-        return <AlwaysBlockSummaryCard {...expansion} block={block} />;
-      case "cel":
-        return <PolicyBlockSummaryCard {...expansion} block={block} />;
+      case "outcome":
+        return <OutcomeBlockSummaryCard {...expansion} block={block} />;
       case "webhook":
         return <WebhookBlockSummaryCard {...expansion} block={block} endpoints={rail.endpoints} />;
       case "branch":
-        return <BranchBlockSummaryCard {...expansion} block={block} />;
+        return <BranchBlockSummaryCard {...expansion} block={block} endReachable={!rail.reachability.endBlockedBy.has(block.id)} />;
       case "delegate":
         return <DelegateBlockSummaryCard {...expansion} block={block} pipelines={rail.pipelines ?? []} />;
       case "edition": {
@@ -839,21 +703,8 @@ function RailCard({
   };
   const replace = (next: BlockDraft) => editor.update((drafts) => updateDraft(drafts, block.id, () => next));
   switch (block.kind) {
-    case "always":
-      return <AlwaysBlockCard {...shared} block={block} onChange={(next) => replace({ ...next, kind: "always" })} />;
-    case "cel":
-      return (
-        <PolicyBlockCard
-          {...shared}
-          block={block}
-          onChange={(next) => replace({ ...next, kind: "cel" })}
-          tools={rail.tools}
-          suggestions={rail.suggestions}
-          valueSuggestions={rail.valueSuggestions}
-          valueDetails={rail.valueDetails}
-          scope={level.scope}
-        />
-      );
+    case "outcome":
+      return <OutcomeBlockCard {...shared} block={block} onChange={(next) => replace({ ...next, kind: "outcome" })} />;
     case "webhook":
       return (
         <WebhookBlockCard
@@ -904,6 +755,7 @@ function RailCard({
               })),
             )}
           onUnwrap={() => editor.update((drafts) => unwrapBranch(drafts, block.id))}
+          endReachable={!rail.reachability.endBlockedBy.has(block.id)}
           tools={rail.tools}
           suggestions={rail.suggestions}
           valueSuggestions={rail.valueSuggestions}

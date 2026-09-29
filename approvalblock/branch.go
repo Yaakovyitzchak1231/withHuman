@@ -3,7 +3,6 @@ package approvalblock
 import (
 	"errors"
 	"fmt"
-	"strings"
 )
 
 // TypeBranch runs its own ordered blocks for the requests its condition
@@ -19,7 +18,9 @@ const TypeBranch BlockType = "branch"
 type BranchConfig struct {
 	When   Condition    `json:"when"`
 	Blocks []Definition `json:"blocks"`
-	// Reason is recorded when none of the branch's blocks decides.
+	// Reason is recorded when none of the branch's blocks decides. It is
+	// optional: a branch whose blocks end in an outcome block never runs
+	// out, so it has nothing to say.
 	Reason string `json:"reason"`
 	// EscalationPath is where a request that runs out of the branch goes;
 	// empty uses the pipeline default. It applies to the branch's own end
@@ -31,13 +32,10 @@ type BranchConfig struct {
 	AskAgentOwner bool `json:"ask_agent_owner,omitempty"`
 }
 
-// Validate checks the branch's own condition, reason, and path, and that it
-// holds at least one block. The blocks themselves are checked by
+// Validate checks the branch's own condition and path, and that it holds
+// at least one block. The blocks themselves are checked by
 // Definition.Validate.
 func (config BranchConfig) Validate() error {
-	if strings.TrimSpace(config.Reason) == "" {
-		return errors.New("block reason is required")
-	}
 	if err := ValidateRoute(config.EscalationPath, config.AskAgentOwner); err != nil {
 		return err
 	}

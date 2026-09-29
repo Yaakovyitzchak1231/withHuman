@@ -110,11 +110,14 @@ func TestMCPSetsUpAnApprovalFlowEndToEnd(t *testing.T) {
 		"pipeline_key": "entry",
 		"blocks": []any{
 			map[string]any{
-				"id": "refunds", "name": "Refunds need Payments", "type": "cel", "enabled": true, "timeout": "50ms", "max_attempts": 1,
-				"config": map[string]any{"when": condition, "on_match": "human", "reason": "Payments checks every refund.", "escalation_path": "payments-review"},
+				"id": "refunds", "name": "Refunds need Payments", "type": "branch", "enabled": true, "timeout": "50ms", "max_attempts": 1,
+				"config": map[string]any{"when": condition, "reason": "", "blocks": []any{map[string]any{
+					"id": "ask-payments", "name": "Ask Payments", "type": "outcome", "enabled": true, "timeout": "50ms", "max_attempts": 1,
+					"config": map[string]any{"outcome": "human", "reason": "Payments checks every refund.", "escalation_path": "payments-review"},
+				}}},
 			},
 			map[string]any{
-				"id": "rest", "name": "Approve the rest", "type": "always", "enabled": true, "timeout": "50ms", "max_attempts": 1,
+				"id": "rest", "name": "Approve the rest", "type": "outcome", "enabled": true, "timeout": "50ms", "max_attempts": 1,
 				"config": map[string]any{"outcome": "approve", "reason": "Everything else is routine."},
 			},
 		},
@@ -129,14 +132,14 @@ func TestMCPSetsUpAnApprovalFlowEndToEnd(t *testing.T) {
 		"pipeline_key": "entry", "blocks": revision["blocks"], "default_escalation_path": "payments-review",
 		"sample": map[string]any{"tool": "stripe__refund", "arguments": map[string]any{"amount": 75}},
 	}))
-	if preview["outcome"] != "human" || preview["escalation_path"] != "payments-review" {
+	if preview["outcome"] != "human" || preview["escalation_path"] != "payments-review" || preview["terminal_block_id"] != "ask-payments" {
 		t.Fatalf("preview = %v", preview)
 	}
 	passthrough := mcpStructured(t, h.call(t, session, "preview_pipeline", map[string]any{
 		"pipeline_key": "entry", "blocks": revision["blocks"], "sample": map[string]any{"tool": "Read", "arguments": map[string]any{}},
 	}))
 	if passthrough["outcome"] != "approve" || passthrough["terminal_block_id"] != "rest" {
-		t.Fatalf("an unmatched request should reach the always block: %v", passthrough)
+		t.Fatalf("an unmatched request should reach the outcome block: %v", passthrough)
 	}
 
 	current := mcpStructured(t, h.call(t, session, "get_pipeline", map[string]any{"pipeline_key": "entry"}))

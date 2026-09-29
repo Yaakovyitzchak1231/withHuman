@@ -29,18 +29,15 @@ func TestValidateRouteRequiresTheFallbackPath(t *testing.T) {
 // config that names a route, and survives a round trip.
 func TestOwnerRoutesRoundTripInEveryRoutedConfig(t *testing.T) {
 	documents := map[string]string{
-		"always": `{"id":"ask","name":"Ask","type":"always","enabled":true,"timeout":"50ms","max_attempts":1,
+		"outcome": `{"id":"ask","name":"Ask","type":"outcome","enabled":true,"timeout":"50ms","max_attempts":1,
 			"config":{"outcome":"human","reason":"A person decides.","escalation_path":"platform","ask_agent_owner":true}}`,
-		"cel": `{"id":"ask","name":"Ask","type":"cel","enabled":true,"timeout":"50ms","max_attempts":1,
-			"config":{"when":{"id":"6c1f0e2a-4b7d-4e35-9a1c-8d2b5f3e7a90","field":"/request/tool","operator":"equals","value":"push"},
-			"on_match":"human","reason":"Pushes need a person.","escalation_path":"platform","ask_agent_owner":true}}`,
 		"webhook": `{"id":"ask","name":"Ask","type":"webhook","enabled":true,"timeout":"5s","max_attempts":1,
 			"config":{"endpoint_key":"fraud","allowed_outcomes":["next","human"],
 			"include":{"agent_reasoning":false,"context":false,"previous_metadata":false},
 			"reason":"The service asked for a person.","escalation_path":"platform","ask_agent_owner":true}}`,
 		"branch": `{"id":"ask","name":"Ask","type":"branch","enabled":true,"timeout":"50ms","max_attempts":1,
 			"config":{"when":{"id":"6c1f0e2a-4b7d-4e35-9a1c-8d2b5f3e7a91","field":"/request/tool","operator":"equals","value":"push"},
-			"blocks":[{"id":"inside","name":"Inside","type":"always","enabled":true,"timeout":"50ms","max_attempts":1,
+			"blocks":[{"id":"inside","name":"Inside","type":"outcome","enabled":true,"timeout":"50ms","max_attempts":1,
 				"config":{"outcome":"approve","reason":"Fine."}}],
 			"reason":"Nothing decided.","escalation_path":"platform","ask_agent_owner":true}}`,
 	}
@@ -70,7 +67,7 @@ func TestOwnerRoutesRoundTripInEveryRoutedConfig(t *testing.T) {
 
 func TestAnOwnerRouteWithoutItsPathIsInvalid(t *testing.T) {
 	var definition approvalblock.Definition
-	document := `{"id":"ask","name":"Ask","type":"always","enabled":true,"timeout":"50ms","max_attempts":1,
+	document := `{"id":"ask","name":"Ask","type":"outcome","enabled":true,"timeout":"50ms","max_attempts":1,
 		"config":{"outcome":"human","reason":"A person decides.","ask_agent_owner":true}}`
 	if err := json.Unmarshal([]byte(document), &definition); err != nil {
 		t.Fatal(err)

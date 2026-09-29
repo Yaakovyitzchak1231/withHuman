@@ -5,7 +5,8 @@ optional `default_escalation_path`. Blocks run in order. The first block
 whose outcome is `approve`, `deny`, or `human` ends the pipeline; a block
 whose outcome is `next` passes the request on. A `branch` block holds
 blocks of its own that run only for the requests its condition matches
-(see `branch`); a `delegate` block hands the requests its condition
+(see `branch`), so "if this, then that" is a branch whose blocks end in
+an `outcome` block; a `delegate` block hands the requests its condition
 matches to another pipeline, named by key (see `delegate`). A request no
 block decides falls through to human review: the revision's
 `default_escalation_path` names who, else the delegating pipeline's
@@ -22,9 +23,9 @@ Unknown fields are refused everywhere. Every block has this envelope:
 
 ```json
 {
-  "id": "refunds-over-500",
-  "name": "Deny refunds over $500",
-  "type": "cel",
+  "id": "everything-else",
+  "name": "Approve everything else",
+  "type": "outcome",
   "enabled": true,
   "timeout": "50ms",
   "max_attempts": 1,
@@ -38,15 +39,16 @@ Unknown fields are refused everywhere. Every block has this envelope:
   `/previous_metadata/<pipeline key>/<id>/...`, the pipeline key being
   the one that holds the block (`entry`, or a delegated pipeline's).
 - `name`: shown to reviewers and in the audit log.
-- `type`: `always`, `cel`, `webhook`, `branch`, or `delegate`, plus any
+- `type`: `outcome`, `branch`, `delegate`, or `webhook`, plus any
   kind this deployment adds (listed after the core grammar below).
 - `enabled`: must be `true` (omit or set true).
-- `timeout` and `max_attempts`: per type. `always`, `cel`, `branch`, and
+- `timeout` and `max_attempts`: per type. `outcome`, `branch`, and
   `delegate`: timeout up to `1s` (use `50ms`), exactly 1 attempt.
   `webhook`: default `5s`, up to `30s`, 1 to 3 attempts. An added kind
   states its own.
-- Every config but `delegate` carries a `reason`: the sentence reviewers
-  and the audit log see for the block's decision.
+- `outcome` and `webhook` configs carry a `reason`: the sentence
+  reviewers and the audit log see for the block's decision. A branch's
+  `reason` is optional (see `branch`); a delegate has none.
 - A config may carry `escalation_path` (a path key) only where the block
   can hand the request to a person; it overrides the revision's
   `default_escalation_path` for that block.
@@ -60,10 +62,11 @@ Unknown fields are refused everywhere. Every block has this envelope:
   A block that names its own path without the flag does not ask the
   owner, even when the default does.
 
-## always
+## outcome
 
-Decides every request that reaches it. Put one at the end as the
-catch-all when the rest should be automatic.
+Decides every request that reaches it. On its own rail it is the
+catch-all at the end; inside a branch it is the "then" of "if this, then
+that".
 
 ```json
 { "outcome": "approve", "reason": "Everything else is routine." }
@@ -71,30 +74,6 @@ catch-all when the rest should be automatic.
 
 `outcome` is `approve`, `deny`, or `human`. `escalation_path` is allowed
 only with `human`.
-
-## cel
-
-Tests the request with a condition tree (see the `conditions` topic) and
-decides when it matches; a request that does not match passes to the
-next block.
-
-```json
-{
-  "when": {
-    "id": "6f1d2a4e-3c5b-4a7d-9e8f-0a1b2c3d4e5f",
-    "all": [
-      { "id": "1b2c3d4e-5f60-4718-8a9b-0c1d2e3f4a5b", "field": "/request/tool", "operator": "equals", "value": "stripe__refund" },
-      { "id": "2c3d4e5f-6071-4829-9bac-1d2e3f4a5b6c", "field": "/request/arguments/amount", "operator": "greater_than", "value": 500 }
-    ]
-  },
-  "on_match": "deny",
-  "reason": "Refunds over $500 are never automatic."
-}
-```
-
-`on_match` is `approve`, `deny`, or `human`; `escalation_path` requires
-`on_match: human`. Every condition `id` must be a UUID, unique across the
-whole revision.
 
 ## webhook
 
@@ -120,8 +99,9 @@ decide automatically.
 
 ## branch
 
-Runs its own ordered `blocks` for the requests its condition matches (the
-same condition tree as `cel`, see the `conditions` topic); every other
+Runs its own ordered `blocks` for the requests its condition matches (see
+the `conditions` topic for the tree; every condition `id` is a UUID,
+unique across the whole revision); every other
 request skips the branch, so a `webhook` (or any asynchronous kind) inside is never
 called for it, and passes to the next block.
 
@@ -146,13 +126,29 @@ request to a person on the pipeline default.
 - `escalation_path`: where a request that runs out of the branch goes. A
   block inside the branch that names no path of its own uses the
   revision's `default_escalation_path`, never the branch's.
-- An `always` block inside a branch ends every request that reaches it,
+- `reason`: optional, recorded only when a request runs out of the
+  branch. A branch whose blocks end in an `outcome` block never runs out,
+  so leave its `reason` and `escalation_path` out.
+- An `outcome` block inside a branch ends every request that reaches it,
   so the branch's later blocks and its own end are never reached.
+
+"If this, then that" is a branch holding one `outcome` block:
+
+```json
+{ "id": "big-refunds", "name": "Deny refunds over $500", "type": "branch", "enabled": true, "timeout": "50ms", "max_attempts": 1,
+  "config": {
+    "when": { "id": "<uuid>", "all": [
+      { "id": "<uuid>", "field": "/request/tool", "operator": "equals", "value": "stripe__refund" },
+      { "id": "<uuid>", "field": "/request/arguments/amount", "operator": "greater_than", "value": 500 } ] },
+    "blocks": [
+      { "id": "deny-big-refunds", "name": "Deny", "type": "outcome", "enabled": true, "timeout": "50ms", "max_attempts": 1,
+        "config": { "outcome": "deny", "reason": "Refunds over $500 are never automatic." } } ] } }
+```
 
 ## delegate
 
-Hands the requests its condition matches (the same condition tree as
-`cel`) to another pipeline: matching requests continue in that
+Hands the requests its condition matches (the same condition tree as a
+branch) to another pipeline: matching requests continue in that
 pipeline's active revision, and every other request skips the block and
 passes to the next one. It is a branch whose body is another pipeline,
 owned by whoever holds `pipeline.write` at `pipeline:<key>`.
@@ -194,11 +190,13 @@ Entry pipeline (`update_pipeline` with `pipeline_key: "entry"`):
 ```json
 {
   "blocks": [
-    { "id": "big-refunds", "name": "Deny refunds over $500", "type": "cel", "enabled": true, "timeout": "50ms", "max_attempts": 1,
+    { "id": "big-refunds", "name": "Deny refunds over $500", "type": "branch", "enabled": true, "timeout": "50ms", "max_attempts": 1,
       "config": { "when": { "id": "<uuid>", "all": [
         { "id": "<uuid>", "field": "/request/tool", "operator": "equals", "value": "stripe__refund" },
         { "id": "<uuid>", "field": "/request/arguments/amount", "operator": "greater_than", "value": 500 } ] },
-        "on_match": "deny", "reason": "Refunds over $500 are never automatic." } }
+        "blocks": [
+          { "id": "deny-big-refunds", "name": "Deny", "type": "outcome", "enabled": true, "timeout": "50ms", "max_attempts": 1,
+            "config": { "outcome": "deny", "reason": "Refunds over $500 are never automatic." } } ] } }
   ]
 }
 ```
@@ -217,14 +215,16 @@ The `payments` pipeline (`create_pipeline` with `pipeline_key: "payments"`, then
 {
   "name": "Payments",
   "blocks": [
-    { "id": "small-refunds", "name": "Approve refunds up to $20", "type": "cel", "enabled": true, "timeout": "50ms", "max_attempts": 1,
-      "config": { "when": { "id": "<uuid>", "all": [
-        { "id": "<uuid>", "field": "/request/tool", "operator": "equals", "value": "stripe__refund" },
-        { "id": "<uuid>", "field": "/request/arguments/amount", "operator": "less_than_or_equal", "value": 20 } ] },
-        "on_match": "approve", "reason": "Small refunds are approved automatically." } },
-    { "id": "other-refunds", "name": "Payments reviews larger refunds", "type": "cel", "enabled": true, "timeout": "50ms", "max_attempts": 1,
+    { "id": "refunds", "name": "Refunds", "type": "branch", "enabled": true, "timeout": "50ms", "max_attempts": 1,
       "config": { "when": { "id": "<uuid>", "field": "/request/tool", "operator": "equals", "value": "stripe__refund" },
-        "on_match": "human", "reason": "A person checks refunds over $20.", "escalation_path": "payments-review" } }
+        "blocks": [
+          { "id": "small-refunds", "name": "Approve refunds up to $20", "type": "branch", "enabled": true, "timeout": "50ms", "max_attempts": 1,
+            "config": { "when": { "id": "<uuid>", "field": "/request/arguments/amount", "operator": "less_than_or_equal", "value": 20 },
+              "blocks": [
+                { "id": "approve-small-refunds", "name": "Approve", "type": "outcome", "enabled": true, "timeout": "50ms", "max_attempts": 1,
+                  "config": { "outcome": "approve", "reason": "Small refunds are approved automatically." } } ] } },
+          { "id": "other-refunds", "name": "Payments reviews larger refunds", "type": "outcome", "enabled": true, "timeout": "50ms", "max_attempts": 1,
+            "config": { "outcome": "human", "reason": "A person checks refunds over $20.", "escalation_path": "payments-review" } } ] } }
   ],
   "default_escalation_path": "on-call"
 }
@@ -233,7 +233,7 @@ The `payments` pipeline (`create_pipeline` with `pipeline_key: "payments"`, then
 A Stripe call the `payments` blocks do not decide falls through to a
 person on the `on-call` path, the pipeline's own default; every other
 tool call falls through the entry pipeline to its default reviewers. Add
-a final `always` block with `outcome: approve` to the entry pipeline to
+a final `outcome` block with `outcome: approve` to the entry pipeline to
 approve the rest automatically.
 
 ## Worked example with a branch
@@ -241,7 +241,7 @@ approve the rest automatically.
 Only for refunds: ask the fraud service, which may approve or deny outright
 or pass the refund on; then approve what is left under $10 and ask
 Payments about the rest. Every other tool call skips the branch and
-reaches the final `always` block:
+reaches the final `outcome` block:
 
 ```json
 {
@@ -254,14 +254,16 @@ reaches the final `always` block:
             "config": { "endpoint_key": "fraud-service", "allowed_outcomes": ["next", "approve", "deny"],
               "include": { "agent_reasoning": false, "context": false, "previous_metadata": true },
               "reason": "The fraud service decided this refund." } },
-          { "id": "small-refunds", "name": "Approve refunds under $10", "type": "cel", "enabled": true, "timeout": "50ms", "max_attempts": 1,
+          { "id": "small-refunds", "name": "Approve refunds under $10", "type": "branch", "enabled": true, "timeout": "50ms", "max_attempts": 1,
             "config": { "when": { "id": "<uuid>", "field": "/request/arguments/amount", "operator": "less_than", "value": 1000 },
-              "on_match": "approve", "reason": "Small refunds the fraud service passed on are approved automatically." } }
+              "blocks": [
+                { "id": "approve-small-refunds", "name": "Approve", "type": "outcome", "enabled": true, "timeout": "50ms", "max_attempts": 1,
+                  "config": { "outcome": "approve", "reason": "Small refunds the fraud service passed on are approved automatically." } } ] } }
         ],
         "reason": "Refunds the checks did not settle go to Payments.",
         "escalation_path": "payments-review"
       } },
-    { "id": "everything-else", "name": "Approve everything else", "type": "always", "enabled": true, "timeout": "50ms", "max_attempts": 1,
+    { "id": "everything-else", "name": "Approve everything else", "type": "outcome", "enabled": true, "timeout": "50ms", "max_attempts": 1,
       "config": { "outcome": "approve", "reason": "Other tool calls are routine." } }
   ]
 }

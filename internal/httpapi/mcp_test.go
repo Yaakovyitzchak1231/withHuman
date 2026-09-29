@@ -346,7 +346,7 @@ func TestMCPUpdatePipelineSavesThenActivatesAgainstTheActiveRevision(t *testing.
 	h := newMCPHarness(t)
 	session := h.connect(t, h.token)
 	block := map[string]any{
-		"id": "hold-everything", "name": "Everything needs a person", "type": "always", "enabled": true, "timeout": "50ms", "max_attempts": 1,
+		"id": "hold-everything", "name": "Everything needs a person", "type": "outcome", "enabled": true, "timeout": "50ms", "max_attempts": 1,
 		"config": map[string]any{"outcome": "human", "reason": "A person decides."},
 	}
 	result := mcpStructured(t, h.call(t, session, "update_pipeline", map[string]any{"pipeline_key": "entry", "blocks": []any{block}}))
@@ -387,7 +387,7 @@ func TestMCPRelaysProductAPIRefusals(t *testing.T) {
 	h := newMCPHarness(t)
 	session := h.connect(t, h.token)
 	// A validation refusal keeps the product API's code and message.
-	invalid := h.call(t, session, "update_pipeline", map[string]any{"pipeline_key": "entry", "blocks": []any{map[string]any{"id": "x", "name": "x", "type": "always", "config": map[string]any{"outcome": "maybe"}}}})
+	invalid := h.call(t, session, "update_pipeline", map[string]any{"pipeline_key": "entry", "blocks": []any{map[string]any{"id": "x", "name": "x", "type": "outcome", "config": map[string]any{"outcome": "maybe"}}}})
 	if !invalid.IsError || !strings.HasPrefix(mcpText(invalid), "invalid_request: ") {
 		t.Fatalf("invalid block = %v %q", invalid.IsError, mcpText(invalid))
 	}
@@ -419,13 +419,20 @@ func TestMCPReferenceTopicsExplainTheGrammar(t *testing.T) {
 	h := newMCPHarness(t)
 	session := h.connect(t, h.token)
 	for topic, marker := range map[string]string{
-		"pipeline_blocks":  `"type": "cel"`,
+		"pipeline_blocks":  `"type": "outcome"`,
 		"conditions":       "greater_than_or_equal",
 		"escalation_paths": `"type": "level"`,
 	} {
 		result := h.call(t, session, "read_reference", map[string]any{"topic": topic})
 		if result.IsError || !strings.Contains(mcpText(result), marker) {
 			t.Errorf("topic %s: error=%v, text lacks %q", topic, result.IsError, marker)
+		}
+	}
+	// The retired block types are no longer taught.
+	blocks := mcpText(h.call(t, session, "read_reference", map[string]any{"topic": "pipeline_blocks"}))
+	for _, retired := range []string{`"type": "cel"`, `"type": "always"`, `"on_match"`} {
+		if strings.Contains(blocks, retired) {
+			t.Errorf("pipeline_blocks still teaches %s", retired)
 		}
 	}
 }

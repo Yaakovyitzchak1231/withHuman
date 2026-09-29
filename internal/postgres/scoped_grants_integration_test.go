@@ -247,7 +247,7 @@ func TestScopedGrantsAgainstRealPostgres(t *testing.T) {
 
 	// Pipelines are scoped by their own key, not by agent: a grant at
 	// pipeline:refunds narrows the pipelines list to that pipeline alone.
-	blocks := []application.RequestApprovalBlockSnapshotInput{pipelineTestBlock("manual-review", `{"on_match":"human"}`)}
+	blocks := []application.RequestApprovalBlockSnapshotInput{pipelineTestBlock("manual-review", `{"outcome":"human"}`)}
 	for _, pipelineKey := range []string{"refunds", "releases"} {
 		seedPipelineTestScope(t, ctx, store, orgID, ownerMembershipID, pipelineKey, now)
 	}

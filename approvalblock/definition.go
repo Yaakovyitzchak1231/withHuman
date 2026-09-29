@@ -27,18 +27,14 @@ const (
 	MaximumRequestInputBytes    = 64 * 1024
 	MaximumComprehensionEntries = 1_000
 	MaximumEvaluationCost       = 10_000
-	// MaximumCELBlocksPerRequest bounds the condition evaluations one run
-	// segment performs: cel blocks and branch conditions share it.
-	MaximumCELBlocksPerRequest = 1_000
+	// MaximumConditionsPerRequest bounds the condition evaluations one run
+	// segment performs: branch and delegate conditions share it.
+	MaximumConditionsPerRequest = 1_000
 )
 
 type BlockType string
 type Outcome string
 type Operator string
-
-const (
-	TypeCEL BlockType = "cel"
-)
 
 // MaximumPipelineBlocks bounds one pipeline document regardless of type,
 // counting every block inside a branch.
@@ -89,25 +85,12 @@ type Definition struct {
 	Enabled     bool
 	Timeout     string
 	MaxAttempts int
-	Always      *AlwaysConfig
-	CEL         *CELConfig
+	Outcome     *OutcomeConfig
 	Webhook     *WebhookConfig
 	Branch      *BranchConfig
 	Delegate    *DelegateConfig
 	// Config is the configuration of a registered kind (RegisterKind).
 	Config Config
-}
-
-type CELConfig struct {
-	When    Condition `json:"when"`
-	OnMatch Outcome   `json:"on_match"`
-	Reason  string    `json:"reason"`
-	// EscalationPath is the key of the escalation path a human outcome
-	// hands the request to. Empty inherits the pipeline default.
-	EscalationPath string `json:"escalation_path,omitempty"`
-	// AskAgentOwner sends a human outcome to the agent's owner, with
-	// EscalationPath as the fallback for a request without one.
-	AskAgentOwner bool `json:"ask_agent_owner,omitempty"`
 }
 
 // TypeLimits are the envelope limits one block type accepts.
@@ -120,8 +103,7 @@ type TypeLimits struct {
 
 // typeLimits are core's own kinds; RegisterKind adds an edition's.
 var typeLimits = map[BlockType]TypeLimits{
-	TypeAlways:   {DefaultTimeout: DefaultTimeout, MaximumTimeout: MaximumTimeout, MinimumAttempts: 1, MaximumAttempts: 1},
-	TypeCEL:      {DefaultTimeout: DefaultTimeout, MaximumTimeout: MaximumTimeout, MinimumAttempts: 1, MaximumAttempts: 1},
+	TypeOutcome:  {DefaultTimeout: DefaultTimeout, MaximumTimeout: MaximumTimeout, MinimumAttempts: 1, MaximumAttempts: 1},
 	TypeWebhook:  {DefaultTimeout: DefaultWebhookTimeout, MaximumTimeout: MaximumWebhookTimeout, MinimumAttempts: 1, MaximumAttempts: MaximumWebhookAttempts},
 	TypeBranch:   {DefaultTimeout: DefaultTimeout, MaximumTimeout: MaximumTimeout, MinimumAttempts: 1, MaximumAttempts: 1},
 	TypeDelegate: {DefaultTimeout: DefaultTimeout, MaximumTimeout: MaximumTimeout, MinimumAttempts: 1, MaximumAttempts: 1},
@@ -260,16 +242,11 @@ func (definition Definition) ConfigJSON() (json.RawMessage, error) {
 // the encoder writes directly.
 func (definition Definition) configWire() (any, error) {
 	switch definition.Type {
-	case TypeAlways:
-		if definition.Always == nil {
-			return nil, errors.New("always block requires an always configuration")
+	case TypeOutcome:
+		if definition.Outcome == nil {
+			return nil, errors.New("outcome block requires an outcome configuration")
 		}
-		return definition.Always, nil
-	case TypeCEL:
-		if definition.CEL == nil {
-			return nil, errors.New("cel block requires a cel configuration")
-		}
-		return definition.CEL, nil
+		return definition.Outcome, nil
 	case TypeWebhook:
 		if definition.Webhook == nil {
 			return nil, errors.New("webhook block requires a webhook configuration")
@@ -310,19 +287,12 @@ func (definition *Definition) SetConfigJSON(config json.RawMessage) error {
 		}
 		definition.Branch = decoded
 		return nil
-	case TypeAlways:
-		var decoded AlwaysConfig
+	case TypeOutcome:
+		var decoded OutcomeConfig
 		if err := decodeStrict(config, &decoded); err != nil {
-			return fmt.Errorf("decode always block config: %w", err)
+			return fmt.Errorf("decode outcome block config: %w", err)
 		}
-		definition.Always = &decoded
-		return nil
-	case TypeCEL:
-		var decoded CELConfig
-		if err := decodeStrict(config, &decoded); err != nil {
-			return fmt.Errorf("decode cel block config: %w", err)
-		}
-		definition.CEL = &decoded
+		definition.Outcome = &decoded
 		return nil
 	case TypeWebhook:
 		var decoded WebhookConfig
@@ -494,16 +464,11 @@ func (definition Definition) ValidateBlock() error {
 
 func (definition Definition) validateConfig() error {
 	switch definition.Type {
-	case TypeAlways:
-		if definition.Always == nil {
-			return errors.New("always block requires an always configuration")
+	case TypeOutcome:
+		if definition.Outcome == nil {
+			return errors.New("outcome block requires an outcome configuration")
 		}
-		return definition.Always.Validate()
-	case TypeCEL:
-		if definition.CEL == nil {
-			return errors.New("cel block requires a cel configuration")
-		}
-		return definition.CEL.Validate()
+		return definition.Outcome.Validate()
 	case TypeWebhook:
 		if definition.Webhook == nil {
 			return errors.New("webhook block requires a webhook configuration")
@@ -528,25 +493,6 @@ func (definition Definition) validateConfig() error {
 		}
 		return definition.Config.Validate()
 	}
-}
-
-// Validate checks the CEL configuration's outcome, reason, and condition
-// tree against the block limits.
-func (config CELConfig) Validate() error {
-	if config.OnMatch != Approve && config.OnMatch != Deny && config.OnMatch != Human {
-		return errors.New("on_match must be approve, deny, or human")
-	}
-	if strings.TrimSpace(config.Reason) == "" {
-		return errors.New("block reason is required")
-	}
-	if config.EscalationPath != "" && config.OnMatch != Human {
-		return errors.New("escalation_path requires on_match to be human")
-	}
-	if err := ValidateRoute(config.EscalationPath, config.AskAgentOwner); err != nil {
-		return err
-	}
-	state := validationState{ids: make(map[string]struct{})}
-	return state.validateCondition(config.When, 1, false)
 }
 
 // ValidateCondition validates one standalone condition tree against the
@@ -684,7 +630,7 @@ func validateField(path string, relative bool) (knownFieldType, error) {
 	if len(tokens) >= 3 && tokens[0] == "previous_metadata" && ValidPipelineKey(tokens[1]) && tokens[2] != "" {
 		return fieldDynamic, nil
 	}
-	return fieldDynamic, fmt.Errorf("field %q is not available to CEL blocks", path)
+	return fieldDynamic, fmt.Errorf("field %q is not available to conditions", path)
 }
 
 func parseJSONPointer(path string) ([]string, error) {

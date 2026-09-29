@@ -7,22 +7,17 @@ import {
 import { OutcomeSelect, type BlockOutcome } from "@/ds/components/outcome-select";
 import { Badge } from "@/ds/components/badge";
 import { Button } from "@/ds/components/button";
+import { OutcomeBlockCard, OutcomeBlockSummaryCard, type OutcomeBlockDraft } from "@/ds/components/outcome-block";
 import {
-  AlwaysBlockCard,
-  AlwaysBlockSummaryCard,
-  type AlwaysBlockDraft,
   PipelineAddSlot,
   PipelineBranchEndCard,
   PipelineBranchWell,
-  PipelineConditionExits,
   PipelineConnector,
+  PipelineDelegateExits,
   PipelineEntryCard,
   PipelineExits,
   PipelineTerminusCard,
-  PolicyBlockCard,
-  PolicyBlockSummaryCard,
-  type PolicyBlockDraft,
-} from "@/ds/components/policy-block";
+} from "@/ds/components/pipeline-flow";
 import {
   BranchBlockCard,
   BranchBlockSummaryCard,
@@ -40,7 +35,7 @@ import {
   type WebhookBlockDraft,
   type WebhookEndpointOption,
 } from "@/ds/components/webhook-block";
-import { BranchIcon, ChevronDownIcon, CornerDownRightIcon, LockIcon, SettingsIcon } from "@/ds/icons";
+import { ArrowUpRightIcon, ChevronDownIcon, CornerDownRightIcon, LockIcon, SettingsIcon } from "@/ds/icons";
 import { Section, Demo, KeyboardHint } from "../section";
 
 /* Field paths a real editor learns from a sample request. */
@@ -108,15 +103,6 @@ const NESTED_CONDITION: ConditionNode = {
   ],
 };
 
-const DEMO_BLOCK: PolicyBlockDraft = {
-  id: "small-refunds",
-  name: "Approve small refunds",
-  enabled: true,
-  outcome: "approve",
-  reason: "Small refunds for verified customers are pre-authorized.",
-  when: NESTED_CONDITION,
-};
-
 /* A block of a kind another edition adds, as the open edition meets it
  * in a stored revision. */
 const DEMO_UNKNOWN: UnknownBlockDraftFields = {
@@ -165,13 +151,24 @@ function amountAtLeast(id: string, cents: number): ConditionNode {
   return { id, all: [{ id: `${id}-1`, field: "/request/arguments/amount_cents", operator: "greater_than_or_equal", value: cents }] };
 }
 
-const SMALL_REFUNDS: PolicyBlockDraft = {
-  id: "small-refunds-inside",
+const SMALL_REFUNDS: OutcomeBlockDraft = {
+  id: "approve-small-refunds",
   name: "Approve small refunds",
   enabled: true,
   outcome: "approve",
   reason: "Small refunds are pre-authorized.",
+};
+
+/* "If this, approve": a branch holding one Outcome block. Nothing can
+ * reach its end, so it needs no reason or path of its own. */
+const SMALL_REFUNDS_GATE: BranchBlockDraft<OutcomeBlockDraft> = {
+  id: "small-refunds",
+  name: "Small refunds",
+  enabled: true,
   when: { id: "sg-small", all: [{ id: "sg-small-1", field: "/request/arguments/amount_cents", operator: "less_than", value: 1000 }] },
+  blocks: [SMALL_REFUNDS],
+  reason: "",
+  target: null,
 };
 
 const DEMO_PIPELINES = [
@@ -180,12 +177,12 @@ const DEMO_PIPELINES = [
   { key: "legacy", name: "Legacy checks", active: false },
 ];
 
-const DEMO_BRANCH: BranchBlockDraft<PolicyBlockDraft> = {
+const DEMO_BRANCH: BranchBlockDraft<unknown> = {
   id: "refunds",
   name: "Refunds",
   enabled: true,
   when: toolIs("sg-refunds", "stripe.refund"),
-  blocks: [SMALL_REFUNDS],
+  blocks: [SMALL_REFUNDS_GATE],
   reason: "Refunds need a person when no check decides.",
   target: REFUND_REVIEWERS,
 };
@@ -210,13 +207,11 @@ export function PolicyBuilderSection() {
   const [unknownSummaryOpen, setUnknownSummaryOpen] = useState(false);
   const [outcome, setOutcome] = useState<BlockOutcome>("approve");
   const [condition, setCondition] = useState<ConditionNode>(NESTED_CONDITION);
-  const [block, setBlock] = useState<PolicyBlockDraft>(DEMO_BLOCK);
-  const [always, setAlways] = useState<AlwaysBlockDraft>({ id: "remaining", name: "Review remaining requests", enabled: true, outcome: "human", reason: "All remaining requests need human review." });
-  const [alwaysExpanded, setAlwaysExpanded] = useState(true);
-  const [expanded, setExpanded] = useState(false);
+  const [decision, setDecision] = useState<OutcomeBlockDraft>({ id: "remaining", name: "Review remaining requests", enabled: true, outcome: "human", reason: "All remaining requests need human review." });
+  const [decisionExpanded, setDecisionExpanded] = useState(true);
   const [summaryOpen, setSummaryOpen] = useState(true);
   const [webhookSummaryOpen, setWebhookSummaryOpen] = useState(true);
-  const [branch, setBranch] = useState<BranchBlockDraft<PolicyBlockDraft>>(DEMO_BRANCH);
+  const [branch, setBranch] = useState<BranchBlockDraft<unknown>>(DEMO_BRANCH);
   const [branchExpanded, setBranchExpanded] = useState(true);
   const [branchSummaryOpen, setBranchSummaryOpen] = useState(false);
   const [wellState, setWellState] = useState<WellDemoState>("enter");
@@ -225,17 +220,17 @@ export function PolicyBuilderSection() {
     <Section
       id="policy-builder"
       title="Policy builder"
-      lede="Primitives for the approval pipeline editor: ordered policy blocks whose conditions read as sentences. The JSON document view stays available as a peer mode; both edit the same pipeline document. Full composition lives at /pipelines."
+      lede="Primitives for the approval pipeline editor: ordered blocks whose conditions read as sentences. The JSON document view stays available as a peer mode; both edit the same pipeline document. Full composition lives at /pipelines."
     >
       <Demo
         label="OutcomeSelect"
-        hint="what a matching block does"
+        hint="what an outcome block decides"
       >
         <div className="flex flex-col gap-3">
           <OutcomeSelect value={outcome} onValueChange={setOutcome} />
           <p className="text-micro text-ink-muted">
             The pressed segment carries the decision color: approve, deny, or the warm human tone.
-            Exactly one outcome is always selected; a block cannot match into nothing.
+            Exactly one outcome is always selected; an outcome block cannot decide nothing.
           </p>
         </div>
         <KeyboardHint>
@@ -269,49 +264,59 @@ export function PolicyBuilderSection() {
         </div>
       </Demo>
 
-      <Demo
-        label="PolicyBlockCard"
-        hint="click the header to expand"
-      >
+      <Demo label="OutcomeBlockCard" hint="every request that reaches this block gets the selected outcome">
         <div className="flex flex-col gap-3">
-          <PolicyBlockCard
-            block={block}
-            position={2}
-            expanded={expanded}
-            onExpandedChange={setExpanded}
-            onChange={setBlock}
-            onRemove={() => undefined}
-            onDuplicate={() => undefined}
-            onMoveUp={() => undefined}
-            onMoveDown={() => undefined}
-            handleProps={{}}
-            suggestions={SUGGESTIONS}
-            valueSuggestions={VALUE_SUGGESTIONS}
-          />
+          <div className="flex flex-col">
+            <OutcomeBlockCard
+              block={decision}
+              position={3}
+              expanded={decisionExpanded}
+              onExpandedChange={setDecisionExpanded}
+              onChange={setDecision}
+              onRemove={() => undefined}
+              onDuplicate={() => undefined}
+              onMoveUp={() => undefined}
+              onMoveDown={() => undefined}
+              handleProps={{}}
+              directory={DEMO_DIRECTORY}
+            />
+            <PipelineExits exits={[{ key: "match", label: "Every request", outcome: decision.outcome, target: decision.target }]} />
+          </div>
           <p className="text-micro text-ink-muted">
-            Collapsed, a block shows its name and a subtitle with the Condition type and condition
-            summary in machine mono. Exact tool, agent slug, and agent name values open
-            reference cards on hover. Expanded, it edits everything in place, with field guidance
-            in info icons beside labels. Named reviewers and escalation paths open the same cards
-            in the picker and on pipeline branches; default reviewer chips explain the fallback.
-            The grip drags a block to a
-            new position in the execution order; Move up and Move down stay in the overflow menu
-            as the keyboard path. Every kind of block shares this header (BlockCard): the grip,
-            the position pill, which widens for a nested position such as 3.2.1, the name and
-            summary, and the block menu, whose moves into and out of a branch appear only where
-            they apply.
+            The rail ends here. Later blocks remain editable and carry an Unreachable warning. To
+            decide only some requests, put the Outcome block in a branch: the branch holds the
+            condition, the block holds the decision.
+          </p>
+          <p className="text-micro text-ink-muted">
+            Collapsed, a block shows its name and a subtitle with its type and summary in machine
+            mono. Expanded, it edits everything in place, with field guidance in info icons beside
+            labels. Named reviewers and escalation paths open reference cards in the picker and
+            on pipeline branches; default reviewer chips explain the fallback. The grip drags a
+            block to a new position in the execution order; Move up and Move down stay in the
+            overflow menu as the keyboard path. Every kind of block shares this header
+            (BlockCard): the grip, the position pill, which widens for a nested position such as
+            3.2.1, the name and summary, and the block menu, whose moves into and out of a branch
+            appear only where they apply.
           </p>
         </div>
       </Demo>
 
-      <Demo label="AlwaysBlockCard" hint="every request that reaches this block gets the selected outcome">
-        <AlwaysBlockCard block={always} position={3} expanded={alwaysExpanded} onExpandedChange={setAlwaysExpanded}
-          onChange={setAlways} onRemove={() => undefined} onDuplicate={() => undefined} />
-        <PipelineExits exits={[{ key: "match", label: "Always", outcome: always.outcome, target: always.target }]} />
-        <p className="mt-3 text-micro text-ink-muted">The rail ends here. Later blocks remain editable and carry an Unreachable warning.</p>
-      </Demo>
-      <Demo label="AlwaysBlockSummaryCard" hint="the saved block shows its outcome, reviewers, and reason">
-        <AlwaysBlockSummaryCard block={always} position={3} expanded onExpandedChange={() => undefined} />
+      <Demo
+        label="OutcomeBlockSummaryCard"
+        hint="the view-mode face; with onExpandedChange it opens to the same details the editing card shows, as text"
+      >
+        <OutcomeBlockSummaryCard
+          block={decision}
+          position={3}
+          expanded={summaryOpen}
+          onExpandedChange={setSummaryOpen}
+          describeRoute={() => "Asks the pipeline default reviewers."}
+        />
+        <p className="mt-3 text-micro text-ink-muted">
+          The header stays a one-line summary; expanding it lays out the outcome, the escalation
+          path, and the reason. Without onExpandedChange the card is a plain row, as in a scope
+          that is not being edited.
+        </p>
       </Demo>
 
       <Demo
@@ -429,14 +434,24 @@ export function PolicyBuilderSection() {
         <div className="flex flex-col gap-3">
           <PipelineAddSlot
             choices={[
-              { id: "always", label: "Always block", icon: <ChevronDownIcon width={14} height={14} /> },
-              { id: "cel", label: "Conditions block", icon: <BranchIcon width={14} height={14} /> },
+              {
+                id: "outcome",
+                label: "Outcome block",
+                icon: <ChevronDownIcon width={14} height={14} />,
+                info: "Approves, denies, or asks a human for every request that reaches it, and the pipeline stops. Put one in a branch to decide only the requests that match.",
+              },
               { id: "webhook", label: "Webhook block", icon: <SettingsIcon width={14} height={14} /> },
               {
                 id: "branch",
                 label: "Branch",
                 icon: <CornerDownRightIcon width={14} height={14} />,
                 info: "Runs its own blocks only for requests that match its conditions. If none of them decides, the request goes to a human and the pipeline stops.",
+              },
+              {
+                id: "delegate",
+                label: "Delegate to pipeline",
+                icon: <ArrowUpRightIcon width={14} height={14} />,
+                info: "Hands requests that match its conditions to another pipeline, whose owners decide what happens next.",
               },
             ]}
             onChoose={() => undefined}
@@ -479,8 +494,8 @@ export function PolicyBuilderSection() {
             A branch runs its own blocks only for requests its conditions match; the rest skip
             them all. The card edits the branch itself: its name, When (the same condition
             builder), and what happens when no block inside decides, which is always a human,
-            with the branch's Escalation path (else the pipeline default) and Reason, after which
-            the pipeline stops. Blocks inside that ask a human without a path of their own use the
+            with the branch's Escalation path (else the pipeline default) and an optional Reason
+            (left empty, none is recorded), after which the pipeline stops. When a block inside decides every request, the branch never runs out and the card leaves those fields out. Blocks inside that ask a human without a path of their own use the
             pipeline default, never the branch's. The subtitle reads Branch and the condition. The
             menu says Duplicate branch, which copies every block inside with new keys, and, while
             the branch holds blocks, Remove branch, keep its blocks. Inside a branch the menu also
@@ -523,22 +538,19 @@ export function PolicyBuilderSection() {
             onRemove={() => undefined}
           />
           <DelegateBlockSummaryCard block={demoDelegate} pipelines={DEMO_PIPELINES} position="4" />
-          <PipelineBranchWell
-            name={DEMO_PIPELINES[0].name}
-            depth={1}
-            badge={<>Continue in {DEMO_PIPELINES[0].name}</>}
-            continueLabel="Otherwise, skip this pipeline and check the next block"
-          >
-            <PolicyBlockSummaryCard block={SMALL_REFUNDS} position="1" />
-            <PipelineConditionExits outcome="approve" continueLabel="Otherwise" />
-            <PipelineBranchEndCard branchName={DEMO_PIPELINES[0].name} defaultTarget={REFUND_REVIEWERS} />
-          </PipelineBranchWell>
+          <div>
+            <PipelineDelegateExits pipeline={DEMO_PIPELINES[0].name} />
+          </div>
+          <div>
+            <PipelineDelegateExits pipeline={DEMO_PIPELINES[0].name} taken="enter" result="approve" />
+          </div>
           <p className="text-micro text-ink-muted">
             A delegate hands matching requests to another pipeline, named by key. The card edits the
-            condition and the target; the target's active blocks draw read only in a well under it,
-            the way a branch's blocks do, ending where the target sends a request nothing decided:
-            its own default reviewers, else the delegating pipeline's. The block has no reason and
-            no escalation path of its own.
+            condition and the target; beneath it, PipelineDelegateExits reads as one sentence: if the
+            conditions are met, continue in that pipeline, otherwise check the next block. The
+            target's blocks belong to its owners and are never drawn here; after a test that entered
+            it, the exit carries what the target concluded. The block has no reason and no
+            escalation path of its own.
           </p>
         </div>
       </Demo>
@@ -566,15 +578,12 @@ export function PolicyBuilderSection() {
               taken={wellState === "idle" ? undefined : wellState}
             >
               <div className={cn("flex flex-col transition-opacity duration-200", wellState === "skip" && "opacity-40")}>
-                <PolicyBlockSummaryCard block={SMALL_REFUNDS} position="3.1" />
-                <PipelineConditionExits outcome="approve" continueLabel="Otherwise" />
+                <WebhookBlockSummaryCard block={webhook} endpoints={DEMO_ENDPOINTS} position="3.1" />
+                <PipelineExits {...webhookExits(webhook)} continueLabel="Otherwise" />
                 <PipelineBranchEndCard branchName={branch.name} target={branch.target} reason={branch.reason} />
               </div>
             </PipelineBranchWell>
-            <PolicyBlockSummaryCard
-              block={{ ...SMALL_REFUNDS, id: "after", name: "Deny deletes", outcome: "deny", when: toolIs("sg-after", "crm.delete_customer") }}
-              position="4"
-            />
+            <DelegateBlockSummaryCard block={demoDelegate} pipelines={DEMO_PIPELINES} position="4" />
           </div>
           <p className="text-micro text-ink-muted">
             If conditions are met, the rail turns right and drops through an elbow into an
@@ -589,6 +598,26 @@ export function PolicyBuilderSection() {
       </Demo>
 
       <Demo
+        label="A branch holding one Outcome block"
+        hint="how a pipeline says: if this, then that"
+      >
+        <div className="flex flex-col">
+          <BranchBlockSummaryCard block={SMALL_REFUNDS_GATE} position="2" />
+          <PipelineBranchWell name={SMALL_REFUNDS_GATE.name} depth={1}>
+            <OutcomeBlockSummaryCard block={SMALL_REFUNDS} position="2.1" />
+            <PipelineExits exits={[{ key: "match", label: "Every request", outcome: SMALL_REFUNDS.outcome }]} />
+          </PipelineBranchWell>
+          <DelegateBlockSummaryCard block={demoDelegate} pipelines={DEMO_PIPELINES} position="3" />
+        </div>
+        <p className="mt-3 text-micro text-ink-muted">
+          The branch holds the condition and its Outcome block the decision. The block decides
+          every request that enters, so nothing reaches the branch's end, and the well draws no
+          end card and no warning: its rail simply stops at the block's exit. Requests the branch
+          does not match skip it and go on.
+        </p>
+      </Demo>
+
+      <Demo
         label="PipelineBranchEndCard"
         hint="where a branch sends a request nothing inside decided"
       >
@@ -600,8 +629,8 @@ export function PolicyBuilderSection() {
             target={{ type: "agent_owner", id: REFUND_REVIEWERS.id, name: REFUND_REVIEWERS.name }}
           />
           <p className="text-micro text-ink-muted">
-            The last card in every well, framed like the pipeline's terminus: no block in the
-            branch decided, so a human is asked, through the branch's escalation path or else the
+            The last card in every well a request can run out of, framed like the pipeline's
+            terminus: no block in the branch decided, so a human is asked, through the branch's escalation path or else the
             pipeline default, with the branch's reason. The pipeline stops there; nothing after
             the branch runs. A test run that ran out of the branch rings this card. Every picker
             that offers paths also offers the agent's owner, which then asks for the path a
@@ -625,56 +654,30 @@ export function PolicyBuilderSection() {
               position="3.1"
             />
             <PipelineBranchWell name="Refunds" depth={2} continueLabel="Otherwise">
-              <PolicyBlockSummaryCard
-                block={{ ...SMALL_REFUNDS, id: "fraud", name: "Deny flagged customers", outcome: "deny", when: toolIs("sg-n3", "stripe.refund") }}
-                position="3.1.1"
-              />
-              <PipelineConditionExits outcome="deny" />
+              <WebhookBlockSummaryCard block={webhook} endpoints={DEMO_ENDPOINTS} position="3.1.1" />
+              <PipelineExits {...webhookExits(webhook)} />
               <BranchBlockSummaryCard
                 block={{ ...DEMO_BRANCH, id: "large", name: "Large refunds", when: amountAtLeast("sg-n4", 10000), target: null }}
                 position="3.1.2"
               />
               <PipelineBranchWell name="Large refunds" depth={3} continueLabel="Otherwise">
-                <PolicyBlockSummaryCard
-                  block={{ ...SMALL_REFUNDS, id: "finance", name: "Ask finance", outcome: "human", when: amountAtLeast("sg-n5", 50000) }}
+                <OutcomeBlockSummaryCard
+                  block={{ ...SMALL_REFUNDS, id: "finance", name: "Ask finance", outcome: "human", reason: "Large refunds need finance." }}
                   position="3.1.2.1"
                 />
-                <PipelineConditionExits outcome="human" continueLabel="Otherwise" />
-                <PipelineBranchEndCard branchName="Large refunds" reason="Large refunds need a person." />
+                <PipelineExits exits={[{ key: "match", label: "Every request", outcome: "human" }]} />
               </PipelineBranchWell>
               <PipelineBranchEndCard branchName="Refunds" target={REFUND_REVIEWERS} reason={DEMO_BRANCH.reason} />
             </PipelineBranchWell>
             <PipelineBranchEndCard branchName="Payments" reason="Payments need a person when no check decides." />
           </PipelineBranchWell>
-          <PolicyBlockSummaryCard
-            block={{ ...SMALL_REFUNDS, id: "after-nesting", name: "Deny deletes", outcome: "deny", when: toolIs("sg-n6", "crm.delete_customer") }}
-            position="4"
-          />
+          <DelegateBlockSummaryCard block={demoDelegate} pipelines={DEMO_PIPELINES} position="4" />
         </div>
         <p className="mt-3 text-micro text-ink-muted">
           Branches nest without limit. Positions follow the tree, so 3.1.2.1 is the first block of
           the second block of the first block of branch 3, and the position pill widens to fit.
           Wells alternate the surface and the canvas by depth, the same rule the escalation
           tree's wells follow, and each level indents about 48px (less on a phone).
-        </p>
-      </Demo>
-
-      <Demo
-        label="PolicyBlockSummaryCard"
-        hint="the view-mode face of a conditions block; with onExpandedChange it opens to the same details the editing card shows, as text"
-      >
-        <PolicyBlockSummaryCard
-          block={block}
-          position={1}
-          expanded={summaryOpen}
-          onExpandedChange={setSummaryOpen}
-          describeRoute={() => "Asks the pipeline default reviewers."}
-        />
-        <p className="mt-3 text-micro text-ink-muted">
-          Viewing a pipeline uses this card for every conditions block. The header stays a
-          one-line summary; expanding it lays out the condition as a read-only tree, then
-          the outcome, the escalation path, and the reason. Without onExpandedChange the
-          card is a plain row, as in a scope that is not being edited.
         </p>
       </Demo>
 
@@ -689,11 +692,14 @@ export function PolicyBuilderSection() {
             The pipeline's blocks render here in execution order: summary rows when viewing,
             editable cards when editing.
           </div>
-          <PipelineConditionExits outcome="approve" />
+          <PipelineConnector label="Otherwise, check the next block" />
           <BranchBlockSummaryCard block={DEMO_BRANCH} position="3" />
           <PipelineBranchWell name={DEMO_BRANCH.name} depth={1} continueLabel="Otherwise">
-            <PolicyBlockSummaryCard block={SMALL_REFUNDS} position="3.1" />
-            <PipelineConditionExits outcome="approve" continueLabel="Otherwise" />
+            <BranchBlockSummaryCard block={SMALL_REFUNDS_GATE} position="3.1" />
+            <PipelineBranchWell name={SMALL_REFUNDS_GATE.name} depth={2} continueLabel="Otherwise">
+              <OutcomeBlockSummaryCard block={SMALL_REFUNDS} position="3.1.1" />
+              <PipelineExits exits={[{ key: "match", label: "Every request", outcome: "approve" }]} />
+            </PipelineBranchWell>
             <PipelineAddSlot label="Add block to this branch" onClick={() => undefined} />
             <PipelineConnector />
             <PipelineBranchEndCard branchName={DEMO_BRANCH.name} target={DEMO_BRANCH.target} reason={DEMO_BRANCH.reason} />
@@ -704,20 +710,19 @@ export function PolicyBuilderSection() {
         </div>
         <p className="mt-3 text-micro text-ink-muted">
           Every request enters the entry pipeline; a delegate block hands matching requests to
-          another pipeline, drawn read only in a well under it. Blocks inside a branch number from
-          the branch (3.1).
-          Every block exits through PipelineExits (PipelineConditionExits for a conditions block):
-          the horizontal match branch shows the block's terminal outcome in its decision color. A
-          branch exits through a PipelineBranchWell instead: its blocks, their own add slot while
-          editing, and its end card sit in the well, and the rail skips past it. All connector and
+          another pipeline, whose blocks belong to its owners and are not drawn here. Blocks inside
+          a branch number from the branch (3.1).
+          Every block exits through PipelineExits: the horizontal branch shows the block's terminal
+          outcome in its decision color. A branch exits through a PipelineBranchWell instead: its
+          blocks, their own add slot while editing, and its end card sit in the well, and the rail
+          skips past it. A branch whose Outcome block decides everything has no end card. All connector and
           branch labels use the same sentence-case UI text. Downward connectors share one height
           and meet the card borders without gaps, while the rail continues down with no match.
           Conditions live on the cards; consequences live on the exits. Viewing and editing share
           this exact scaffolding: Edit swaps the read-only rows for editable cards in place, the
           add slots appear, and a SaveBar rises once there are changes, with Create revision as
           its commit. Dragging reorders blocks within one rail; the block menu moves a block into
-          or out of a branch. A delegate block's well draws the target pipeline's active blocks
-          read only, so the whole effective pipeline reads on one page.
+          or out of a branch.
         </p>
       </Demo>
 

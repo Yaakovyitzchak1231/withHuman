@@ -41,7 +41,7 @@ func TestRegisteredKindsJoinTheGrammar(t *testing.T) {
 		t.Fatalf("registering twice = %v, want a refusal", err)
 	}
 	for name, bad := range map[string]approvalblock.Kind{
-		"core type":    {Type: approvalblock.TypeCEL, Limits: kind.Limits, New: kind.New},
+		"core type":    {Type: approvalblock.TypeOutcome, Limits: kind.Limits, New: kind.New},
 		"bad name":     {Type: "Edition Check", Limits: kind.Limits, New: kind.New},
 		"no limits":    {Type: "other", New: kind.New},
 		"no construct": {Type: "other", Limits: kind.Limits},

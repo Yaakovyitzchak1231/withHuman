@@ -1,6 +1,6 @@
 # Conditions
 
-`cel` and `branch` blocks (`config.when`) and escalation path `request`
+`branch` and `delegate` blocks (`config.when`) and escalation path `request`
 conditions (`when`) share one condition tree. Every node has an `id` that is a UUID
 you generate, unique across the whole pipeline revision or path document,
 and exactly one shape:

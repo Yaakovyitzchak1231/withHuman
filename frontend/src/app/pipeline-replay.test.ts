@@ -5,6 +5,7 @@ import type {
 } from "../types";
 import type { BlockDraft, BranchDraft } from "./pipeline-blocks";
 import {
+  foldDelegations,
   runFromPreview,
   statusAt,
   stepAt,
@@ -41,12 +42,11 @@ const refunds: BranchDraft = {
 };
 
 const small: BlockDraft = {
-  kind: "cel",
+  kind: "outcome",
   id: "small",
   name: "Approve small refunds",
   enabled: true,
   outcome: "approve",
-  when: { id: "small-when", all: [] },
   reason: "Small refunds are fine.",
   target: null,
 };
@@ -92,9 +92,10 @@ describe("replaying a branch", () => {
   });
 
   it("ends at the branch's end card when nothing inside decides", () => {
+    /* A webhook inside the branch answered next. */
     const run = runFromPreview(preview([
         evaluated("refunds", "enter"),
-        evaluated("small", "next"),
+        evaluated("fraud", "next"),
         evaluated("refunds", "human", { end_of_branch: true, reason: refunds.reason }),
       ], {
         outcome: "human",
@@ -103,10 +104,10 @@ describe("replaying a branch", () => {
       }));
     expect(run.reasonCode).toBe("end_of_branch");
     expect(run.terminalKey).toBe("agent/refunds#end");
-    expect(run.steps.map((step) => step.key)).toEqual(["agent/refunds", "agent/small", "agent/refunds#end"]);
-    expect(settled(run, keys)).toEqual({
+    expect(run.steps.map((step) => step.key)).toEqual(["agent/refunds", "agent/fraud", "agent/refunds#end"]);
+    expect(settled(run, ["agent/refunds", "agent/fraud", "agent/refunds#end", "agent/later"])).toEqual({
       "agent/refunds": "passed",
-      "agent/small": "passed",
+      "agent/fraud": "passed",
       "agent/refunds#end": "terminal",
       "agent/later": "unreached",
     });
@@ -197,5 +198,35 @@ describe("replaying a delegate", () => {
     ], { outcome: "approve", reason_code: "block_outcome", terminal_block_id: "later" }));
     expect(takenExit(stepAt(run, run.steps.length, "entry/to-billing"), toBilling)).toBe("continue");
     expect(settled(run, keys)["billing/small"]).toBe("unreached");
+  });
+
+  it("folds what ran inside the target onto the delegate that entered it", () => {
+    const delegates = new Set(["to-billing"]);
+    const decided = foldDelegations(runFromPreview(preview([
+      step("first", "entry", "next"),
+      step("to-billing", "entry", "enter"),
+      step("to-payments", "billing", "enter"),
+      step("small", "payments", "approve"),
+    ], { outcome: "approve", reason_code: "block_outcome", terminal_block_id: "small" })), "entry", delegates);
+    expect(decided.steps.map((entry) => entry.key)).toEqual(["entry/first", "entry/to-billing"]);
+    expect(decided.terminalKey).toBe("entry/to-billing");
+    expect(settled(decided, keys)["entry/to-billing"]).toBe("terminal");
+
+    const ranOut = foldDelegations(runFromPreview(preview([
+      step("to-billing", "entry", "enter"),
+      step("small", "billing", "next"),
+      step("to-billing", "entry", "human", { end_of_branch: true }),
+    ], { outcome: "human", reason_code: "end_of_branch", terminal_block_id: "to-billing" })), "entry", delegates);
+    expect(ranOut.steps.map((entry) => entry.key)).toEqual(["entry/to-billing"]);
+    expect(ranOut.terminalKey).toBe("entry/to-billing");
+  });
+
+  it("leaves a run that never entered a delegate, or entered only a branch, alone", () => {
+    const run = runFromPreview(preview([
+      step("refunds", "entry", "enter"),
+      step("small", "entry", "next"),
+      step("refunds", "entry", "human", { end_of_branch: true }),
+    ], { outcome: "human", reason_code: "end_of_branch", terminal_block_id: "refunds" }));
+    expect(foldDelegations(run, "entry", new Set(["to-billing"]))).toBe(run);
   });
 });

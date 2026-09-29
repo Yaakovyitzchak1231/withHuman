@@ -10,7 +10,7 @@ import {
   PipelineConnector,
   PipelineEntryCard,
   PipelineTerminusCard,
-} from "@/ds/components/policy-block";
+} from "@/ds/components/pipeline-flow";
 import { Referenced } from "@/ds/components/reference";
 import { ReferenceChip } from "./reference-chip";
 import type { ReviewerTarget } from "@/ds/components/reviewer-target";

@@ -157,11 +157,41 @@ plus `create_pipeline` and `archive_pipeline`.
 ## Editor
 
 The pipelines overview shows the entry pipeline and a table of the
-others (`/pipelines/new` creates one). A pipeline page draws one rail; a
-delegate block draws the target's active blocks read only in a well under
-it, keyed by the target's pipeline key so a test replay lights the right
-cards, and ends where the target sends a request nothing decided. Cycles
-the server would refuse are drawn as a notice instead of recursing.
+others (`/pipelines/new` creates one). A pipeline page draws one rail,
+its own. A delegate block is one card and one exit: if its conditions are
+met, continue in the named pipeline; otherwise check the next block. The
+target's blocks are never inlined: they belong to its owners and live on
+its own page, one click away. A test replay previews the whole effective
+pipeline, then folds every step past the delegate it entered (the target's
+blocks, pipelines it delegates to in turn, and the delegate's own end)
+onto that delegate, whose exit carries what the target concluded.
+(Amended 2026-09-29: the first cut drew the target's active blocks read
+only in a well under the delegate, which made a delegate read like an
+inline branch and put another team's rules on this team's page.)
 The guided setup writes one inline branch per runtime into `entry`
 (block id the runtime key) rather than per-agent pipelines; see
 [09-onboarding.md](09-onboarding.md).
+
+## Blocks after the redesign
+
+Amended 2026-09-29. With branches and delegates in place, the standalone
+conditions block (`cel`) was only a branch holding one decision, so it is
+gone. Core's block types are four:
+
+- `outcome` (renamed from `always`): decides every request that reaches
+  it. On its own rail it is the catch-all; inside a branch it is the
+  "then" of "if this, then that".
+- `branch`: runs its blocks for requests its condition matches. Its
+  `reason` is optional, since a branch whose blocks end in an outcome
+  block never runs out; the editor draws no end for a branch nothing can
+  reach, so that shape carries no warning.
+- `delegate`: continues matching requests in another pipeline.
+- `webhook`: asks a service of the organization's.
+
+The condition engine (cel-go) is unchanged and evaluates every branch and
+delegate condition under one per-request budget
+(`approvalblock.MaximumConditionsPerRequest`); its version is part of
+both runtimes' fingerprints. The guided setup's gate is a branch on
+`/request/tool` holding an outcome block that asks the person. Migration
+`0006_outcome_blocks.sql` wipes stored pipelines and reseeds an empty
+`entry`, as `0005` did.

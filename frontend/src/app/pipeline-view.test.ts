@@ -77,24 +77,6 @@ describe("loading a pipeline from a review link", () => {
     expect(api.requestApprovalPipelineUses).not.toHaveBeenCalled();
   });
 
-  it("loads the active revision of every pipeline the displayed revision delegates to", async () => {
-    mockPage();
-    vi.mocked(api.activeRequestApprovalPipeline).mockImplementation(async (pipelineKey) => ({
-      ...revision(3, pipelineKey),
-      blocks: pipelineKey === "entry"
-        ? [{
-            id: "to-billing", name: "Billing", type: "delegate", enabled: true, timeout: "50ms", max_attempts: 1,
-            snapshot_id: "s", config_version: 1, content_hash: "h",
-            config: { when: { id: "w", all: [] }, pipeline_key: "billing" },
-          }]
-        : [],
-    }));
-    const page = await loadPipelineView("entry");
-    expect(api.activeRequestApprovalPipeline).toHaveBeenCalledWith("billing");
-    expect(Object.keys(page.delegates)).toEqual(["billing"]);
-    expect(page.delegates.billing.name).toBe("billing");
-  });
-
   it("reports a missing pinned revision instead of silently showing today's pipeline", async () => {
     mockPage();
     vi.spyOn(api, "requestApprovalPipelineRevision").mockRejectedValue(new RequestError("Not found", 404, "not_found"));

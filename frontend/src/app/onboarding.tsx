@@ -1004,7 +1004,7 @@ function agentPrompt(origin: string, agents: { runtime: string; slug: string; na
     "2. Call read_reference to learn how pipeline blocks and conditions are written.",
     `3. Read the current rules with get_pipeline for pipeline_key "entry". Each of these agents has its own branch block at the top level: ${list}.`,
     "4. Ask me what should wait for me, suggesting a few risky calls these agents can make. Keep reading, searching and tests running without me.",
-    `5. Write the rules with update_pipeline for pipeline_key "entry", changing only the blocks inside those branches and leaving every other block exactly as it is. Set escalation_path "${pathKey}" on every block that can send a call to me, and end each branch with an always block that approves the rest.`,
+    `5. Write the rules with update_pipeline for pipeline_key "entry", changing only the blocks inside those branches and leaving every other block exactly as it is. Set escalation_path "${pathKey}" on every block that can send a call to me, and end each branch with an outcome block that approves the rest.`,
     "6. Try two or three sample calls with preview_pipeline, one that should wait and one that should not, and tell me what happened.",
   ].join("\n");
 }
@@ -1615,17 +1615,32 @@ function runtimeBranchOf(entry: RequestApprovalPipelineRevision | null, runtime:
 }
 
 /* The tools a runtime's branch gates, when its first block is the
- * starting rule's shape (tool name is one of a list); an empty set
- * otherwise, because rules the assistant wrote do not reduce to a list,
- * and a missing branch gates nothing yet. */
+ * starting rule's shape: a branch on the tool name being one of a list
+ * that holds one Outcome block asking a human. Read by shape, not by
+ * block key, so the same rule written in the editor reads the same. An
+ * empty set otherwise, because rules the assistant wrote do not reduce
+ * to a list, and a missing branch gates nothing yet. */
 function gatedToolsOf(entry: RequestApprovalPipelineRevision | null, runtime: string): Set<string> {
   const first = runtimeBranchOf(entry, runtime)?.config.blocks[0];
-  if (!first || first.type !== "cel") return new Set();
-  const when = first.config.when as { field?: string; operator?: string; value?: unknown };
-  if (when.field !== "/request/tool" || when.operator !== "in" || !Array.isArray(when.value)) {
-    return new Set();
+  if (!first || first.type !== "branch") return new Set();
+  const [only, ...rest] = first.config.blocks;
+  if (!only || rest.length > 0 || only.type !== "outcome" || only.config.outcome !== "human") return new Set();
+  const when = toolListCondition(first.config.when);
+  return when ? new Set(when.map(String)) : new Set();
+}
+
+/* The list in "tool name is one of": a bare leaf, as the setup writes
+ * it, or the one leaf of a group, as the editor saves it. */
+function toolListCondition(when: Record<string, unknown>): unknown[] | undefined {
+  const node = when as { field?: string; operator?: string; value?: unknown; all?: unknown[]; any?: unknown[] };
+  const group = node.all ?? node.any;
+  if (group) {
+    return group.length === 1 && group[0] && typeof group[0] === "object"
+      ? toolListCondition(group[0] as Record<string, unknown>)
+      : undefined;
   }
-  return new Set(when.value.map(String));
+  if (node.field !== "/request/tool" || node.operator !== "in" || !Array.isArray(node.value)) return undefined;
+  return node.value;
 }
 
 /* Every tool one runtime can call, as a table with a checkbox per row:

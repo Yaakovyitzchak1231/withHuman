@@ -251,9 +251,16 @@ func TestRequestApprovalPipelinePreviewRouteIsStrictAndTransient(t *testing.T) {
 	conditionID := "21aa670a-734c-454c-a1e9-653d54be054b"
 	body := `{
 		"blocks":[{
-			"id":"small-refund","name":"Approve small refunds","type":"cel","enabled":true,
+			"id":"small-refund","name":"Approve small refunds","type":"branch","enabled":true,
 			"timeout":"50ms","max_attempts":1,
-			"config":{"when":{"id":"` + conditionID + `","field":"/request/arguments/amount_cents","operator":"less_than","value":1000},"on_match":"approve","reason":"Small refunds are pre-authorized."}
+			"config":{
+				"when":{"id":"` + conditionID + `","field":"/request/arguments/amount_cents","operator":"less_than","value":1000},
+				"blocks":[{
+					"id":"approve-small-refund","name":"Approve","type":"outcome","enabled":true,"timeout":"50ms","max_attempts":1,
+					"config":{"outcome":"approve","reason":"Small refunds are pre-authorized."}
+				}],
+				"reason":""
+			}
 		}],
 		"sample":{"request":{"tool":"stripe.refund","arguments":{"amount_cents":900}},"agent":{"slug":"billing","name":"billing-agent"}}
 	}`
@@ -279,8 +286,9 @@ func TestRequestApprovalPipelinePreviewRouteIsStrictAndTransient(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &preview); err != nil {
 		t.Fatal(err)
 	}
-	if preview.Outcome != "approve" || preview.ReasonCode != "block_outcome" || preview.TerminalBlockID != "small-refund" ||
-		len(preview.Blocks) != 1 || preview.Blocks[0].BlockID != "small-refund" || preview.Blocks[0].Trace[0].NodeID != conditionID {
+	if preview.Outcome != "approve" || preview.ReasonCode != "block_outcome" || preview.TerminalBlockID != "approve-small-refund" ||
+		len(preview.Blocks) != 2 || preview.Blocks[0].BlockID != "small-refund" || len(preview.Blocks[0].Trace) == 0 || preview.Blocks[0].Trace[0].NodeID != conditionID ||
+		preview.Blocks[1].BlockID != "approve-small-refund" {
 		t.Fatalf("unexpected preview response: %s", response.Body.String())
 	}
 	if repository.createCalls != 0 || repository.activateCalls != 0 {
@@ -529,13 +537,13 @@ func pipelineHTTPRepositoryWithRevision() *pipelineHTTPRepository {
 		},
 		blocks: []domain.RequestApprovalBlock{
 			{
-				ID: firstID, OrganizationID: "organization-1", BlockKey: "first", Name: "First", BlockType: "cel",
-				ConfigVersion: 1, Config: json.RawMessage(`{"when":{"id":"31111111-1111-4111-8111-111111111111","field":"/request/tool","operator":"equals","value":"deploy"},"on_match":"approve","reason":"Approved."}`),
+				ID: firstID, OrganizationID: "organization-1", BlockKey: "first", Name: "First", BlockType: "outcome",
+				ConfigVersion: 1, Config: json.RawMessage(`{"outcome":"approve","reason":"Approved."}`),
 				TimeoutMS: 50, MaxAttempts: 1, ContentHash: strings.Repeat("a", 64), CreatedByActorID: "membership-1", CreatedAt: now,
 			},
 			{
-				ID: secondID, OrganizationID: "organization-1", BlockKey: "second", Name: "Second", BlockType: "cel",
-				ConfigVersion: 1, Config: json.RawMessage(`{"when":{"id":"32222222-2222-4222-8222-222222222222","field":"/request/tool","operator":"not_equals","value":"deploy"},"on_match":"human","reason":"Review."}`),
+				ID: secondID, OrganizationID: "organization-1", BlockKey: "second", Name: "Second", BlockType: "outcome",
+				ConfigVersion: 1, Config: json.RawMessage(`{"outcome":"human","reason":"Review."}`),
 				TimeoutMS: 50, MaxAttempts: 1, ContentHash: strings.Repeat("b", 64), CreatedByActorID: "membership-1", CreatedAt: now,
 			},
 		},

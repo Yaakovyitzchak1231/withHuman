@@ -13,8 +13,9 @@ import (
 	"github.com/withHumanAI/withHuman/domain"
 )
 
-// webhookFixture activates an entry pipeline of a CEL deny, a
-// webhook block, and a CEL block that thresholds the webhook's metadata,
+// webhookFixture activates an entry pipeline of a conditional deny, a
+// webhook block, and a conditional approve that thresholds the webhook's
+// metadata,
 // then hands back an executor bound to the given deliverer.
 func webhookFixture(t *testing.T, now time.Time, deliverer *fakeDeliverer, allowed ...approvalblock.Outcome) (*ExecutionService, *memoryPipelineRepository) {
 	t.Helper()
@@ -28,9 +29,9 @@ func webhookFixture(t *testing.T, now time.Time, deliverer *fakeDeliverer, allow
 		options = append(options, approvalblock.AllowedOutcomes(allowed...))
 	}
 	definitions := []approvalblock.Definition{
-		pipelineDefinition("deny-other", approvalblock.Deny, approvalblock.Field("/request/tool").Equals("other")),
+		decideWhen("deny-other", approvalblock.Deny, approvalblock.Field("/request/tool").Equals("other")),
 		webhookDefinition(options...),
-		pipelineDefinition("approve-low-risk", approvalblock.Approve, approvalblock.Field("/previous_metadata/entry/fraud-check/risk_score").LessThan(50)),
+		decideWhen("approve-low-risk", approvalblock.Approve, approvalblock.Field("/previous_metadata/entry/fraud-check/risk_score").LessThan(50)),
 	}
 	created, err := management.CreateRevision(context.Background(), pipelineManagerPrincipal("organization-1"), "entry", pipelineName("entry"), definitions, Route{})
 	if err != nil {
@@ -56,7 +57,7 @@ func webhookRequest(now time.Time) domain.ApprovalRequest {
 	}
 }
 
-func TestWebhookBlockSuspendsThenEnrichesTheFollowingCELBlock(t *testing.T) {
+func TestWebhookBlockSuspendsThenEnrichesTheFollowingCondition(t *testing.T) {
 	now := time.Unix(10_000, 0).UTC()
 	deliverer := &fakeDeliverer{script: []scriptedDelivery{ok(`{"outcome":"next","reason":"low risk","metadata":{"risk_score":12}}`)}}
 	service, _ := webhookFixture(t, now, deliverer)
@@ -66,7 +67,7 @@ func TestWebhookBlockSuspendsThenEnrichesTheFollowingCELBlock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if initialization.Suspension == nil || initialization.Suspension.ResumePosition != 1 || initialization.Decision != nil {
+	if initialization.Suspension == nil || initialization.Suspension.ResumePosition != 2 || initialization.Decision != nil {
 		t.Fatalf("webhook block did not suspend the synchronous segment: %+v", initialization)
 	}
 	if len(deliverer.deliveries) != 0 {
@@ -81,7 +82,7 @@ func TestWebhookBlockSuspendsThenEnrichesTheFollowingCELBlock(t *testing.T) {
 		t.Fatal(err)
 	}
 	if resumed.Decision == nil || resumed.Decision.Status != domain.ApprovalApproved {
-		t.Fatalf("CEL block after the webhook did not approve on its metadata: %+v", resumed.Decision)
+		t.Fatalf("the condition after the webhook did not approve on its metadata: %+v", resumed.Decision)
 	}
 	if len(deliverer.deliveries) != 1 || deliverer.deliveries[0].IdempotencyKey != string(request.ID)+":entry:fraud-check" {
 		t.Fatalf("delivery: %+v", deliverer.deliveries)
@@ -103,7 +104,8 @@ func TestWebhookBlockSuspendsThenEnrichesTheFollowingCELBlock(t *testing.T) {
 			evaluated = append(evaluated, data)
 		}
 	}
-	if len(evaluated) != 2 || evaluated[0]["block_type"] != "webhook" || evaluated[1]["block_key"] != "approve-low-risk" {
+	if len(evaluated) != 3 || evaluated[0]["block_type"] != "webhook" || evaluated[1]["block_key"] != "approve-low-risk" || evaluated[1]["outcome"] != "enter" ||
+		evaluated[2]["block_key"] != outcomeKey("approve-low-risk") {
 		t.Fatalf("resume evidence: %v", evaluated)
 	}
 	delivery := evaluated[0]["delivery"].(map[string]any)
@@ -189,8 +191,8 @@ func TestPreviewNamespacesMetadataByPipelineKeyAndSeedsPreviousMetadata(t *testi
 	service := NewManagementService(repository, NewCompiledPipelineState(repository, registry), fixedPipelineClock{now: now})
 	definitions := []approvalblock.Definition{
 		webhookDefinition(),
-		pipelineDefinition("deny-high-risk", approvalblock.Deny, approvalblock.Field("/previous_metadata/billing/fraud-check/risk_score").GreaterThan(50)),
-		pipelineDefinition("approve-verified", approvalblock.Approve, approvalblock.Field("/previous_metadata/entry/verifier/verified").IsTrue()),
+		decideWhen("deny-high-risk", approvalblock.Deny, approvalblock.Field("/previous_metadata/billing/fraud-check/risk_score").GreaterThan(50)),
+		decideWhen("approve-verified", approvalblock.Approve, approvalblock.Field("/previous_metadata/entry/verifier/verified").IsTrue()),
 	}
 	sample := PreviewSample{
 		Request: BlockRequest{Tool: "stripe.refund", Arguments: json.RawMessage(`{"amount_cents":900}`)},
@@ -200,7 +202,7 @@ func TestPreviewNamespacesMetadataByPipelineKeyAndSeedsPreviousMetadata(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Outcome != BlockDeny || result.TerminalBlockKey != "deny-high-risk" {
+	if result.Outcome != BlockDeny || result.TerminalBlockKey != outcomeKey("deny-high-risk") {
 		t.Fatalf("agent preview did not namespace the webhook metadata under the pipeline key: %+v", result)
 	}
 	if len(deliverer.deliveries) != 1 {
@@ -218,7 +220,7 @@ func TestPreviewNamespacesMetadataByPipelineKeyAndSeedsPreviousMetadata(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Outcome != BlockApprove || result.TerminalBlockKey != "approve-verified" {
+	if result.Outcome != BlockApprove || result.TerminalBlockKey != outcomeKey("approve-verified") {
 		t.Fatalf("seeded previous metadata was not visible: %+v", result)
 	}
 	sample.PreviousMetadata = map[string]json.RawMessage{"verifier": json.RawMessage(`{}`)}
