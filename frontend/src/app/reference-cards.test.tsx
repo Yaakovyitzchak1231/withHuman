@@ -6,17 +6,20 @@ import { PipelineRailTimeline } from "./reference-cards";
 
 afterEach(cleanup);
 
-function cel(id: string, name: string): BlockDraft {
+/* A block that tests a condition and lets everything else continue. */
+function check(id: string, name: string): BlockDraft {
   return {
-    kind: "cel",
+    kind: "delegate",
     id,
     name,
     enabled: true,
-    outcome: "approve",
     when: { id: `${id}-when`, all: [{ id: `${id}-leaf`, field: "/request/arguments/amount_cents", operator: "less_than", value: 1000 }] },
-    reason: "Small amounts are fine.",
-    target: null,
+    pipelineKey: "billing",
   };
+}
+
+function outcome(id: string, name: string): BlockDraft {
+  return { kind: "outcome", id, name, enabled: true, outcome: "approve", reason: "Small amounts are fine.", target: null };
 }
 
 function branch(id: string, name: string, blocks: BlockDraft[]): BranchDraft {
@@ -33,12 +36,12 @@ function branch(id: string, name: string, blocks: BlockDraft[]): BranchDraft {
 }
 
 const blocks: BlockDraft[] = [
-  cel("staging", "Staging never waits"),
+  check("staging", "Staging never waits"),
   branch("refunds", "Refunds", [
-    cel("small", "Approve small refunds"),
-    branch("large", "Large refunds", [cel("huge", "Ask finance")]),
+    check("small", "Small refunds"),
+    branch("large", "Large refunds", [check("huge", "Ask finance")]),
   ]),
-  cel("deletes", "Deny deletes"),
+  check("deletes", "Deletes"),
 ];
 
 /* The marker of each item directly on a timeline: the rail's own
@@ -67,6 +70,15 @@ describe("the pipeline hover card's rail", () => {
       "Branch · Tool name equals stripe.refund",
       "Branch · Tool name equals stripe.refund",
     ]);
+  });
+
+  it("ends a branch at its Outcome block when that decides everything", () => {
+    const gate = [branch("refunds", "Refunds", [outcome("small", "Approve small refunds")])];
+    const { container } = render(<PipelineRailTimeline blocks={gate} fallback={null} end={<li>No match</li>} />);
+    const refunds = itemOf("Refunds").querySelector("ol") as HTMLElement;
+    expect(markers(refunds)).toEqual(["1"]);
+    expect(screen.queryByText("No decision: ask a human via")).toBeNull();
+    expect(markers(container.querySelector("ol") as HTMLElement)).toEqual(["1", ""]);
   });
 
   it("picks out a block at any depth", () => {

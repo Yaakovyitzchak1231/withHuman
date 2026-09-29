@@ -42,13 +42,9 @@ func (definition Definition) EscalationPath() string {
 		if definition.Branch != nil {
 			return definition.Branch.EscalationPath
 		}
-	case TypeAlways:
-		if definition.Always != nil {
-			return definition.Always.EscalationPath
-		}
-	case TypeCEL:
-		if definition.CEL != nil {
-			return definition.CEL.EscalationPath
+	case TypeOutcome:
+		if definition.Outcome != nil {
+			return definition.Outcome.EscalationPath
 		}
 	case TypeWebhook:
 		if definition.Webhook != nil {
@@ -69,10 +65,8 @@ func (definition Definition) AskAgentOwner() bool {
 	switch definition.Type {
 	case TypeBranch:
 		return definition.Branch != nil && definition.Branch.AskAgentOwner
-	case TypeAlways:
-		return definition.Always != nil && definition.Always.AskAgentOwner
-	case TypeCEL:
-		return definition.CEL != nil && definition.CEL.AskAgentOwner
+	case TypeOutcome:
+		return definition.Outcome != nil && definition.Outcome.AskAgentOwner
 	case TypeWebhook:
 		return definition.Webhook != nil && definition.Webhook.AskAgentOwner
 	default:

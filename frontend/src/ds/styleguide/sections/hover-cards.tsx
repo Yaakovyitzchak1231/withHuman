@@ -259,10 +259,23 @@ function demoCard(reference: Reference): ReactNode | null {
                 <div className="flex flex-col gap-1">
                   <div className="flex items-baseline gap-3">
                     <span className="min-w-0 flex-1 truncate text-body text-ink-muted">Staging never waits</span>
-                    <span className="shrink-0 text-label font-normal text-ink-faint">Condition</span>
+                    <span className="shrink-0 text-label font-normal text-ink-faint">Branch</span>
                   </div>
-                  <p className="truncate font-mono text-[11px] text-ink-faint">environment == "staging"</p>
+                  <p className="truncate font-mono text-[11px] text-ink-faint">Branch · environment equals staging</p>
                 </div>
+                {/* A branch whose Outcome block decides everything ends at
+                  * that block: nothing reaches its end, so none is drawn. */}
+                <Timeline className="mt-3">
+                  <TimelineItem tone="neutral" marker={<span className="font-mono text-[11px]">1</span>}>
+                    <div className="flex flex-col gap-1">
+                      <div className="flex items-baseline gap-3">
+                        <span className="min-w-0 flex-1 truncate text-body text-ink-muted">Approve staging</span>
+                        <span className="shrink-0 text-label font-normal text-ink-faint">Outcome</span>
+                      </div>
+                      <p className="truncate font-mono text-[11px] text-ink-faint">Outcome · Every request that reaches it</p>
+                    </div>
+                  </TimelineItem>
+                </Timeline>
               </TimelineItem>
               <TimelineItem tone="neutral" marker={<span className="font-mono text-[11px]">2</span>}>
                 <div className="flex flex-col gap-1">
@@ -278,10 +291,10 @@ function demoCard(reference: Reference): ReactNode | null {
                   <TimelineItem tone="neutral" marker={<span className="font-mono text-[11px]">1</span>}>
                     <div className="flex flex-col gap-1">
                       <div className="flex items-baseline gap-3">
-                        <span className="min-w-0 flex-1 truncate text-body text-ink-muted">Approve small refunds</span>
-                        <span className="shrink-0 text-label font-normal text-ink-faint">Condition</span>
+                        <span className="min-w-0 flex-1 truncate text-body text-ink-muted">Fraud service review</span>
+                        <span className="shrink-0 text-label font-normal text-ink-faint">Webhook</span>
                       </div>
-                      <p className="truncate font-mono text-[11px] text-ink-faint">Condition · amount_cents less than 1000</p>
+                      <p className="truncate font-mono text-[11px] text-ink-faint">Webhook · fraud-service</p>
                     </div>
                   </TimelineItem>
                   <TimelineItem>
@@ -292,21 +305,31 @@ function demoCard(reference: Reference): ReactNode | null {
                   </TimelineItem>
                 </Timeline>
               </TimelineItem>
-              <TimelineItem tone="accent" marker={<span className="font-mono text-[11px]">3</span>}>
-                <div className="-mx-2 -my-1.5 flex flex-col gap-1 rounded-md border-hairline border-edge-strong bg-fill-hover px-2 py-1.5">
+              <TimelineItem tone="neutral" marker={<span className="font-mono text-[11px]">3</span>}>
+                <div className="flex flex-col gap-1">
                   <div className="flex items-baseline gap-3">
-                    <span className="min-w-0 flex-1 truncate text-body text-ink">{reference.name}</span>
-                    <span className="shrink-0 text-label font-normal text-ink-faint">Condition</span>
+                    <span className="min-w-0 flex-1 truncate text-body text-ink-muted">Selected tools</span>
+                    <span className="shrink-0 text-label font-normal text-ink-faint">Branch</span>
                   </div>
-                  <p className="truncate font-mono text-[11px] text-ink-muted">tool starts with "deploy"</p>
-                  <p className="flex flex-wrap items-center gap-y-1 text-body text-ink-secondary">
-                    <span className="mr-1">On match</span>
-                    <Badge className="-my-1" tone="warn">
-                      Ask a human
-                    </Badge>
-                  </p>
-                  <p className="pt-1 text-body text-ink">{reference.reason}</p>
+                  <p className="truncate font-mono text-[11px] text-ink-faint">Branch · Tool name is one of Bash, Write</p>
                 </div>
+                <Timeline className="mt-3">
+                  <TimelineItem tone="accent" marker={<span className="font-mono text-[11px]">1</span>}>
+                    <div className="-mx-2 -my-1.5 flex flex-col gap-1 rounded-md border-hairline border-edge-strong bg-fill-hover px-2 py-1.5">
+                      <div className="flex items-baseline gap-3">
+                        <span className="min-w-0 flex-1 truncate text-body text-ink">{reference.name}</span>
+                        <span className="shrink-0 text-label font-normal text-ink-faint">Outcome</span>
+                      </div>
+                      <p className="truncate font-mono text-[11px] text-ink-muted">Outcome · Every request that reaches it</p>
+                      <p className="flex flex-wrap items-center gap-y-1 text-body text-ink-secondary">
+                        <Badge className="-my-1" tone="warn">
+                          Ask a human
+                        </Badge>
+                      </p>
+                      <p className="pt-1 text-body text-ink">{reference.reason}</p>
+                    </div>
+                  </TimelineItem>
+                </Timeline>
               </TimelineItem>
               <TimelineItem>
                 <p className="text-body text-ink-secondary">No match: any authorized reviewer</p>
@@ -361,9 +384,9 @@ export function HoverCardsSection() {
             <Referenced
               reference={{
                 kind: "pipeline_block",
-                key: "selected-tools",
+                key: "codex-ask-about-selected-tools",
                 name: "Selected tools go to a human",
-                type: "cel",
+                type: "outcome",
                 outcome: "human",
                 reason: "Selected during onboarding",
                 pipeline: { pipelineKey: "entry", revision: 2 },

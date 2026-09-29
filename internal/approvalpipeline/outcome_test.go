@@ -3,7 +3,6 @@ package approvalpipeline
 import (
 	"context"
 	"encoding/json"
-	"github.com/google/uuid"
 	"testing"
 	"time"
 
@@ -12,28 +11,23 @@ import (
 	"github.com/withHumanAI/withHuman/domain"
 )
 
-// delegateDefinition is a delegate block to pipelineKey for the requests
-// condition matches.
-func delegateDefinition(id, pipelineKey string, condition approvalblock.Condition) approvalblock.Definition {
-	condition.ID = uuid.NewString()
-	return *approvalblock.DefineDelegate(id, pipelineKey, approvalblock.Name(id), approvalblock.When(condition))
+// outcomeDefinition is an outcome block deciding outcome for every request
+// that reaches it.
+func outcomeDefinition(id string, outcome approvalblock.Outcome) approvalblock.Definition {
+	return *approvalblock.DefineOutcome(id, outcome, approvalblock.Name(id), approvalblock.Reason("Every remaining request."))
 }
 
-func alwaysDefinition(id string, outcome approvalblock.Outcome) approvalblock.Definition {
-	return *approvalblock.DefineAlways(id, outcome, approvalblock.Name(id), approvalblock.Reason("Every remaining request."))
-}
-
-func TestAlwaysExecutionAndPreview(t *testing.T) {
+func TestOutcomeExecutionAndPreview(t *testing.T) {
 	for _, outcome := range []approvalblock.Outcome{approvalblock.Approve, approvalblock.Deny, approvalblock.Human} {
 		t.Run(string(outcome), func(t *testing.T) {
 			now := time.Unix(1000, 0).UTC()
-			always := alwaysDefinition("remaining", outcome)
+			remaining := outcomeDefinition("remaining", outcome)
 			if outcome == approvalblock.Human {
-				always.Always.EscalationPath = "payments"
+				remaining.Outcome.EscalationPath = "payments"
 			}
 			definitions := []approvalblock.Definition{
-				pipelineDefinition("skip", approvalblock.Deny, approvalblock.Field("/request/tool").Equals("other")),
-				always, alwaysDefinition("unreachable", approvalblock.Deny),
+				decideWhen("skip", approvalblock.Deny, approvalblock.Field("/request/tool").Equals("other")),
+				remaining, outcomeDefinition("unreachable", approvalblock.Deny),
 			}
 			repository := activeExecutionPipeline(t, now, "entry", definitions)
 			service := initializedExecutionService(t, repository, executionAgentRepositoryStub{agent: domain.Agent{ID: "agent-1", OrganizationID: "organization-1", Name: "Billing", AgentSlug: "billing"}}, fixedPipelineClock{now: now})
@@ -53,7 +47,7 @@ func TestAlwaysExecutionAndPreview(t *testing.T) {
 					}
 				}
 			}
-			if len(evaluations) != 2 || evaluations[1]["block_type"] != "always" || evaluations[1]["reason"] != "Every remaining request." {
+			if len(evaluations) != 2 || evaluations[1]["block_type"] != "outcome" || evaluations[1]["reason"] != "Every remaining request." {
 				t.Fatalf("wrong execution evidence: %+v", evaluations)
 			}
 			if outcome == approvalblock.Human {
@@ -75,31 +69,35 @@ func TestAlwaysExecutionAndPreview(t *testing.T) {
 	}
 }
 
-func TestEarlierDecisionOrErrorStopsBeforeAlways(t *testing.T) {
-	for _, first := range []approvalblock.Definition{
-		pipelineDefinition("deny", approvalblock.Deny, approvalblock.Field("/request/tool").Equals("deploy")),
-		pipelineDefinition("error", approvalblock.Approve, approvalblock.Field("/request/arguments/amount").LessThan(20)),
+func TestEarlierDecisionOrErrorStopsBeforeAnOutcome(t *testing.T) {
+	for _, test := range []struct {
+		first    approvalblock.Definition
+		terminal string
+		steps    int
+	}{
+		{decideWhen("deny", approvalblock.Deny, approvalblock.Field("/request/tool").Equals("deploy")), outcomeKey("deny"), 2},
+		{decideWhen("error", approvalblock.Approve, approvalblock.Field("/request/arguments/amount").LessThan(20)), "error", 1},
 	} {
-		t.Run(first.ID, func(t *testing.T) {
+		t.Run(test.first.ID, func(t *testing.T) {
 			repository := newMemoryPipelineRepository()
 			service := NewManagementService(repository, NewCompiledPipelineState(repository, NewBlockRegistry()), fixedPipelineClock{now: time.Unix(1000, 0).UTC()})
-			result, err := service.Preview(context.Background(), pipelineManagerPrincipal("organization-1"), "billing", []approvalblock.Definition{first, alwaysDefinition("remaining", approvalblock.Approve)}, Route{}, PreviewSample{Request: BlockRequest{Tool: "deploy", Arguments: json.RawMessage(`{"amount":"invalid"}`)}, Agent: BlockAgent{Slug: "billing", Name: "Billing"}})
+			result, err := service.Preview(context.Background(), pipelineManagerPrincipal("organization-1"), "billing", []approvalblock.Definition{test.first, outcomeDefinition("remaining", approvalblock.Approve)}, Route{}, PreviewSample{Request: BlockRequest{Tool: "deploy", Arguments: json.RawMessage(`{"amount":"invalid"}`)}, Agent: BlockAgent{Slug: "billing", Name: "Billing"}})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(result.Blocks) != 1 || result.TerminalBlockKey != first.ID || result.Outcome == BlockApprove {
+			if len(result.Blocks) != test.steps || result.TerminalBlockKey != test.terminal || result.Outcome == BlockApprove {
 				t.Fatalf("continued past terminal result: %+v", result)
 			}
 		})
 	}
 }
 
-func TestAlwaysInTheEntryPipelinePreemptsADelegate(t *testing.T) {
+func TestAnOutcomeInTheEntryPipelinePreemptsADelegate(t *testing.T) {
 	now := time.Unix(1000, 0).UTC()
-	repository := activeExecutionPipeline(t, now, "billing", []approvalblock.Definition{alwaysDefinition("billing-denies", approvalblock.Deny)})
+	repository := activeExecutionPipeline(t, now, "billing", []approvalblock.Definition{outcomeDefinition("billing-denies", approvalblock.Deny)})
 	management := NewManagementService(repository, NewCompiledPipelineState(repository, NewBlockRegistry()), fixedPipelineClock{now: now})
 	created, err := management.CreateRevision(context.Background(), pipelineManagerPrincipal("organization-1"), "entry", pipelineName("entry"), []approvalblock.Definition{
-		alwaysDefinition("entry-approves", approvalblock.Approve),
+		outcomeDefinition("entry-approves", approvalblock.Approve),
 		delegateDefinition("to-billing", "billing", approvalblock.Field("/agent/slug").Equals("billing")),
 	}, Route{})
 	if err != nil {
@@ -118,12 +116,12 @@ func TestAlwaysInTheEntryPipelinePreemptsADelegate(t *testing.T) {
 	}
 	for _, event := range result.AuditEvents {
 		if event.EventType == blockEvaluatedEvent && auditData(t, event)["block_key"] != "entry-approves" {
-			t.Fatalf("a block after the always ran: %s", event.Data)
+			t.Fatalf("a block after the outcome block ran: %s", event.Data)
 		}
 	}
 }
 
-func TestAlwaysAfterAsyncResume(t *testing.T) {
+func TestOutcomeAfterAsyncResume(t *testing.T) {
 	now := time.Unix(1000, 0).UTC()
 	check := newScripted(scriptedOutcome(BlockNext))
 	repository := newMemoryPipelineRepository()
@@ -131,7 +129,7 @@ func TestAlwaysAfterAsyncResume(t *testing.T) {
 	management := NewManagementService(repository, NewCompiledPipelineState(repository, registry), fixedPipelineClock{now: now})
 	created, err := management.CreateRevision(context.Background(), pipelineManagerPrincipal("organization-1"), "entry", pipelineName("entry"), []approvalblock.Definition{
 		scriptedDefinition(),
-		alwaysDefinition("remaining", approvalblock.Deny), alwaysDefinition("unreachable", approvalblock.Approve),
+		outcomeDefinition("remaining", approvalblock.Deny), outcomeDefinition("unreachable", approvalblock.Approve),
 	}, Route{})
 	if err != nil {
 		t.Fatal(err)
@@ -156,19 +154,19 @@ func TestAlwaysAfterAsyncResume(t *testing.T) {
 		t.Fatal(err)
 	}
 	if resumed.Decision == nil || resumed.Decision.Status != domain.ApprovalDenied || len(check.Inputs) != 1 {
-		t.Fatalf("Always did not decide after resume: %+v", resumed)
+		t.Fatalf("the outcome block did not decide after resume: %+v", resumed)
 	}
 	if len(resumed.AuditEvents) != 4 || auditData(t, resumed.AuditEvents[1])["block_key"] != "remaining" {
 		t.Fatalf("wrong resumed events: %+v", resumed.AuditEvents)
 	}
 }
 
-func TestAlwaysReferencesAndUnreachableValidation(t *testing.T) {
+func TestOutcomeReferencesAndUnreachableValidation(t *testing.T) {
 	repository := newMemoryPipelineRepository()
 	resolver := &stubEscalationPathResolver{resolved: application.ResolvedEscalationPaths{Missing: []string{"payments"}}}
 	service := NewManagementService(repository, NewCompiledPipelineState(repository, NewBlockRegistry()), fixedPipelineClock{now: time.Unix(1000, 0).UTC()}, WithEscalationPathResolver(resolver))
-	block := alwaysDefinition("remaining", approvalblock.Human)
-	block.Always.EscalationPath = "payments"
+	block := outcomeDefinition("remaining", approvalblock.Human)
+	block.Outcome.EscalationPath = "payments"
 	principal := pipelineManagerPrincipal("organization-1")
 	if _, err := service.CreateRevision(context.Background(), principal, "billing", pipelineName("billing"), []approvalblock.Definition{block}, Route{}); err == nil {
 		t.Fatal("missing path accepted")
@@ -186,14 +184,14 @@ func TestAlwaysReferencesAndUnreachableValidation(t *testing.T) {
 	if refs.Activatable || len(refs.EscalationPaths) != 1 || refs.EscalationPaths[0].BlockKeys[0] != "remaining" {
 		t.Fatalf("path dependency lost: %+v", refs)
 	}
-	invalid := alwaysDefinition("unreachable", approvalblock.Next)
+	invalid := outcomeDefinition("unreachable", approvalblock.Next)
 	if _, err := service.CreateRevision(context.Background(), principal, "billing", pipelineName("billing"), []approvalblock.Definition{block, invalid}, Route{}); err == nil {
 		t.Fatal("invalid unreachable block accepted")
 	}
 }
 
-func TestAlwaysFailsClosedOnCancelledContext(t *testing.T) {
-	block, err := compileAlwaysBlock(alwaysDefinition("remaining", approvalblock.Approve))
+func TestOutcomeFailsClosedOnCancelledContext(t *testing.T) {
+	block, err := compileOutcomeBlock(outcomeDefinition("remaining", approvalblock.Approve))
 	if err != nil {
 		t.Fatal(err)
 	}

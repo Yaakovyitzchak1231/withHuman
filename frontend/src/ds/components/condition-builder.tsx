@@ -267,7 +267,7 @@ function ConditionLeafReadout({ node }: { node: ConditionNode }) {
 /*
  * The condition a block stores, laid out exactly like the builder (the
  * same group frames, the same and/or dividers) but with plain text in
- * place of every control. The view-mode face of a conditions block.
+ * place of every control. The view-mode face of a branch or delegate condition.
  */
 export function ConditionTree({
   node,

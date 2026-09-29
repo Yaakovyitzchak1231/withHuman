@@ -70,8 +70,6 @@ func flattenDefinitions(definitions []approvalblock.Definition) []approvalblock.
 // definitionCondition returns the condition a block evaluates, if any.
 func definitionCondition(definition approvalblock.Definition) (approvalblock.Condition, bool) {
 	switch {
-	case definition.CEL != nil:
-		return definition.CEL.When, true
 	case definition.Branch != nil:
 		return definition.Branch.When, true
 	case definition.Delegate != nil:

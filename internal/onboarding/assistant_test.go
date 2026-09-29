@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/withHumanAI/withHuman/application"
+	"github.com/withHumanAI/withHuman/approvalblock"
 	"github.com/withHumanAI/withHuman/domain"
 )
 
@@ -104,7 +105,7 @@ func TestAssistantWritesRulesIntoTheAgentsBranch(t *testing.T) {
 	h := newHarness()
 	model := &scriptedModel{replies: []application.ToolUseOutput{
 		toolCall("c1", getRulesTool, `{"agent_slug":"codex"}`),
-		toolCall("c2", updateRulesTool, `{"agent_slug":"codex","blocks":[{"id":"codex-review-kubectl","name":"Review kubectl changes","type":"cel","enabled":true,"timeout":"50ms","max_attempts":1,"config":{"when":{"id":"5b7d7a8e-2d4e-4d3a-9a1c-1f2e3d4c5b6a","field":"/request/tool","operator":"equals","value":"Bash"},"on_match":"human","reason":"kubectl changes wait."}}]}`),
+		toolCall("c2", updateRulesTool, `{"agent_slug":"codex","blocks":[{"id":"codex-review-kubectl","name":"Review kubectl changes","type":"branch","enabled":true,"timeout":"50ms","max_attempts":1,"config":{"when":{"id":"5b7d7a8e-2d4e-4d3a-9a1c-1f2e3d4c5b6a","field":"/request/tool","operator":"equals","value":"Bash"},"blocks":[{"id":"codex-ask-about-kubectl","name":"Ask about kubectl changes","type":"outcome","enabled":true,"timeout":"50ms","max_attempts":1,"config":{"outcome":"human","reason":"kubectl changes wait."}}],"reason":""}}]}`),
 		toolCall("c3", previewRulesTool, `{"agent_slug":"codex","blocks":[],"sample":{"tool":"Bash","arguments":{"command":"kubectl delete pod demo"}}}`),
 		toolCall("c4", "list_agents", `{}`),
 		toolCall("c5", updateRulesTool, `{"agent_slug":"claude-code","blocks":[]}`),
@@ -162,8 +163,15 @@ func TestAssistantWritesRulesIntoTheAgentsBranch(t *testing.T) {
 	// the human exit the model left bare, and activated the entry.
 	entry := h.pipelines.entryBlocks()
 	branch, ok := RuntimeBranchOf(entry, "codex")
-	if !ok || len(branch.Branch.Blocks) != 1 || branch.Branch.Blocks[0].ID != "codex-review-kubectl" || branch.Branch.Blocks[0].CEL.EscalationPath != "notify-chris-battarbee" {
+	if !ok || len(branch.Branch.Blocks) != 1 || branch.Branch.Blocks[0].ID != "codex-review-kubectl" || branch.Branch.Blocks[0].Branch == nil {
 		t.Fatalf("codex branch after the write: %+v", entry)
+	}
+	review := branch.Branch.Blocks[0].Branch
+	if len(review.Blocks) != 1 || review.Blocks[0].Outcome == nil || review.Blocks[0].Outcome.EscalationPath != "notify-chris-battarbee" || !review.Blocks[0].Outcome.AskAgentOwner {
+		t.Fatalf("the nested human exit must carry the person's path: %+v", review.Blocks)
+	}
+	if review.EscalationPath != "notify-chris-battarbee" || !review.AskAgentOwner {
+		t.Fatalf("the rule's own end must carry the person's path: %+v", review)
 	}
 	if h.pipelines.activated[EntryPipelineKey] != 2 {
 		t.Fatalf("the write must activate against the provisioned revision, got %v", h.pipelines.activated)
@@ -461,4 +469,22 @@ func (m *rejectingModel) CompleteTurn(ctx context.Context, input application.Too
 		return m.rejected, m.err
 	}
 	return m.scriptedModel.CompleteTurn(ctx, input)
+}
+
+// A rule is a branch whose outcome block decides, so a preview decided
+// by that nested block is decided inside the agent's rules.
+func TestHoldsBlockFindsTheDecidingBlockOfANestedRule(t *testing.T) {
+	ask := approvalblock.DefineOutcome("codex-ask-about-kubectl", approvalblock.Human, approvalblock.Reason("kubectl changes wait for a person."))
+	rule := approvalblock.DefineBranch("codex-review-kubectl", []approvalblock.Definition{*ask},
+		approvalblock.When(approvalblock.Field("/request/tool").Equals("Bash")))
+	rest := approvalblock.DefineOutcome("codex-approve-the-rest", approvalblock.Approve, approvalblock.Reason("Everything else runs."))
+	rules := []approvalblock.Definition{*rule, *rest}
+	for _, key := range []string{"codex-review-kubectl", "codex-ask-about-kubectl", "codex-approve-the-rest"} {
+		if !holdsBlock(rules, key) {
+			t.Fatalf("%s is part of the agent's rules", key)
+		}
+	}
+	if holdsBlock(rules, "organization-deny-deletes") {
+		t.Fatal("a block outside the agent's branch is not part of its rules")
+	}
 }

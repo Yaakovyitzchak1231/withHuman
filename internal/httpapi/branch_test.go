@@ -29,8 +29,8 @@ func TestPipelineRevisionNestsBranchBlocks(t *testing.T) {
 				TimeoutMS: 50, MaxAttempts: 1, ContentHash: strings.Repeat("a", 64), CreatedByActorID: "membership-1", CreatedAt: now,
 			},
 			{
-				ID: insideID, OrganizationID: "organization-1", BlockKey: "inside", Name: "Inside", BlockType: "cel",
-				ConfigVersion: 1, Config: json.RawMessage(`{"when":{"id":"32222222-2222-4222-8222-222222222222","field":"/request/arguments/amount","operator":"less_than","value":10},"on_match":"approve","reason":"Small."}`),
+				ID: insideID, OrganizationID: "organization-1", BlockKey: "inside", Name: "Inside", BlockType: "outcome",
+				ConfigVersion: 1, Config: json.RawMessage(`{"outcome":"approve","reason":"Small."}`),
 				TimeoutMS: 50, MaxAttempts: 1, ContentHash: strings.Repeat("b", 64), CreatedByActorID: "membership-1", CreatedAt: now,
 			},
 		},
@@ -81,8 +81,15 @@ func TestPipelinePreviewReportsBranchSteps(t *testing.T) {
 			"config":{
 				"when":{"id":"21aa670a-734c-454c-a1e9-653d54be054b","field":"/request/tool","operator":"equals","value":"stripe.refund"},
 				"blocks":[{
-					"id":"small-refund","name":"Approve small refunds","type":"cel","enabled":true,"timeout":"50ms","max_attempts":1,
-					"config":{"when":{"id":"5d79dc6a-5f7d-4e70-aeb1-dcd682e77322","field":"/request/arguments/amount_cents","operator":"less_than","value":1000},"on_match":"approve","reason":"Small refunds are pre-authorized."}
+					"id":"small-refund","name":"Approve small refunds","type":"branch","enabled":true,"timeout":"50ms","max_attempts":1,
+					"config":{
+						"when":{"id":"5d79dc6a-5f7d-4e70-aeb1-dcd682e77322","field":"/request/arguments/amount_cents","operator":"less_than","value":1000},
+						"blocks":[{
+							"id":"approve-small-refund","name":"Approve","type":"outcome","enabled":true,"timeout":"50ms","max_attempts":1,
+							"config":{"outcome":"approve","reason":"Small refunds are pre-authorized."}
+						}],
+						"reason":""
+					}
 				}],
 				"reason":"Refunds nobody decided go to Payments.",
 				"escalation_path":"payments-review"
@@ -115,11 +122,13 @@ func TestPipelinePreviewReportsBranchSteps(t *testing.T) {
 	if preview.Outcome != "human" || preview.ReasonCode != "end_of_branch" || preview.TerminalBlockID != "refunds" || preview.EscalationPath != "payments-review" || len(preview.Blocks) != 3 {
 		t.Fatalf("unexpected preview: %s", response.Body.String())
 	}
-	if first, last := preview.Blocks[0], preview.Blocks[2]; first.Outcome != "enter" || first.EndOfBranch || last.BlockID != "refunds" || last.Outcome != "human" || !last.EndOfBranch || last.Position != 0 {
+	// The inner branch does not match a large refund, so its outcome block
+	// never runs and the outer branch runs out.
+	if first, skipped, last := preview.Blocks[0], preview.Blocks[1], preview.Blocks[2]; first.Outcome != "enter" || first.EndOfBranch || skipped.BlockID != "small-refund" || skipped.Outcome != "next" || skipped.Position != 1 || last.BlockID != "refunds" || last.Outcome != "human" || !last.EndOfBranch || last.Position != 0 {
 		t.Fatalf("unexpected branch steps: %s", response.Body.String())
 	}
 
-	nestedUnknown := strings.Replace(body, `"on_match":"approve"`, `"on_match":"approve","surprise":1`, 1)
+	nestedUnknown := strings.Replace(body, `"outcome":"approve"`, `"outcome":"approve","surprise":1`, 1)
 	request = httptest.NewRequest(http.MethodPost, "/api/v1/request-approval-pipelines/billing/preview", strings.NewReader(nestedUnknown))
 	request.Header.Set("Content-Type", "application/json")
 	response = httptest.NewRecorder()
@@ -137,7 +146,7 @@ func TestWritableBlocksStripStoredFieldsInsideBranches(t *testing.T) {
 		"id":"refunds","snapshot_id":"s1","config_version":1,"content_hash":"h1","type":"branch",
 		"config":{"reason":"r","blocks":[
 			{"id":"inner","snapshot_id":"s2","config_version":1,"content_hash":"h2","type":"branch",
-			 "config":{"reason":"r","blocks":[{"id":"leaf","snapshot_id":"s3","config_version":1,"content_hash":"h3","type":"always","config":{}}]}}
+			 "config":{"reason":"r","blocks":[{"id":"leaf","snapshot_id":"s3","config_version":1,"content_hash":"h3","type":"outcome","config":{}}]}}
 		]}
 	}]`), &stored); err != nil {
 		t.Fatal(err)

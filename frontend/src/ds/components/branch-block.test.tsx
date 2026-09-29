@@ -8,7 +8,7 @@ import {
   summarizeBranch,
   type BranchBlockDraft,
 } from "./branch-block";
-import { PipelineBranchEndCard, PipelineBranchWell } from "./policy-block";
+import { PipelineBranchEndCard, PipelineBranchWell } from "./pipeline-flow";
 
 beforeEach(() => vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} }));
 afterEach(() => {
@@ -49,7 +49,7 @@ describe("Branch card", () => {
     const onChange = renderCard();
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Stripe refunds" } });
     expect(onChange).toHaveBeenCalledWith({ ...branch, name: "Stripe refunds" });
-    fireEvent.change(screen.getByLabelText("Reason"), { target: { value: "A person decides." } });
+    fireEvent.change(screen.getByLabelText("Reason (optional)"), { target: { value: "A person decides." } });
     expect(onChange).toHaveBeenLastCalledWith({ ...branch, reason: "A person decides." });
     expect(screen.getByRole("group", { name: "Group match mode" })).toBeTruthy();
     expect(screen.getByLabelText("Reviewers")).toBeTruthy();

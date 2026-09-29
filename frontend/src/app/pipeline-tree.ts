@@ -186,11 +186,11 @@ export function unwrapBranch(drafts: BlockDraft[], id: string): BlockDraft[] {
   ]);
 }
 
-/* Every condition the tree tests: each Conditions block's, each
- * branch's and each delegate's, at any depth. */
+/* Every condition the tree tests: each branch's and each delegate's,
+ * at any depth. */
 export function allConditions(drafts: BlockDraft[]): ConditionNode[] {
   return walkDrafts(drafts).flatMap(({ block }) =>
-    block.kind === "cel" || block.kind === "branch" || block.kind === "delegate" ? [block.when] : [],
+    block.kind === "branch" || block.kind === "delegate" ? [block.when] : [],
   );
 }
 
@@ -215,10 +215,11 @@ export function changedBlockCount(baseline: BlockDraft[], draft: BlockDraft[]): 
   return count;
 }
 
-/* Which blocks no request can reach. An enabled Always matches every
- * request that gets to it, so the blocks after it on its rail never
- * run; inside a branch that also leaves the branch's end unused. Only
- * an Always on the pipeline's own rail stops the pipeline: one inside a
+/* Which blocks no request can reach. An enabled Outcome block decides
+ * every request that gets to it, so the blocks after it on its rail
+ * never run; inside a branch that also leaves the branch's end unused,
+ * which is the ordinary shape of "if this, approve". Only an Outcome
+ * block on the pipeline's own rail stops the pipeline: one inside a
  * branch stops only that branch, because requests that skip the branch
  * go on. An unreachable branch passes its blocker to everything inside
  * it. A delegate is a leaf here: what its target does is the target's
@@ -226,11 +227,12 @@ export function changedBlockCount(baseline: BlockDraft[], draft: BlockDraft[]): 
  * id, which is unique within a pipeline; a delegated pipeline's
  * reachability is computed on its own. */
 export interface Reachability {
-  /* The Always that makes each unreachable block unreachable. */
+  /* The Outcome block that makes each unreachable block unreachable. */
   blockedBy: Map<string, BlockDraft>;
-  /* Branches whose end no request reaches, with the Always responsible. */
+  /* Branches whose end no request reaches, with the Outcome block
+   * responsible. */
   endBlockedBy: Map<string, BlockDraft>;
-  /* The Always on the pipeline's own rail that ends it. */
+  /* The Outcome block on the pipeline's own rail that ends it. */
   stoppedBy?: BlockDraft;
 }
 
@@ -245,7 +247,7 @@ export function pipelineReachability(drafts: BlockDraft[]): Reachability {
         const end = walkRail(block.blocks, stop);
         if (end) endBlockedBy.set(block.id, end);
       }
-      if (!stop && block.kind === "always" && block.enabled) stop = block;
+      if (!stop && block.kind === "outcome" && block.enabled) stop = block;
     }
     return stop;
   };

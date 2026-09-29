@@ -5,10 +5,11 @@ import (
 	"strings"
 )
 
-// TypeAlways returns a fixed outcome for every request that reaches it.
-const TypeAlways BlockType = "always"
+// TypeOutcome returns a fixed outcome for every request that reaches it.
+// "If this, then that" is a branch whose blocks end in one.
+const TypeOutcome BlockType = "outcome"
 
-type AlwaysConfig struct {
+type OutcomeConfig struct {
 	Outcome        Outcome `json:"outcome"`
 	Reason         string  `json:"reason"`
 	EscalationPath string  `json:"escalation_path,omitempty"`
@@ -17,7 +18,7 @@ type AlwaysConfig struct {
 	AskAgentOwner bool `json:"ask_agent_owner,omitempty"`
 }
 
-func (config AlwaysConfig) Validate() error {
+func (config OutcomeConfig) Validate() error {
 	if config.Outcome != Approve && config.Outcome != Deny && config.Outcome != Human {
 		return errors.New("outcome must be approve, deny, or human")
 	}
@@ -30,12 +31,12 @@ func (config AlwaysConfig) Validate() error {
 	return ValidateRoute(config.EscalationPath, config.AskAgentOwner)
 }
 
-// DefineAlways builds an unconditional block with the synchronous defaults.
-func DefineAlways(id string, outcome Outcome, options ...Option) *Definition {
+// DefineOutcome builds an outcome block with the synchronous defaults.
+func DefineOutcome(id string, outcome Outcome, options ...Option) *Definition {
 	definition := &Definition{
-		ID: id, Type: TypeAlways, Enabled: true,
+		ID: id, Type: TypeOutcome, Enabled: true,
 		Timeout: DefaultTimeout.String(), MaxAttempts: 1,
-		Always: &AlwaysConfig{Outcome: outcome},
+		Outcome: &OutcomeConfig{Outcome: outcome},
 	}
 	for _, option := range options {
 		if option != nil {

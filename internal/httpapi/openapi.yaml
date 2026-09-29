@@ -6328,22 +6328,20 @@ components:
           type: boolean
           description: "Send those requests to the person who owns the agent instance that made them instead. `default_escalation_path` is then the fallback, used only for a request whose agent has no owner able to decide it (a service agent, or an owner who was deactivated), and is required. The owner is the only reviewer: the request never moves to the path because the owner has not answered."
     RequestApprovalBlockDefinition:
-      description: One block of a pipeline document. The type picks the kind of block and the shape of its config. These are the kinds every edition has (`always`, `cel`, `webhook`, `branch`, `delegate`); an edition may add kinds of its own with their own config shapes (the hosted edition adds `llm_judge`), and a document naming a kind this deployment lacks is refused as invalid.
+      description: One block of a pipeline document. The type picks the kind of block and the shape of its config. These are the kinds every edition has (`outcome`, `branch`, `delegate`, `webhook`); "if this, then that" is a branch whose blocks end in an outcome block; an edition may add kinds of its own with their own config shapes (the hosted edition adds `llm_judge`), and a document naming a kind this deployment lacks is refused as invalid.
       oneOf:
-        - $ref: "#/components/schemas/AlwaysBlockDefinition"
-        - $ref: "#/components/schemas/CELBlockDefinition"
+        - $ref: "#/components/schemas/OutcomeBlockDefinition"
         - $ref: "#/components/schemas/WebhookBlockDefinition"
         - $ref: "#/components/schemas/BranchBlockDefinition"
         - $ref: "#/components/schemas/DelegateBlockDefinition"
       discriminator:
         propertyName: type
         mapping:
-          always: "#/components/schemas/AlwaysBlockDefinition"
-          cel: "#/components/schemas/CELBlockDefinition"
+          outcome: "#/components/schemas/OutcomeBlockDefinition"
           webhook: "#/components/schemas/WebhookBlockDefinition"
           branch: "#/components/schemas/BranchBlockDefinition"
           delegate: "#/components/schemas/DelegateBlockDefinition"
-    AlwaysBlockDefinition:
+    OutcomeBlockDefinition:
       type: object
       additionalProperties: false
       description: A block that returns its configured outcome for every request that reaches it.
@@ -6355,7 +6353,7 @@ components:
           example: review-remaining-requests
           description: A key for the block, unique within the pipeline including blocks inside branches.
         name: { type: string, minLength: 1, example: Review remaining requests, description: A display name. }
-        type: { type: string, const: always, description: "Always `always`." }
+        type: { type: string, const: outcome, description: "Always `outcome`." }
         enabled:
           type: boolean
           const: true
@@ -6365,48 +6363,24 @@ components:
           example: 50ms
           description: "How long execution may take, as a duration. At most `1s`."
         max_attempts: { type: integer, const: 1, description: Always 1. }
-        config: { $ref: "#/components/schemas/AlwaysBlockConfig" }
-    CELBlockDefinition:
-      type: object
-      additionalProperties: false
-      description: A block that tests the request against a condition.
-      required: [id, name, type, enabled, timeout, max_attempts, config]
-      properties:
-        id:
-          type: string
-          pattern: '^[a-z0-9][a-z0-9._-]{0,62}$'
-          description: A key for the block, unique within the pipeline including blocks inside branches.
-        name: { type: string, minLength: 1, description: A display name. }
-        type: { type: string, const: cel, description: "Always `cel`." }
-        enabled:
-          type: boolean
-          const: true
-          description: "Always `true`. Leave disabled blocks out of the document."
-        timeout:
-          type: string
-          example: 50ms
-          description: "How long the condition may take, as a duration. At most `1s`."
-        max_attempts: { type: integer, const: 1, description: Always 1. }
-        config: { $ref: "#/components/schemas/CELBlockConfig" }
+        config: { $ref: "#/components/schemas/OutcomeBlockConfig" }
     StoredRequestApprovalBlock:
       description: One block as saved in a revision. The same shape as its definition, plus the fields of the saved copy.
       oneOf:
-        - $ref: "#/components/schemas/StoredAlwaysBlock"
-        - $ref: "#/components/schemas/StoredCELBlock"
+        - $ref: "#/components/schemas/StoredOutcomeBlock"
         - $ref: "#/components/schemas/StoredWebhookBlock"
         - $ref: "#/components/schemas/StoredBranchBlock"
         - $ref: "#/components/schemas/StoredDelegateBlock"
       discriminator:
         propertyName: type
         mapping:
-          always: "#/components/schemas/StoredAlwaysBlock"
-          cel: "#/components/schemas/StoredCELBlock"
+          outcome: "#/components/schemas/StoredOutcomeBlock"
           webhook: "#/components/schemas/StoredWebhookBlock"
           branch: "#/components/schemas/StoredBranchBlock"
-    StoredAlwaysBlock:
+    StoredOutcomeBlock:
       type: object
       additionalProperties: false
-      description: An unconditional block as saved in a revision.
+      description: An outcome block as saved in a revision.
       required: [id, snapshot_id, name, type, enabled, timeout, max_attempts, config, config_version, content_hash]
       properties:
         id:
@@ -6416,32 +6390,13 @@ components:
           description: The block's key, unique within the pipeline including blocks inside branches.
         snapshot_id: { type: string, format: uuid, description: The id of the saved copy. }
         name: { type: string, minLength: 1, example: Review remaining requests, description: The display name. }
-        type: { type: string, const: always, description: "Always `always`." }
+        type: { type: string, const: outcome, description: "Always `outcome`." }
         enabled: { type: boolean, const: true, description: "Always `true`." }
         timeout: { type: string, example: 50ms, description: How long execution may take. }
         max_attempts: { type: integer, const: 1, description: Always 1. }
-        config: { $ref: "#/components/schemas/AlwaysBlockConfig" }
+        config: { $ref: "#/components/schemas/OutcomeBlockConfig" }
         config_version: { type: integer, const: 1, description: The version of the config format. Always 1. }
         content_hash: { type: string, pattern: '^[0-9a-f]{64}$', example: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", description: A SHA-256 hash of the block's content. }
-    StoredCELBlock:
-      type: object
-      additionalProperties: false
-      description: A condition block as saved in a revision.
-      required: [id, snapshot_id, name, type, enabled, timeout, max_attempts, config, config_version, content_hash]
-      properties:
-        id:
-          type: string
-          pattern: '^[a-z0-9][a-z0-9._-]{0,62}$'
-          description: The block's key, unique within the pipeline including blocks inside branches.
-        snapshot_id: { type: string, format: uuid, description: The id of the saved copy. }
-        name: { type: string, minLength: 1, description: The display name. }
-        type: { type: string, const: cel, description: "Always `cel`." }
-        enabled: { type: boolean, const: true, description: "Always `true`." }
-        timeout: { type: string, example: 50ms, description: How long the condition may take. }
-        max_attempts: { type: integer, const: 1, description: Always 1. }
-        config: { $ref: "#/components/schemas/CELBlockConfig" }
-        config_version: { type: integer, const: 1, description: The version of the config format. Always 1. }
-        content_hash: { type: string, pattern: '^[0-9a-f]{64}$', description: A SHA-256 hash of the block's content. }
     WebhookBlockDefinition:
       type: object
       additionalProperties: false
@@ -6525,8 +6480,8 @@ components:
     BranchBlockConfig:
       type: object
       additionalProperties: false
-      description: "When the condition matches, the branch's blocks run in order and the first to decide ends the pipeline. If none decides, the request goes to a person with this reason and escalation path. When the condition does not match, the branch is skipped and the request passes to the next block. A condition that cannot be evaluated sends the request to a person on the pipeline's default path."
-      required: [when, blocks, reason]
+      description: "When the condition matches, the branch's blocks run in order and the first to decide ends the pipeline. If none decides, the request goes to a person with this reason and escalation path. When the condition does not match, the branch is skipped and the request passes to the next block. A condition that cannot be evaluated sends the request to a person on the pipeline's default path. \"If this, then that\" is a branch whose blocks end in an outcome block; such a branch never runs out, so it needs no reason or path."
+      required: [when, blocks]
       properties:
         when: { $ref: "#/components/schemas/CELCondition" }
         blocks:
@@ -6535,7 +6490,7 @@ components:
           maxItems: 999
           description: "The branch's blocks, in the order they run. Any type, including further branches. They count toward the pipeline's 1,000 blocks."
           items: { $ref: "#/components/schemas/RequestApprovalBlockDefinition" }
-        reason: { type: string, minLength: 1, description: The note recorded when none of the branch's blocks decides. }
+        reason: { type: string, description: "The note recorded when none of the branch's blocks decides; empty when the branch has none." }
         escalation_path:
           type: string
           pattern: '^[a-z0-9][a-z0-9._-]{0,62}$'
@@ -6555,7 +6510,7 @@ components:
           minItems: 1
           description: The branch's blocks, in the order they run.
           items: { $ref: "#/components/schemas/StoredRequestApprovalBlock" }
-        reason: { type: string, minLength: 1, description: The note recorded when none of the branch's blocks decides. }
+        reason: { type: string, description: "The note recorded when none of the branch's blocks decides; empty when the branch has none." }
         escalation_path:
           type: string
           pattern: '^[a-z0-9][a-z0-9._-]{0,62}$'
@@ -6653,7 +6608,7 @@ components:
         ask_agent_owner:
           type: boolean
           description: "Send the request to the person who owns the agent instance that made it, instead of `escalation_path`. The path is then the fallback, used only when the request has no owner able to decide it, and is required."
-    AlwaysBlockConfig:
+    OutcomeBlockConfig:
       type: object
       additionalProperties: false
       description: Returns outcome for every request that reaches this block. Later blocks do not run.
@@ -6672,22 +6627,6 @@ components:
           type: string
           pattern: '^[a-z0-9][a-z0-9._-]{0,62}$'
           description: "Where the request goes for a `human` outcome. Allowed only when `outcome` is `human`. Defaults to the pipeline's default path."
-        ask_agent_owner:
-          type: boolean
-          description: "Send the request to the person who owns the agent instance that made it, instead of `escalation_path`. The path is then the fallback, used only when the request has no owner able to decide it, and is required."
-    CELBlockConfig:
-      type: object
-      additionalProperties: false
-      description: When the condition matches, the block returns on_match. Otherwise the request passes to the next block.
-      required: [when, on_match, reason]
-      properties:
-        when: { $ref: "#/components/schemas/CELCondition" }
-        on_match: { type: string, enum: [approve, deny, human], description: "What to do on a match: `approve`, `deny`, or `human`." }
-        reason: { type: string, minLength: 1, description: The note recorded on decisions this block makes. }
-        escalation_path:
-          type: string
-          pattern: '^[a-z0-9][a-z0-9._-]{0,62}$'
-          description: "Where the request goes on a `human` match. Allowed only when `on_match` is `human`. Defaults to the pipeline's default path."
         ask_agent_owner:
           type: boolean
           description: "Send the request to the person who owns the agent instance that made it, instead of `escalation_path`. The path is then the fallback, used only when the request has no owner able to decide it, and is required."

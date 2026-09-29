@@ -61,7 +61,7 @@ func TestPipelineSuspensionsAgainstRealPostgres(t *testing.T) {
 		t.Fatalf("CreateAgentInstanceWithCredential: %v", err)
 	}
 	revision := createPipelineTestRevision(t, ctx, store, orgID, ownerMembershipID, domain.EntryPipelineKey, []application.RequestApprovalBlockSnapshotInput{
-		pipelineTestBlock("judge", `{"on_match":"human"}`),
+		pipelineTestBlock("judge", `{"outcome":"human"}`),
 	}, now)
 
 	event := func(request domain.ApprovalRequest, eventType string, actorType domain.ActorType, actorID domain.ID, data string) domain.AuditEvent {

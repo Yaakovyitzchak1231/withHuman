@@ -285,13 +285,15 @@ abandoned.
   `branch` whose id is the runtime key and whose condition is
   `/agent/slug equals <runtime>` (condition ids are deterministic UUID
   v5 values, so an unchanged document is recognised and written no
-  second time), inserted before the first top-level `always` block, else
-  appended, every other block untouched. The branch body is
+  second time), inserted before the first top-level `outcome` block, else
+  appended, every other block untouched. The branch body is the branch
   `<runtime>-gate-selected-tools`, named "Review tools chosen in setup"
-  (`/request/tool in [suggested...]` → human, asking the agent's owner
-  with the escalation path above as the fallback, omitted when the list
-  is empty) then `<runtime>-approve-the-rest`, named "Approve every other
-  tool" (always → approve); the branch's own end takes the same owner
+  (`/request/tool in [suggested...]`), holding the outcome block
+  `<runtime>-ask-about-selected-tools` (human, asking the agent's owner
+  with the escalation path above as the fallback; the gate is omitted
+  when the list is empty), then the outcome block
+  `<runtime>-approve-the-rest`, named "Approve every other tool"
+  (approve); the branch's own end takes the same owner
   route. The runtime agents are personal, so each member's requests go
   to that member; the path is used only if a request ever arrives
   without an owner (see

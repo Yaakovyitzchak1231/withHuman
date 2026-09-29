@@ -1,7 +1,7 @@
 import type { ComponentProps, ComponentType, ReactNode } from "react";
 import type { LinkProps } from "@tanstack/react-router";
 import type { BlockMenuHandlers, BlockPosition } from "@/ds/components/block-card";
-import type { PipelineExit } from "@/ds/components/policy-block";
+import type { PipelineExit } from "@/ds/components/pipeline-flow";
 import type { ReviewerTarget } from "@/ds/components/reviewer-target";
 import type { AgentDetail, ApprovalRequest, ApprovalReview, ContactMethod } from "../types";
 import type { AgentSearch } from "./agent-search";
@@ -442,7 +442,7 @@ export interface Extensions {
   invitationQuotaHint: ComponentType | null;
   requestDetail: RequestDetailSlots;
   /* The block kinds the edition's pipelines can run beside core's own
-   * (always, conditions, webhook, branch). */
+   * (outcome, webhook, branch, delegate). */
   blockKinds: RegisteredBlockKind[];
   /* The tabs the edition adds to the single-agent page, after core's. */
   agentTabs: RegisteredAgentTab[];

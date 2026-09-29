@@ -448,7 +448,7 @@ recorded in this file with both the reason and the replacement rule.
   `/api/v1/escalation-paths/...`, gated by `escalation_path.read`, `escalation_path.write`, and
   `escalation_path.activate`; the `routing.manage` permission is gone). A pipeline block's human outcome
   names the path it hands the request to (`escalation_path` inside each
-  block config, a cel block only with `on_match: human`), a pipeline
+  block config, an outcome block only with `outcome: human`), a pipeline
   revision carries `default_escalation_path` for fall-through and for
   human exits that name no path (the agent section's default wins
   over the organization's), and with neither the request waits for any
@@ -618,22 +618,30 @@ recorded in this file with both the reason and the replacement rule.
   revisions and activation (409 `request_approval_pipeline_archived`).
   Agents own no pipeline: creating, archiving and restoring an agent
   touch none, and "rules for one agent" is a branch or delegate on
-  `/agent/slug`. The overview offers New pipeline; the delegate card's
-  well draws the target's active blocks read only under the target's
-  own key.
+  `/agent/slug`. The overview offers New pipeline. A delegate draws as
+  one card and an exit ("if conditions are met, continue in <pipeline>");
+  the target's blocks are never inlined into the delegating pipeline's
+  page, and a test replay folds whatever ran inside the target onto the
+  delegate.
 - Request approval block types are a registry
   (`internal/approvalpipeline.BlockRegistry`), constructed once in each
   composition root and shared by compiled state, management, and
   execution. `approvalblock.Definition` is a type-dispatched envelope: the
   wire `config` object decodes into the variant pointer selected by `type`
-  (`Always`, `CEL`, `Webhook`, `Branch`, or `Delegate` for core's kinds,
+  (`Outcome`, `Webhook`, `Branch`, or `Delegate` for core's kinds,
   or the `Config` of a registered edition kind), each type owns its
   envelope limits (`approvalblock.LimitsFor`), and the runtime
   fingerprint is the composition of every registered runtime's
-  fingerprint. Core has five types: `always`, `cel`, `webhook`
+  fingerprint. Core has four types: `outcome`, `webhook`
   (`docs/design/08-webhook-block.md`), `branch`
   (`docs/design/15-branch-blocks.md`), and `delegate`
-  (`docs/design/16-pipeline-delegation.md`). An edition adds a kind
+  (`docs/design/16-pipeline-delegation.md`). There is no standalone
+  condition block: "if this, then that" is a branch whose blocks end in
+  an outcome block (the `cel` type was removed on 2026-09-29, and
+  migration `0006_outcome_blocks.sql` wiped stored pipelines). The
+  condition engine (`internal/approvalpipeline/cel.go`, cel-go) stays and
+  evaluates every branch and delegate condition; its version is part of
+  both runtimes' fingerprints (`ConditionEngineFingerprint`). An edition adds a kind
   on two seams: `approvalblock.RegisterKind` (the grammar: type name,
   envelope limits, and a constructor for its strictly decoded `config`,
   which implements `Validate`, and `RoutedConfig` or `ReasonedConfig`
@@ -664,24 +672,25 @@ recorded in this file with both the reason and the replacement rule.
   assistant runs on whatever `application.ToolUseModel` the edition hands
   `runtime.ServerOptions.AssistantModel` (nil disables it and
   `setup_assistant_enabled` reports false); core ships no model adapter.
-- Always blocks return their configured `outcome` (`approve`, `deny`, or
-  `human`) for every request that reaches them. They use the synchronous
-  envelope (50ms default, 1s maximum, one attempt), produce no condition
-  trace, and share normal audit, preview, and routing behavior. Their
-  `escalation_path` is allowed only for `human`. Later blocks are still
-  validated and editable; the editor marks them unreachable, including agent
-  sections after an organization Always, and, for an Always inside a
-  branch, only that branch's later blocks and its end. These warnings do not
-  block activation.
+- Outcome blocks (type `outcome`, renamed from `always`) return their
+  configured `outcome` (`approve`, `deny`, or `human`) for every request
+  that reaches them. They use the synchronous envelope (50ms default, 1s
+  maximum, one attempt), produce no condition trace, and share normal
+  audit, preview, and routing behavior. Their `escalation_path` is allowed
+  only for `human`. Later blocks are still validated and editable; the
+  editor marks them unreachable and, for an outcome block inside a branch,
+  only that branch's later blocks. A branch end nothing can reach is not
+  drawn at all, since a branch holding an outcome block is the normal
+  "if this, then that". These warnings do not block activation.
 - Branch blocks (`docs/design/15-branch-blocks.md`) hold their own ordered
   blocks (any type, nested without a depth cap, every one counted toward
   the 1,000-block document limit) and run them only for requests their
-  `when` matches. The condition is the cel envelope, evaluated
+  `when` matches. The condition is the condition envelope, evaluated
   synchronously under the shared per-segment condition budget, so a skipped
   branch never suspends, delivers, or calls a model. Entering a branch
   commits to it: a block inside that decides ends the pipeline, and a
   branch that runs out of blocks ends it with `human`, the branch's
-  `reason`, and its `escalation_path` (else the pipeline default); nothing
+  optional `reason`, and its `escalation_path` (else the pipeline default); nothing
   after the branch runs, and an inner branch's end never falls back into
   the outer one. A human exit inside a branch that names no path uses the
   pipeline default, never the branch's, and a branch condition that cannot
@@ -906,7 +915,7 @@ recorded in this file with both the reason and the replacement rule.
   holding a top-level `branch` per runtime, block id the runtime key
   and condition `/agent/slug equals <runtime>`, whose body sends the
   suggested tools to a human and approves the rest; `internal/onboarding/generate.go`,
-  inserted before the first top-level always, other blocks untouched,
+  inserted before the first top-level outcome block, other blocks untouched,
   no revision when the document is unchanged) runs under the person's
   own session when they reach the rules step; enrollment is the one CLI-initiated write that mints,
   under a principal rebuilt from the session's membership at that

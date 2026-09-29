@@ -74,7 +74,7 @@ func TestExecutionRequestPathSharesBoundedCompilationMiss(t *testing.T) {
 	repository := newMemoryPipelineRepository()
 	management := NewManagementService(repository, NewCompiledPipelineState(repository, NewBlockRegistry()), fixedPipelineClock{now: now})
 	created, err := management.CreateRevision(context.Background(), pipelineManagerPrincipal("organization-1"), "entry", pipelineName("entry"), []approvalblock.Definition{
-		pipelineDefinition("approve", approvalblock.Approve, approvalblock.Field("/request/tool").Equals("deploy")),
+		outcomeDefinition("approve", approvalblock.Approve),
 	}, Route{})
 	if err != nil {
 		t.Fatal(err)
@@ -133,7 +133,7 @@ func TestExecutionRequestPathSharesBoundedCompilationMiss(t *testing.T) {
 func TestCompiledPipelineStateBoundsCompilationAndFailsRequestToHuman(t *testing.T) {
 	now := time.Unix(11_000, 0).UTC()
 	repository := activeExecutionPipeline(t, now, "entry", []approvalblock.Definition{
-		pipelineDefinition("approve", approvalblock.Approve, approvalblock.Field("/request/tool").Equals("deploy")),
+		outcomeDefinition("approve", approvalblock.Approve),
 	})
 	state := NewCompiledPipelineState(repository, NewBlockRegistry())
 	state.compilationTimeout = 5 * time.Millisecond
@@ -180,13 +180,13 @@ func TestManagementRefreshesActivationRollbackAndDeactivation(t *testing.T) {
 	management := NewManagementService(repository, state, fixedPipelineClock{now: now})
 	principal := pipelineManagerPrincipal("organization-1")
 	first, err := management.CreateRevision(context.Background(), principal, "billing", pipelineName("billing"), []approvalblock.Definition{
-		pipelineDefinition("first", approvalblock.Approve, approvalblock.Field("/request/tool").Equals("deploy")),
+		outcomeDefinition("first", approvalblock.Approve),
 	}, Route{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	second, err := management.CreateRevision(context.Background(), principal, "billing", pipelineName("billing"), []approvalblock.Definition{
-		pipelineDefinition("second", approvalblock.Human, approvalblock.Field("/request/tool").Equals("deploy")),
+		outcomeDefinition("second", approvalblock.Human),
 	}, Route{})
 	if err != nil {
 		t.Fatal(err)
@@ -221,7 +221,7 @@ func TestCompiledPipelineStateSeparatesRuntimeFingerprints(t *testing.T) {
 	}
 	nextState := NewCompiledPipelineState(counter, NewBlockRegistry())
 	nextState.cache = state.cache
-	nextState.runtimeFingerprint = CELRuntimeFingerprint + ";deployment-next"
+	nextState.runtimeFingerprint = state.runtimeFingerprint + ";deployment-next"
 	if nextState.Readiness() == nil {
 		t.Fatal("new runtime reported ready before recompiling active revisions")
 	}
@@ -301,7 +301,7 @@ func createActivePipeline(t *testing.T, repository *memoryPipelineRepository, pi
 	t.Helper()
 	management := NewManagementService(repository, NewCompiledPipelineState(repository, NewBlockRegistry()), fixedPipelineClock{now: time.Unix(9_000, 0).UTC()})
 	created, err := management.CreateRevision(context.Background(), pipelineManagerPrincipal("organization-1"), pipelineKey, pipelineName(pipelineKey), []approvalblock.Definition{
-		pipelineDefinition(blockKey, approvalblock.Approve, approvalblock.Field("/request/tool").Equals("deploy")),
+		outcomeDefinition(blockKey, approvalblock.Approve),
 	}, Route{})
 	if err != nil {
 		t.Fatal(err)

@@ -3,7 +3,7 @@ import { Tooltip } from "./tooltip";
 import { CheckIcon, PersonIcon, XIcon } from "@/ds/icons";
 
 /*
- * Picks what a matching policy block does: approve, deny, or hand the
+ * Picks what an outcome block decides: approve, deny, or hand the
  * request to a human. A domain skin over ToggleGroup; the pressed
  * segment carries the decision color so the block's consequence is
  * visible at a glance.
@@ -56,7 +56,7 @@ export function OutcomeSelect({
   value,
   onValueChange,
   disabled,
-  "aria-label": ariaLabel = "On match",
+  "aria-label": ariaLabel = "Outcome",
   className,
 }: OutcomeSelectProps) {
   return (

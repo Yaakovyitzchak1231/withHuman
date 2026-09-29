@@ -135,10 +135,13 @@ func TestBranchPipelineEndToEnd(t *testing.T) {
 							},
 						},
 						map[string]any{
-							"id": "deny-large", "name": "Deny large refunds", "type": "cel", "enabled": true, "timeout": "50ms", "max_attempts": 1,
+							"id": "large-refunds", "name": "Deny large refunds", "type": "branch", "enabled": true, "timeout": "50ms", "max_attempts": 1,
 							"config": map[string]any{
-								"when": condition("/request/arguments/amount", "greater_than", 1000), "on_match": "deny",
-								"reason": "Refunds over 1000 are never automatic.",
+								"when": condition("/request/arguments/amount", "greater_than", 1000), "reason": "",
+								"blocks": []any{map[string]any{
+									"id": "deny-large", "name": "Deny", "type": "outcome", "enabled": true, "timeout": "50ms", "max_attempts": 1,
+									"config": map[string]any{"outcome": "deny", "reason": "Refunds over 1000 are never automatic."},
+								}},
 							},
 						},
 					},
@@ -146,12 +149,12 @@ func TestBranchPipelineEndToEnd(t *testing.T) {
 				},
 			},
 			map[string]any{
-				"id": "everything-else", "name": "Approve everything else", "type": "always", "enabled": true, "timeout": "50ms", "max_attempts": 1,
+				"id": "everything-else", "name": "Approve everything else", "type": "outcome", "enabled": true, "timeout": "50ms", "max_attempts": 1,
 				"config": map[string]any{"outcome": "approve", "reason": "Other calls are routine."},
 			},
 		},
 	}, http.StatusCreated, &created)
-	if created.BlockCount != 4 || created.Revision != 1 {
+	if created.BlockCount != 5 || created.Revision != 1 {
 		t.Fatalf("created pipeline = %+v, want revision 1 with every block including those inside the branch", created)
 	}
 	var entry struct {

@@ -12,20 +12,20 @@ import (
 	"github.com/withHumanAI/withHuman/approvalblock"
 )
 
-func TestCELBlockMatchesAndDoesNotMatch(t *testing.T) {
+func TestConditionMatchesAndDoesNotMatch(t *testing.T) {
 	condition := approvalblock.All(
 		approvalblock.Field("/request/tool").In("stripe.refund", "stripe.partial_refund"),
 		approvalblock.Field("/request/arguments/amount_cents").LessThan(1000),
 		approvalblock.Field("/request/arguments/customer/email").Regex(`^[^@]+@example\.com$`),
 		approvalblock.Field("/request/arguments/customer/labels").Contains("priority"),
 	)
-	block := mustCompile(t, blockDefinition(approvalblock.Approve, condition))
+	block := mustCompile(t, conditionDefinition(condition))
 
 	matched := execute(t, block, blockInput(`{
 		"amount_cents":900,
 		"customer":{"email":"buyer@example.com","labels":["trial","priority"]}
 	}`))
-	if matched.Outcome != BlockApprove || matched.Reason != "Configured reason." || matched.ErrorCode != "" {
+	if matched.Outcome != BlockEnter || matched.ErrorCode != "" {
 		t.Fatalf("unexpected matching result: %+v", matched)
 	}
 	if len(matched.Evidence.Trace) != 5 || matched.Evidence.Cost == 0 {
@@ -41,29 +41,9 @@ func TestCELBlockMatchesAndDoesNotMatch(t *testing.T) {
 	}
 }
 
-func TestCELBlockReturnsEachConfiguredOutcome(t *testing.T) {
-	for _, test := range []struct {
-		configured approvalblock.Outcome
-		want       BlockOutcome
-	}{
-		{configured: approvalblock.Approve, want: BlockApprove},
-		{configured: approvalblock.Deny, want: BlockDeny},
-		{configured: approvalblock.Human, want: BlockHuman},
-	} {
-		t.Run(string(test.configured), func(t *testing.T) {
-			block := mustCompile(t, blockDefinition(test.configured, approvalblock.Field("/request/tool").Equals("stripe.refund")))
-			result := execute(t, block, blockInput(`{}`))
-			if result.Outcome != test.want || result.ErrorCode != "" {
-				t.Fatalf("got %+v, want outcome %q", result, test.want)
-			}
-		})
-	}
-}
-
-func TestCELMissingNullAndMalformedInputs(t *testing.T) {
+func TestConditionMissingNullAndMalformedInputs(t *testing.T) {
 	t.Run("missing does not match ordinary operator", func(t *testing.T) {
-		block := mustCompile(t, blockDefinition(approvalblock.Approve,
-			approvalblock.Field("/request/arguments/missing").NotEquals("blocked")))
+		block := mustCompile(t, conditionDefinition(approvalblock.Field("/request/arguments/missing").NotEquals("blocked")))
 		result := execute(t, block, blockInput(`{}`))
 		if result.Outcome != BlockNext {
 			t.Fatalf("got %+v, want next", result)
@@ -71,30 +51,27 @@ func TestCELMissingNullAndMalformedInputs(t *testing.T) {
 	})
 
 	t.Run("not exists matches missing", func(t *testing.T) {
-		block := mustCompile(t, blockDefinition(approvalblock.Approve,
-			approvalblock.Field("/request/arguments/missing").NotExists()))
+		block := mustCompile(t, conditionDefinition(approvalblock.Field("/request/arguments/missing").NotExists()))
 		result := execute(t, block, blockInput(`{}`))
-		if result.Outcome != BlockApprove {
-			t.Fatalf("got %+v, want approve", result)
+		if result.Outcome != BlockEnter {
+			t.Fatalf("got %+v, want enter", result)
 		}
 	})
 
 	t.Run("null is present", func(t *testing.T) {
-		block := mustCompile(t, blockDefinition(approvalblock.Approve,
-			approvalblock.All(
-				approvalblock.Field("/request/arguments/value").Exists(),
-				approvalblock.Field("/request/arguments/value").IsNull(),
-			)))
+		block := mustCompile(t, conditionDefinition(approvalblock.All(
+			approvalblock.Field("/request/arguments/value").Exists(),
+			approvalblock.Field("/request/arguments/value").IsNull(),
+		)))
 		result := execute(t, block, blockInput(`{"value":null}`))
-		if result.Outcome != BlockApprove {
-			t.Fatalf("got %+v, want approve", result)
+		if result.Outcome != BlockEnter {
+			t.Fatalf("got %+v, want enter", result)
 		}
 	})
 
 	for _, malformed := range []string{"", `{`, `[]`, `null`, `{"a":1,"a":2}`} {
 		t.Run("malformed "+malformed, func(t *testing.T) {
-			block := mustCompile(t, blockDefinition(approvalblock.Approve,
-				approvalblock.Field("/request/tool").Equals("stripe.refund")))
+			block := mustCompile(t, conditionDefinition(approvalblock.Field("/request/tool").Equals("stripe.refund")))
 			result := execute(t, block, blockInput(malformed))
 			if result.Outcome != BlockHuman || result.ErrorCode != ErrorInvalidInput {
 				t.Fatalf("got %+v, want safe invalid-input handoff", result)
@@ -103,12 +80,11 @@ func TestCELMissingNullAndMalformedInputs(t *testing.T) {
 	}
 }
 
-func TestCELMatchesTheMCPServer(t *testing.T) {
-	block := mustCompile(t, blockDefinition(approvalblock.Approve,
-		approvalblock.Field("/request/server").Equals("stripe")))
+func TestConditionMatchesTheMCPServer(t *testing.T) {
+	block := mustCompile(t, conditionDefinition(approvalblock.Field("/request/server").Equals("stripe")))
 	input := blockInput(`{}`)
 	input.Request.Server = "stripe"
-	if result := execute(t, block, input); result.Outcome != BlockApprove || result.ErrorCode != "" {
+	if result := execute(t, block, input); result.Outcome != BlockEnter || result.ErrorCode != "" {
 		t.Fatalf("got %+v, want the request's server to match", result)
 	}
 	input.Request.Server = "paypal"
@@ -117,7 +93,7 @@ func TestCELMatchesTheMCPServer(t *testing.T) {
 	}
 }
 
-func TestCELBuiltInToolHasNoMCPServer(t *testing.T) {
+func TestConditionBuiltInToolHasNoMCPServer(t *testing.T) {
 	input := blockInput(`{}`)
 	input.Request.Tool = "Bash"
 	for _, condition := range []approvalblock.Condition{
@@ -130,24 +106,22 @@ func TestCELBuiltInToolHasNoMCPServer(t *testing.T) {
 		approvalblock.Field("/request/server").IsNotNull(),
 	} {
 		t.Run(string(condition.Operator), func(t *testing.T) {
-			block := mustCompile(t, blockDefinition(approvalblock.Approve, condition))
+			block := mustCompile(t, conditionDefinition(condition))
 			if result := execute(t, block, input); result.Outcome != BlockNext || result.ErrorCode != "" {
 				t.Fatalf("got %+v, want a missing server to fall through", result)
 			}
 		})
 	}
 	t.Run(string(approvalblock.NotExists), func(t *testing.T) {
-		block := mustCompile(t, blockDefinition(approvalblock.Approve,
-			approvalblock.Field("/request/server").NotExists()))
-		if result := execute(t, block, input); result.Outcome != BlockApprove || result.ErrorCode != "" {
+		block := mustCompile(t, conditionDefinition(approvalblock.Field("/request/server").NotExists()))
+		if result := execute(t, block, input); result.Outcome != BlockEnter || result.ErrorCode != "" {
 			t.Fatalf("got %+v, want not_exists to match a built-in tool", result)
 		}
 	})
 }
 
-func TestCELRuntimeTypeErrorsRequireHumanReview(t *testing.T) {
-	block := mustCompile(t, blockDefinition(approvalblock.Approve,
-		approvalblock.Field("/request/arguments/amount_cents").LessThan(1000)))
+func TestConditionRuntimeTypeErrorsRequireHumanReview(t *testing.T) {
+	block := mustCompile(t, conditionDefinition(approvalblock.Field("/request/arguments/amount_cents").LessThan(1000)))
 	result := execute(t, block, blockInput(`{"amount_cents":"900"}`))
 	if result.Outcome != BlockHuman || result.ErrorCode != ErrorEvaluation {
 		t.Fatalf("got %+v, want evaluation error and human review", result)
@@ -156,8 +130,7 @@ func TestCELRuntimeTypeErrorsRequireHumanReview(t *testing.T) {
 		t.Fatalf("runtime error leaked through reason: %q", result.Reason)
 	}
 
-	nested := mustCompile(t, blockDefinition(approvalblock.Approve,
-		approvalblock.Field("/request/arguments/customer/email").Equals("buyer@example.com")))
+	nested := mustCompile(t, conditionDefinition(approvalblock.Field("/request/arguments/customer/email").Equals("buyer@example.com")))
 	result = execute(t, nested, blockInput(`{"customer":"not-an-object"}`))
 	if result.Outcome != BlockHuman || result.ErrorCode != ErrorEvaluation {
 		t.Fatalf("got %+v, want scalar traversal to require human review", result)
@@ -165,8 +138,7 @@ func TestCELRuntimeTypeErrorsRequireHumanReview(t *testing.T) {
 
 	// A string target reads the configured values as substrings, so only
 	// a non-string comparison or a non-container target is an error.
-	set := mustCompile(t, blockDefinition(approvalblock.Approve,
-		approvalblock.Field("/request/arguments/command").ContainsAny("python3", 3)))
+	set := mustCompile(t, conditionDefinition(approvalblock.Field("/request/arguments/command").ContainsAny("python3", 3)))
 	result = execute(t, set, blockInput(`{"command":"pip install requests"}`))
 	if result.Outcome != BlockHuman || result.ErrorCode != ErrorEvaluation {
 		t.Fatalf("got %+v, want a numeric substring comparison to require human review", result)
@@ -175,15 +147,14 @@ func TestCELRuntimeTypeErrorsRequireHumanReview(t *testing.T) {
 	if result.Outcome != BlockHuman || result.ErrorCode != ErrorEvaluation {
 		t.Fatalf("got %+v, want a scalar containment target to require human review", result)
 	}
-	miss := mustCompile(t, blockDefinition(approvalblock.Approve,
-		approvalblock.Field("/request/arguments/command").ContainsAny("python3", "sudo")))
+	miss := mustCompile(t, conditionDefinition(approvalblock.Field("/request/arguments/command").ContainsAny("python3", "sudo")))
 	result = execute(t, miss, blockInput(`{"command":"du -hd 2 ~/Library/Caches | sort -h"}`))
 	if result.Outcome != BlockNext || result.ErrorCode != "" {
 		t.Fatalf("got %+v, want a string without any of the substrings to fall through", result)
 	}
 }
 
-func TestCELQuantifiersAndArrayOperators(t *testing.T) {
+func TestConditionQuantifiersAndArrayOperators(t *testing.T) {
 	tests := []struct {
 		name      string
 		condition approvalblock.Condition
@@ -195,14 +166,14 @@ func TestCELQuantifiersAndArrayOperators(t *testing.T) {
 			condition: approvalblock.Some("/request/arguments/items",
 				approvalblock.Field("/amount").GreaterThan(100)),
 			arguments: `{"items":[{"amount":50},{"amount":150}]}`,
-			want:      BlockApprove,
+			want:      BlockEnter,
 		},
 		{
 			name: "every",
 			condition: approvalblock.Every("/request/arguments/items",
 				approvalblock.Field("/enabled").IsTrue()),
 			arguments: `{"items":[{"enabled":true},{"enabled":true}]}`,
-			want:      BlockApprove,
+			want:      BlockEnter,
 		},
 		{
 			name: "empty every is false",
@@ -215,18 +186,18 @@ func TestCELQuantifiersAndArrayOperators(t *testing.T) {
 			name:      "contains all",
 			condition: approvalblock.Field("/request/arguments/labels").ContainsAll("priority", "trial"),
 			arguments: `{"labels":["trial","priority","paid"]}`,
-			want:      BlockApprove,
+			want:      BlockEnter,
 		},
 		{
 			name:      "escaped pointer",
 			condition: approvalblock.Field("/request/arguments/a~1b/~0key").Equals("value"),
 			arguments: `{"a/b":{"~key":"value"}}`,
-			want:      BlockApprove,
+			want:      BlockEnter,
 		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			block := mustCompile(t, blockDefinition(approvalblock.Approve, test.condition))
+			block := mustCompile(t, conditionDefinition(test.condition))
 			result := execute(t, block, blockInput(test.arguments))
 			if result.Outcome != test.want || result.ErrorCode != "" {
 				t.Fatalf("got %+v, want %q", result, test.want)
@@ -235,7 +206,7 @@ func TestCELQuantifiersAndArrayOperators(t *testing.T) {
 	}
 }
 
-func TestCELEachLeafOperator(t *testing.T) {
+func TestConditionEachLeafOperator(t *testing.T) {
 	tests := []struct {
 		name      string
 		condition approvalblock.Condition
@@ -270,16 +241,16 @@ func TestCELEachLeafOperator(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			block := mustCompile(t, blockDefinition(approvalblock.Approve, test.condition))
+			block := mustCompile(t, conditionDefinition(test.condition))
 			result := execute(t, block, blockInput(test.arguments))
-			if result.Outcome != BlockApprove || result.ErrorCode != "" {
-				t.Fatalf("got %+v, want matching approve", result)
+			if result.Outcome != BlockEnter || result.ErrorCode != "" {
+				t.Fatalf("got %+v, want a match", result)
 			}
 		})
 	}
 }
 
-func TestCELCompilationRejectsInvalidSyntaxTypesAndFields(t *testing.T) {
+func TestConditionCompilationRejectsInvalidSyntaxTypesAndFields(t *testing.T) {
 	if _, err := compileLeafProgram(")", operatorBinding(approvalblock.Equals, nil)); err == nil {
 		t.Fatal("invalid CEL syntax unexpectedly compiled")
 	}
@@ -287,23 +258,20 @@ func TestCELCompilationRejectsInvalidSyntaxTypesAndFields(t *testing.T) {
 		t.Fatalf("got %v, want CEL result type error", err)
 	}
 
-	prohibited := blockDefinition(approvalblock.Approve,
-		approvalblock.Field("/request/context/trusted").Equals(true))
-	if _, err := CompileCELBlock(prohibited); err == nil || !strings.Contains(err.Error(), "not available") {
+	prohibited := conditionDefinition(approvalblock.Field("/request/context/trusted").Equals(true))
+	if _, err := CompileBranchBlock(prohibited); err == nil || !strings.Contains(err.Error(), "not available") {
 		t.Fatalf("got %v, want prohibited-field error", err)
 	}
 
-	typeError := blockDefinition(approvalblock.Approve,
-		approvalblock.Field("/agent/slug").LessThan(10))
-	if _, err := CompileCELBlock(typeError); err == nil || !strings.Contains(err.Error(), "known string") {
+	typeError := conditionDefinition(approvalblock.Field("/agent/slug").LessThan(10))
+	if _, err := CompileBranchBlock(typeError); err == nil || !strings.Contains(err.Error(), "known string") {
 		t.Fatalf("got %v, want authoring type error", err)
 	}
 }
 
-func TestCELResourceLimitsFailClosed(t *testing.T) {
+func TestConditionResourceLimitsFailClosed(t *testing.T) {
 	t.Run("request size", func(t *testing.T) {
-		block := mustCompile(t, blockDefinition(approvalblock.Approve,
-			approvalblock.Field("/request/arguments/value").Contains("x")))
+		block := mustCompile(t, conditionDefinition(approvalblock.Field("/request/arguments/value").Contains("x")))
 		arguments, _ := json.Marshal(map[string]any{"value": strings.Repeat("x", approvalblock.MaximumRequestInputBytes)})
 		result := execute(t, block, blockInput(string(arguments)))
 		if result.Outcome != BlockHuman || result.ErrorCode != ErrorInvalidInput {
@@ -312,8 +280,7 @@ func TestCELResourceLimitsFailClosed(t *testing.T) {
 	})
 
 	t.Run("request size counts the server", func(t *testing.T) {
-		block := mustCompile(t, blockDefinition(approvalblock.Approve,
-			approvalblock.Field("/request/tool").Equals("stripe.refund")))
+		block := mustCompile(t, conditionDefinition(approvalblock.Field("/request/tool").Equals("stripe.refund")))
 		input := blockInput(`{}`)
 		input.Request.Server = strings.Repeat("s", approvalblock.MaximumRequestInputBytes)
 		result := execute(t, block, input)
@@ -323,8 +290,7 @@ func TestCELResourceLimitsFailClosed(t *testing.T) {
 	})
 
 	t.Run("comprehension entries", func(t *testing.T) {
-		block := mustCompile(t, blockDefinition(approvalblock.Approve,
-			approvalblock.Some("/request/arguments/items", approvalblock.Field("").Equals("match"))))
+		block := mustCompile(t, conditionDefinition(approvalblock.Some("/request/arguments/items", approvalblock.Field("").Equals("match"))))
 		items := make([]string, approvalblock.MaximumComprehensionEntries+1)
 		arguments, _ := json.Marshal(map[string]any{"items": items})
 		result := execute(t, block, blockInput(string(arguments)))
@@ -334,8 +300,7 @@ func TestCELResourceLimitsFailClosed(t *testing.T) {
 	})
 
 	t.Run("evaluation cost", func(t *testing.T) {
-		block := mustCompile(t, blockDefinition(approvalblock.Approve,
-			approvalblock.Field("/request/arguments/value").Contains("needle")))
+		block := mustCompile(t, conditionDefinition(approvalblock.Field("/request/arguments/value").Contains("needle")))
 		arguments, _ := json.Marshal(map[string]any{"value": strings.Repeat("a", approvalblock.MaximumEvaluationCost+1)})
 		result := execute(t, block, blockInput(string(arguments)))
 		if result.Outcome != BlockHuman || result.ErrorCode != ErrorCostLimit {
@@ -348,31 +313,30 @@ func TestCELResourceLimitsFailClosed(t *testing.T) {
 		for index := range conditions {
 			conditions[index] = approvalblock.Field("/request/arguments/value").Equals(index)
 		}
-		if _, err := CompileCELBlock(blockDefinition(approvalblock.Approve, approvalblock.All(conditions...))); err == nil || !strings.Contains(err.Error(), "expression exceeds") {
+		if _, err := CompileBranchBlock(conditionDefinition(approvalblock.All(conditions...))); err == nil || !strings.Contains(err.Error(), "expression exceeds") {
 			t.Fatalf("got %v, want expression-size error", err)
 		}
 	})
 
-	t.Run("blocks per request", func(t *testing.T) {
-		block := mustCompile(t, blockDefinition(approvalblock.Approve,
-			approvalblock.Field("/request/tool").Equals("stripe.refund")))
+	t.Run("conditions per request", func(t *testing.T) {
+		block := mustCompile(t, conditionDefinition(approvalblock.Field("/request/tool").Equals("stripe.refund")))
 		input := blockInput(`{}`)
 		input.Budget = &BlockExecutionBudget{}
-		for range approvalblock.MaximumCELBlocksPerRequest {
+		for range approvalblock.MaximumConditionsPerRequest {
 			result := execute(t, block, input)
-			if result.Outcome != BlockApprove {
+			if result.Outcome != BlockEnter {
 				t.Fatalf("budget failed early: %+v", result)
 			}
 		}
 		result := execute(t, block, input)
 		if result.Outcome != BlockHuman || result.ErrorCode != ErrorResourceLimit {
-			t.Fatalf("got %+v, want block-count handoff", result)
+			t.Fatalf("got %+v, want condition-budget handoff", result)
 		}
 	})
 }
 
-func TestCELEvaluationIsDeterministicAndIgnoresPreviousMetadata(t *testing.T) {
-	definition := blockDefinition(approvalblock.Deny, approvalblock.Any(
+func TestConditionEvaluationIsDeterministicAndIgnoresPreviousMetadata(t *testing.T) {
+	definition := conditionDefinition(approvalblock.Any(
 		approvalblock.Field("/agent/slug").Equals("billing"),
 		approvalblock.Field("/request/arguments/amount").GreaterThan(500),
 	))
@@ -388,10 +352,8 @@ func TestCELEvaluationIsDeterministicAndIgnoresPreviousMetadata(t *testing.T) {
 		}
 	}
 
-	definition.CEL.OnMatch = approvalblock.Approve
-	definition.CEL.Reason = "Mutated after compilation."
-	got := execute(t, block, input)
-	if got.Outcome != BlockDeny || got.Reason != "Configured reason." {
+	definition.Branch.When = approvalblock.Field("/agent/slug").Equals("nobody")
+	if got := execute(t, block, input); got.Outcome != BlockEnter {
 		t.Fatalf("compiled block was mutable through source definition: %+v", got)
 	}
 }
@@ -428,12 +390,11 @@ func TestExecutionContractSafelyHandlesErrorsPanicsAndAmbiguousResults(t *testin
 	}
 }
 
-func TestCELContextCancellationRequiresHumanReview(t *testing.T) {
-	block := mustCompile(t, blockDefinition(approvalblock.Approve,
-		approvalblock.Field("/request/tool").Equals("stripe.refund")))
+func TestConditionContextCancellationRequiresHumanReview(t *testing.T) {
+	block := mustCompile(t, conditionDefinition(approvalblock.Field("/request/tool").Equals("stripe.refund")))
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	result := ExecuteRequestApprovalBlock(ctx, block, blockInput(`{}`))
+	result := executeBranchCondition(ctx, block, blockInput(`{}`))
 	if result.Outcome != BlockHuman || result.ErrorCode != ErrorTimeout {
 		t.Fatalf("got %+v, want timeout handoff", result)
 	}
@@ -445,13 +406,14 @@ func (block fakeBlock) Evaluate(ctx context.Context, input RequestApprovalBlockI
 	return block(ctx, input)
 }
 
-func blockDefinition(outcome approvalblock.Outcome, condition approvalblock.Condition) approvalblock.Definition {
-	return *approvalblock.Define(
+// conditionDefinition is a branch testing condition, the shortest way to
+// run the condition engine through a real block: a match enters it.
+func conditionDefinition(condition approvalblock.Condition) approvalblock.Definition {
+	return *approvalblock.DefineBranch(
 		"test-block",
+		[]approvalblock.Definition{*approvalblock.DefineOutcome("inside", approvalblock.Approve, approvalblock.Reason("Configured reason."))},
 		approvalblock.Name("Test block"),
-		approvalblock.OnMatch(outcome),
 		approvalblock.When(condition),
-		approvalblock.Reason("Configured reason."),
 	)
 }
 
@@ -462,9 +424,9 @@ func blockInput(arguments string) RequestApprovalBlockInput {
 	}
 }
 
-func mustCompile(t *testing.T, definition approvalblock.Definition) *CompiledCELBlock {
+func mustCompile(t *testing.T, definition approvalblock.Definition) *CompiledBranchBlock {
 	t.Helper()
-	block, err := CompileCELBlock(definition)
+	block, err := CompileBranchBlock(definition)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -473,7 +435,7 @@ func mustCompile(t *testing.T, definition approvalblock.Definition) *CompiledCEL
 
 func execute(t *testing.T, block RequestApprovalBlock, input RequestApprovalBlockInput) RequestApprovalBlockResult {
 	t.Helper()
-	return ExecuteRequestApprovalBlock(context.Background(), block, input)
+	return executeBranchCondition(context.Background(), block, input)
 }
 
 func TestOperatorBindingNeverReturnsAnAmbiguousCELValue(t *testing.T) {
@@ -483,13 +445,13 @@ func TestOperatorBindingNeverReturnsAnAmbiguousCELValue(t *testing.T) {
 	}
 }
 
-func TestCELReadsPreviousBlockMetadataByPipelineAndKey(t *testing.T) {
-	block := mustCompile(t, blockDefinition(approvalblock.Approve, approvalblock.All(
+func TestConditionReadsPreviousBlockMetadataByPipelineAndKey(t *testing.T) {
+	block := mustCompile(t, conditionDefinition(approvalblock.All(
 		approvalblock.Field("/previous_metadata/entry/fraud-check/risk_score").LessThan(50),
 	)))
 	input := blockInput(`{"amount_cents":900}`)
 	input.PreviousMetadata = map[string]json.RawMessage{"entry/fraud-check": json.RawMessage(`{"risk_score":12,"band":"low"}`)}
-	if result := execute(t, block, input); result.Outcome != BlockApprove {
+	if result := execute(t, block, input); result.Outcome != BlockEnter {
 		t.Fatalf("threshold on previous metadata did not match: %+v", result)
 	}
 	input.PreviousMetadata = map[string]json.RawMessage{"billing/fraud-check": json.RawMessage(`{"risk_score":12}`)}
@@ -500,14 +462,14 @@ func TestCELReadsPreviousBlockMetadataByPipelineAndKey(t *testing.T) {
 	if result := execute(t, block, input); result.Outcome != BlockNext || result.ErrorCode != "" {
 		t.Fatalf("absent block did not fall through: %+v", result)
 	}
-	absent := mustCompile(t, blockDefinition(approvalblock.Human, approvalblock.All(
+	absent := mustCompile(t, conditionDefinition(approvalblock.All(
 		approvalblock.Field("/previous_metadata/entry/fraud-check").NotExists(),
 	)))
-	if result := execute(t, absent, input); result.Outcome != BlockHuman {
+	if result := execute(t, absent, input); result.Outcome != BlockEnter {
 		t.Fatalf("not_exists did not match an absent block: %+v", result)
 	}
 	for _, path := range []string{"/previous_metadata", "/previous_metadata/entry", "/previous_metadata/Bad_Key/x", "/previous_metadata/entry/"} {
-		if _, err := CompileCELBlock(blockDefinition(approvalblock.Approve, approvalblock.Field(path).Exists())); err == nil {
+		if _, err := CompileBranchBlock(conditionDefinition(approvalblock.Field(path).Exists())); err == nil {
 			t.Fatalf("path %q compiled", path)
 		}
 	}

@@ -5,15 +5,15 @@ import {
   type PathCondition,
   type TeamPath,
 } from "@/ds/components/escalation-tree";
+import { BranchBlockSummaryCard, type BranchBlockDraft } from "@/ds/components/branch-block";
+import { OutcomeBlockCard, OutcomeBlockSummaryCard, type OutcomeBlockDraft } from "@/ds/components/outcome-block";
 import {
-  PipelineConditionExits,
+  PipelineBranchWell,
   PipelineConnector,
   PipelineEntryCard,
+  PipelineExits,
   PipelineTerminusCard,
-  PolicyBlockCard,
-  PolicyBlockSummaryCard,
-  type PolicyBlockDraft,
-} from "@/ds/components/policy-block";
+} from "@/ds/components/pipeline-flow";
 import {
   TargetBadge,
   TargetSelect,
@@ -44,13 +44,21 @@ const SUGGESTIONS = [
   "/agent/slug",
 ];
 
-const LARGE_REFUNDS: PolicyBlockDraft = {
-  id: "large-refunds",
-  name: "Large refunds need payments",
+/* Two gates: each a branch holding one Outcome block that asks a
+ * human, one naming a team's path and one naming nobody. */
+const LARGE_REFUNDS: OutcomeBlockDraft = {
+  id: "ask-payments",
+  name: "Ask payments",
   enabled: true,
   outcome: "human",
   target: PAYMENTS,
   reason: "Refunds over 100 USD are reviewed by the payments approvers.",
+};
+
+const LARGE_REFUNDS_GATE: BranchBlockDraft<OutcomeBlockDraft> = {
+  id: "large-refunds",
+  name: "Large refunds need payments",
+  enabled: true,
   when: {
     id: "rr-g1",
     all: [
@@ -58,21 +66,33 @@ const LARGE_REFUNDS: PolicyBlockDraft = {
       { id: "rr-c2", field: "/request/arguments/amount_cents", operator: "greater_than_or_equal", value: 10000 },
     ],
   },
+  blocks: [LARGE_REFUNDS],
+  reason: "",
+  target: null,
 };
 
-const UNKNOWN_TOOLS: PolicyBlockDraft = {
-  id: "unknown-tools",
-  name: "Unknown tools ask a human",
+const UNKNOWN_TOOLS: OutcomeBlockDraft = {
+  id: "ask-someone",
+  name: "Ask someone",
   enabled: true,
   outcome: "human",
   target: null,
   reason: "",
+};
+
+const UNKNOWN_TOOLS_GATE: BranchBlockDraft<OutcomeBlockDraft> = {
+  id: "unknown-tools",
+  name: "Unknown tools ask a human",
+  enabled: true,
   when: {
     id: "rr-g2",
     all: [
       { id: "rr-c3", field: "/request/tool", operator: "not_in", value: ["crm.update_note", "crm.tag"] },
     ],
   },
+  blocks: [UNKNOWN_TOOLS],
+  reason: "",
+  target: null,
 };
 
 /* The finance leads' own escalation policy, opened inline from a path
@@ -129,7 +149,7 @@ const TEAM_POLICIES = new Map<string, TeamPath>([[FINANCE.id, FINANCE_POLICY]]);
 
 export function ReviewerRoutingSection() {
   const [picked, setPicked] = useState<ReviewerTarget | null>(PAYMENTS);
-  const [large, setLarge] = useState<PolicyBlockDraft>(LARGE_REFUNDS);
+  const [large, setLarge] = useState<OutcomeBlockDraft>(LARGE_REFUNDS);
   const [largeExpanded, setLargeExpanded] = useState(true);
   const [terminusTarget, setTerminusTarget] = useState<ReviewerTarget | null>(BILLING_ONCALL);
   /* The overview's terminus: saved on its own, never part of a draft. */
@@ -191,21 +211,26 @@ export function ReviewerRoutingSection() {
         <div className="flex flex-col">
           <PipelineEntryCard />
           <PipelineConnector />
-          <PolicyBlockCard
-            block={large}
-            position={1}
-            expanded={largeExpanded}
-            onExpandedChange={setLargeExpanded}
-            onChange={setLarge}
-            onRemove={() => undefined}
-            onDuplicate={() => undefined}
-            handleProps={{}}
-            suggestions={SUGGESTIONS}
-            directory={DIRECTORY}
-          />
-          <PipelineConditionExits outcome={large.outcome} target={large.target} />
-          <PolicyBlockSummaryCard block={UNKNOWN_TOOLS} position={2} />
-          <PipelineConditionExits outcome="human" target={UNKNOWN_TOOLS.target} matched />
+          <BranchBlockSummaryCard block={LARGE_REFUNDS_GATE} position={1} />
+          <PipelineBranchWell name={LARGE_REFUNDS_GATE.name} depth={1}>
+            <OutcomeBlockCard
+              block={large}
+              position="1.1"
+              expanded={largeExpanded}
+              onExpandedChange={setLargeExpanded}
+              onChange={setLarge}
+              onRemove={() => undefined}
+              onDuplicate={() => undefined}
+              handleProps={{}}
+              directory={DIRECTORY}
+            />
+            <PipelineExits exits={[{ key: "match", label: "Every request", outcome: large.outcome, target: large.target }]} />
+          </PipelineBranchWell>
+          <BranchBlockSummaryCard block={UNKNOWN_TOOLS_GATE} position={2} />
+          <PipelineBranchWell name={UNKNOWN_TOOLS_GATE.name} depth={1} taken="enter">
+            <OutcomeBlockSummaryCard block={UNKNOWN_TOOLS} position="2.1" />
+            <PipelineExits exits={[{ key: "match", label: "Every request", outcome: "human", target: UNKNOWN_TOOLS.target }]} matchedKey="match" />
+          </PipelineBranchWell>
           <PipelineConnector />
           <PipelineTerminusCard
             target={terminusTarget}
@@ -219,7 +244,7 @@ export function ReviewerRoutingSection() {
           expanded card gains one row, Escalation path, only while its outcome is human: change
           the outcome to Approve and the row leaves. In the product the row also renders the
           chosen team's path tree beneath the picker, and a team chip on an exit opens the same
-          tree in viewing mode. The second block names nobody, so its exit
+          tree in viewing mode. The second branch's block names nobody, so its exit
           shows Pipeline default and inherits whatever the terminus says. The terminus is the
           one place the default is set; in editing mode it is a picker in the sentence, and a
           fall-through request goes to the same place.

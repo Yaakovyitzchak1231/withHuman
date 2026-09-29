@@ -12,7 +12,7 @@ import (
 // DelegateRuntimeFingerprint versions delegate semantics: enter or skip on
 // the condition, commit on entry, the target pipeline's blocks spliced in
 // after the block, and the closing human outcome when the target runs out.
-const DelegateRuntimeFingerprint = "withhuman-delegate-block/v1;limits/v1"
+const DelegateRuntimeFingerprint = "withhuman-delegate-block/v1;limits/v1;" + ConditionEngineFingerprint
 
 const delegateConfigVersion = 1
 

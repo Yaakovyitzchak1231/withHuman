@@ -2,6 +2,8 @@
 
 Status: accepted · Last updated: 2026-09-23
 
+> **Amended 2026-09-29.** The standalone `cel` block type is gone and the `always` block is renamed `outcome`. "If this, then that" is a branch whose blocks end in an outcome block; a branch's `reason` is optional, and the editor does not draw a branch end nothing can reach. The CEL condition engine described here stays and evaluates every branch and delegate condition. See [16-pipeline-delegation.md](16-pipeline-delegation.md#blocks-after-the-redesign).
+
 ## Summary
 
 withHuman uses the [Common Expression Language

@@ -1,15 +1,14 @@
 import { FIXED_FIELDS, type ConditionNode } from "@/ds/components/condition-builder";
 import type { BranchBlockDraft } from "@/ds/components/branch-block";
 import type { DelegateBlockDraft } from "@/ds/components/delegate-block";
-import type { AlwaysBlockDraft, PolicyBlockDraft } from "@/ds/components/policy-block";
+import type { OutcomeBlockDraft } from "@/ds/components/outcome-block";
 import type { ReviewerTarget } from "@/ds/components/reviewer-target";
 import type { WebhookBlockDraft } from "@/ds/components/webhook-block";
 import type {
   ApprovalRequest,
-  AlwaysBlockDefinition,
   BranchBlockDefinition,
-  CELBlockDefinition,
   DelegateBlockDefinition,
+  OutcomeBlockDefinition,
   WebhookBlockDefinition,
   RequestApprovalBlockDefinition,
   RequestApprovalPipelineDocument,
@@ -58,8 +57,7 @@ export interface UnknownBlockDraft extends BlockDraftBase {
 }
 
 export type BlockDraft =
-  | ({ kind: "always" } & AlwaysBlockDraft)
-  | ({ kind: "cel" } & PolicyBlockDraft)
+  | ({ kind: "outcome" } & OutcomeBlockDraft)
   | ({ kind: "webhook" } & WebhookBlockDraft)
   | BranchDraft
   | DelegateDraft
@@ -74,14 +72,13 @@ export function blockTypeOf(draft: BlockDraft): string {
 /* Every block type this bundle can read: core's kinds and the
  * registered ones, in the order a message lists them. */
 export function knownBlockTypes(): string[] {
-  return ["always", "branch", "cel", "delegate", "webhook", ...extensions.blockKinds.map((kind) => kind.type)].sort();
+  return ["branch", "delegate", "outcome", "webhook", ...extensions.blockKinds.map((kind) => kind.type)].sort();
 }
 
 /* Envelope defaults per core block type; the server enforces the
  * matching per-type limits. A registered kind carries its own. */
 export const BLOCK_ENVELOPE_DEFAULTS = {
-  always: { timeout: "50ms", max_attempts: 1 },
-  cel: { timeout: "50ms", max_attempts: 1 },
+  outcome: { timeout: "50ms", max_attempts: 1 },
   webhook: { timeout: "5s", max_attempts: 3 },
   branch: { timeout: "50ms", max_attempts: 1 },
   delegate: { timeout: "50ms", max_attempts: 1 },
@@ -209,20 +206,9 @@ function draftFromBlock(
   const config = block.config as { escalation_path?: string; ask_agent_owner?: boolean };
   const target = pathTarget(config.escalation_path, directory, config.ask_agent_owner);
   switch (block.type) {
-    case "always":
-      return { kind: "always", id: block.id, name: block.name, enabled: true,
+    case "outcome":
+      return { kind: "outcome", id: block.id, name: block.name, enabled: true,
         outcome: block.config.outcome, reason: block.config.reason, target };
-    case "cel":
-      return {
-        kind: "cel",
-        id: block.id,
-        name: block.name,
-        enabled: true,
-        outcome: block.config.on_match,
-        when: editableCondition(block.config.when),
-        reason: block.config.reason,
-        target,
-      };
     case "webhook":
       return {
         kind: "webhook",
@@ -290,28 +276,15 @@ function definitionFromDraft(draft: BlockDraft): RequestApprovalBlockDefinition 
   const escalationPath = pathKeyOf(draft.target);
   const route = routeConfig(draft.target);
   switch (draft.kind) {
-    case "always": {
-      const definition: AlwaysBlockDefinition = {
-        id: draft.id, name: draft.name, type: "always", enabled: true,
-        ...BLOCK_ENVELOPE_DEFAULTS.always,
-        config: {
-          outcome: draft.outcome, reason: draft.reason,
-          ...(draft.outcome === "human" ? route : {}),
-        },
-      };
-      return definition;
-    }
-    case "cel": {
-      const definition: CELBlockDefinition = {
+    case "outcome": {
+      const definition: OutcomeBlockDefinition = {
         id: draft.id,
         name: draft.name,
-        type: "cel",
+        type: "outcome",
         enabled: true,
-        timeout: BLOCK_ENVELOPE_DEFAULTS.cel.timeout,
-        max_attempts: BLOCK_ENVELOPE_DEFAULTS.cel.max_attempts,
+        ...BLOCK_ENVELOPE_DEFAULTS.outcome,
         config: {
-          on_match: draft.outcome,
-          when: draft.when as unknown as Record<string, unknown>,
+          outcome: draft.outcome,
           reason: draft.reason,
           /* Only a human outcome has a "where"; the server rejects a path
            * on an automatic one. */
@@ -392,7 +365,7 @@ export function documentFromDrafts(
 
 /* A stored revision's blocks as a document to save again, exactly as
  * they were: only the snapshot fields go, at every depth. Unlike a trip
- * through drafts, nothing the editor does not model (an Always block's
+ * through drafts, nothing the editor does not model (an Outcome block's
  * timeout, say) is reset to a default. */
 export function definitionsFromStored(blocks: StoredRequestApprovalBlock[]): RequestApprovalBlockDefinition[] {
   return blocks.map((block): RequestApprovalBlockDefinition => {
@@ -418,22 +391,11 @@ function newCondition(): ConditionNode {
 }
 
 /* A new block of a type: core's own, or a registered kind's. */
-export function newDraftBlock(type: string = "cel"): BlockDraft {
+export function newDraftBlock(type: string): BlockDraft {
   switch (type) {
-    case "always":
-      return { kind: "always", id: newBlockId(), name: "", enabled: true,
+    case "outcome":
+      return { kind: "outcome", id: newBlockId(), name: "", enabled: true,
         outcome: "human", reason: "", target: null };
-    case "cel":
-      return {
-        kind: "cel",
-        id: newBlockId(),
-        name: "",
-        enabled: true,
-        outcome: "human",
-        when: newCondition(),
-        reason: "",
-        target: null,
-      };
     case "webhook":
       return {
         kind: "webhook",
@@ -497,12 +459,10 @@ function copyCondition(node: ConditionNode): ConditionNode {
 function copyDraft(draft: BlockDraft): BlockDraft {
   const id = newBlockId();
   switch (draft.kind) {
-    case "always":
+    case "outcome":
     case "edition":
     case "unknown":
       return { ...draft, id };
-    case "cel":
-      return { ...draft, id, when: copyCondition(draft.when) };
     case "webhook":
       return { ...draft, id, allowedOutcomes: [...draft.allowedOutcomes], include: { ...draft.include } };
     case "branch":
@@ -559,15 +519,12 @@ export function validateDrafts(drafts: BlockDraft[], { pipelineKey = "" }: { pip
       if (block.pipelineKey === pipelineKey) return `${label} cannot hand requests to this pipeline itself.`;
       continue;
     }
-    if (!block.reason.trim()) return `${label} needs a reason.`;
+    /* A branch's reason is optional: without one the server sends a
+     * generated explanation. */
+    if (block.kind !== "branch" && !block.reason.trim()) return `${label} needs a reason.`;
     switch (block.kind) {
-      case "always":
+      case "outcome":
         break;
-      case "cel": {
-        const problem = conditionProblem(block.when, label);
-        if (problem) return problem;
-        break;
-      }
       case "webhook":
         if (!block.endpointKey) return `${label} needs an endpoint.`;
         if (block.allowedOutcomes.length === 0) return `${label} needs at least one allowed outcome.`;
@@ -677,16 +634,4 @@ export function takeTestSample(pipelineKey: string): string | null {
   const { text } = handedOffSample;
   handedOffSample = null;
   return text;
-}
-
-/* Every pipeline key the tree's delegate blocks name, in tree order,
- * each once. */
-export function delegatedKeys(drafts: BlockDraft[]): string[] {
-  const keys: string[] = [];
-  for (const { block } of walkDrafts(drafts)) {
-    if (block.kind === "delegate" && block.pipelineKey && !keys.includes(block.pipelineKey)) {
-      keys.push(block.pipelineKey);
-    }
-  }
-  return keys;
 }

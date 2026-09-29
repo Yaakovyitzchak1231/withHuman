@@ -17,13 +17,13 @@ import (
 func TestExecutionRunsTheEntryPipelineStopsAtFirstTerminalAndCachesRevision(t *testing.T) {
 	now := time.Unix(1_000, 0).UTC()
 	pipelines := activeExecutionPipeline(t, now, "entry", []approvalblock.Definition{
-		pipelineDefinition("skip", approvalblock.Approve, approvalblock.Field("/request/tool").Equals("other.tool")),
-		pipelineDefinition("deny", approvalblock.Deny, approvalblock.Field("/request/tool").Equals("deploy")),
-		pipelineDefinition("later", approvalblock.Approve, approvalblock.Field("/request/tool").Equals("deploy")),
+		decideWhen("skip", approvalblock.Approve, approvalblock.Field("/request/tool").Equals("other.tool")),
+		decideWhen("deny", approvalblock.Deny, approvalblock.Field("/request/tool").Equals("deploy")),
+		decideWhen("later", approvalblock.Approve, approvalblock.Field("/request/tool").Equals("deploy")),
 	})
 	management := NewManagementService(pipelines, NewCompiledPipelineState(pipelines, NewBlockRegistry()), fixedPipelineClock{now: now})
 	release, err := management.CreateRevision(context.Background(), pipelineManagerPrincipal("organization-1"), "release", pipelineName("release"), []approvalblock.Definition{
-		pipelineDefinition("approve", approvalblock.Approve, approvalblock.Field("/request/tool").Equals("deploy")),
+		decideWhen("approve", approvalblock.Approve, approvalblock.Field("/request/tool").Equals("deploy")),
 	}, Route{})
 	if err != nil {
 		t.Fatal(err)
@@ -49,6 +49,7 @@ func TestExecutionRunsTheEntryPipelineStopsAtFirstTerminalAndCachesRevision(t *t
 		pipelineStartedEvent,
 		blockEvaluatedEvent,
 		blockEvaluatedEvent,
+		blockEvaluatedEvent,
 		pipelineCompletedEvent,
 		"approval.decided",
 	}
@@ -60,21 +61,23 @@ func TestExecutionRunsTheEntryPipelineStopsAtFirstTerminalAndCachesRevision(t *t
 			t.Fatalf("audit event %d = %q, want %q", index, input.AuditEvents[index].EventType, want)
 		}
 	}
-	firstBlock := auditData(t, input.AuditEvents[2])
-	secondBlock := auditData(t, input.AuditEvents[3])
-	if firstBlock["block_key"] != "skip" || firstBlock["outcome"] != "next" || secondBlock["block_key"] != "deny" || secondBlock["outcome"] != "deny" {
-		t.Fatalf("blocks were not evaluated in terminal order: first=%#v second=%#v", firstBlock, secondBlock)
+	skipped := auditData(t, input.AuditEvents[2])
+	entered := auditData(t, input.AuditEvents[3])
+	decided := auditData(t, input.AuditEvents[4])
+	if skipped["block_key"] != "skip" || skipped["outcome"] != "next" || entered["block_key"] != "deny" || entered["outcome"] != "enter" ||
+		decided["block_key"] != outcomeKey("deny") || decided["outcome"] != "deny" {
+		t.Fatalf("blocks were not evaluated in terminal order: %#v %#v %#v", skipped, entered, decided)
 	}
 	// The configured reason and the block's name are what the review
 	// context shows a reviewer, so the event has to carry them.
-	if secondBlock["reason"] != "Configured reason." || secondBlock["block_name"] != "deny" {
-		t.Fatalf("evaluated event lost the block's reason or name: %#v", secondBlock)
+	if decided["reason"] != "Configured reason." || decided["block_name"] != outcomeKey("deny") {
+		t.Fatalf("evaluated event lost the block's reason or name: %#v", decided)
 	}
-	completed := auditData(t, input.AuditEvents[4])
-	if completed["reason_code"] != "block_outcome" || completed["terminal_block_key"] != "deny" || completed["terminal_block_name"] != "deny" || completed["attempted_block_count"] != float64(2) {
+	completed := auditData(t, input.AuditEvents[5])
+	if completed["reason_code"] != "block_outcome" || completed["terminal_block_key"] != outcomeKey("deny") || completed["terminal_block_name"] != outcomeKey("deny") || completed["attempted_block_count"] != float64(3) {
 		t.Fatalf("unexpected completion evidence: %#v", completed)
 	}
-	for _, event := range input.AuditEvents[1:5] {
+	for _, event := range input.AuditEvents[1:6] {
 		encoded := string(event.Data)
 		if strings.Contains(encoded, "deploy") || strings.Contains(encoded, "version") {
 			t.Fatalf("evaluation audit event leaked request values: %s", encoded)
@@ -94,7 +97,7 @@ func TestExecutionRunsTheEntryPipelineStopsAtFirstTerminalAndCachesRevision(t *t
 func TestExecutionAutomaticallyApproves(t *testing.T) {
 	now := time.Unix(1_500, 0).UTC()
 	pipelines := activeExecutionPipeline(t, now, "entry", []approvalblock.Definition{
-		pipelineDefinition("approve", approvalblock.Approve, approvalblock.Field("/request/tool").Equals("deploy")),
+		decideWhen("approve", approvalblock.Approve, approvalblock.Field("/request/tool").Equals("deploy")),
 	})
 	service := initializedExecutionService(t, pipelines, executionAgentRepositoryStub{agent: domain.Agent{
 		ID: "agent-1", OrganizationID: "organization-1", Name: "billing-agent", AgentSlug: "billing",
@@ -123,28 +126,28 @@ func TestExecutionFallsBackToHumanReview(t *testing.T) {
 		{
 			name: "end of pipeline",
 			definitions: []approvalblock.Definition{
-				pipelineDefinition("does-not-match", approvalblock.Approve, approvalblock.Field("/request/tool").Equals("other.tool")),
+				decideWhen("does-not-match", approvalblock.Approve, approvalblock.Field("/request/tool").Equals("other.tool")),
 			},
 			arguments: json.RawMessage(`{}`), wantReason: "end_of_pipeline", wantEvents: 4,
 		},
 		{
 			name: "explicit human outcome",
 			definitions: []approvalblock.Definition{
-				pipelineDefinition("human", approvalblock.Human, approvalblock.Field("/request/tool").Equals("deploy")),
+				decideWhen("human", approvalblock.Human, approvalblock.Field("/request/tool").Equals("deploy")),
 			},
-			arguments: json.RawMessage(`{}`), wantReason: "block_outcome", wantEvents: 4,
+			arguments: json.RawMessage(`{}`), wantReason: "block_outcome", wantEvents: 5,
 		},
 		{
 			name: "runtime type error",
 			definitions: []approvalblock.Definition{
-				pipelineDefinition("number", approvalblock.Approve, approvalblock.Field("/request/arguments/amount").LessThan(100)),
+				decideWhen("number", approvalblock.Approve, approvalblock.Field("/request/arguments/amount").LessThan(100)),
 			},
 			arguments: json.RawMessage(`{"amount":"not-a-number"}`), wantReason: "block_error", wantEvents: 4,
 		},
 		{
 			name: "compilation failure",
 			definitions: []approvalblock.Definition{
-				pipelineDefinition("corrupt", approvalblock.Approve, approvalblock.Field("/request/tool").Equals("deploy")),
+				decideWhen("corrupt", approvalblock.Approve, approvalblock.Field("/request/tool").Equals("deploy")),
 			},
 			mutate: func(repository *memoryPipelineRepository) {
 				revision := repository.revisions["entry"][1]
@@ -217,7 +220,7 @@ func TestExecutionWithoutActiveRevisionRequiresHumanReview(t *testing.T) {
 
 func TestCompiledPipelineCacheSharesConcurrentMiss(t *testing.T) {
 	cache := newCompiledPipelineCache()
-	key := compiledPipelineKey{RevisionID: "revision-1", RuntimeFingerprint: CELRuntimeFingerprint}
+	key := compiledPipelineKey{RevisionID: "revision-1", RuntimeFingerprint: OutcomeRuntimeFingerprint}
 	var loads atomic.Int32
 	loaderStarted := make(chan struct{})
 	releaseLoader := make(chan struct{})

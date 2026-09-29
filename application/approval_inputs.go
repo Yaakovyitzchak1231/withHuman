@@ -11,8 +11,7 @@ import (
 // maximumApprovalAuditEvents bounds the audit events one pipeline segment
 // (the request path's initialization, or the worker's resume) commits.
 // Every block that continues spends a request budget: at most 1,000
-// condition evaluations (cel blocks, branch and delegate conditions share
-// it), five
+// condition evaluations (branch and delegate conditions share it), five
 // judge blocks, and five webhook blocks. One more evaluated event ends the
 // run (a block that decides or fails, including the budget check that
 // refuses the next block, or a branch's closing event), and at most four

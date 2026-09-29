@@ -20,8 +20,8 @@ func TestManagementPreviewCompilesExecutesAndDoesNotPersist(t *testing.T) {
 	service := NewManagementService(repository, NewCompiledPipelineState(repository, NewBlockRegistry()), fixedPipelineClock{now: time.Unix(100, 0).UTC()})
 	principal := pipelineManagerPrincipal("organization-1")
 	definitions := []approvalblock.Definition{
-		pipelineDefinition("approve-refund", approvalblock.Approve, approvalblock.Field("/request/tool").Equals("stripe.refund")),
-		pipelineDefinition("deny-later", approvalblock.Deny, approvalblock.Field("/request/tool").Equals("stripe.refund")),
+		decideWhen("approve-refund", approvalblock.Approve, approvalblock.Field("/request/tool").Equals("stripe.refund")),
+		decideWhen("deny-later", approvalblock.Deny, approvalblock.Field("/request/tool").Equals("stripe.refund")),
 	}
 
 	result, err := service.Preview(context.Background(), principal, "billing", definitions, Route{}, PreviewSample{
@@ -31,10 +31,10 @@ func TestManagementPreviewCompilesExecutesAndDoesNotPersist(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Outcome != BlockApprove || result.ReasonCode != "block_outcome" || result.TerminalBlockKey != "approve-refund" {
+	if result.Outcome != BlockApprove || result.ReasonCode != "block_outcome" || result.TerminalBlockKey != outcomeKey("approve-refund") {
 		t.Fatalf("unexpected preview result: %+v", result)
 	}
-	if len(result.Blocks) != 1 || result.Blocks[0].Position != 0 {
+	if len(result.Blocks) != 2 || result.Blocks[0].Outcome != BlockEnter || result.Blocks[1].Position != 1 {
 		t.Fatalf("preview did not stop at the first terminal block: %+v", result.Blocks)
 	}
 	if repository.createCalls != 0 || repository.activateCalls != 0 || len(repository.revisions) != 0 || len(repository.blocks) != 0 {
@@ -42,12 +42,12 @@ func TestManagementPreviewCompilesExecutesAndDoesNotPersist(t *testing.T) {
 	}
 
 	invalid := definitions[:1]
-	invalid[0].CEL.When.Field = "/request/context"
+	invalid[0].Branch.When.Field = "/request/context"
 	if _, err := service.Preview(context.Background(), principal, "billing", invalid, Route{}, PreviewSample{
 		Request: BlockRequest{Tool: "stripe.refund", Arguments: json.RawMessage(`{}`)},
 		Agent:   BlockAgent{Slug: "billing", Name: "billing-agent"},
 	}); !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("invalid CEL preview returned %v, want invalid", err)
+		t.Fatalf("preview of an invalid condition returned %v, want invalid", err)
 	}
 }
 
@@ -59,7 +59,7 @@ func TestManagementPreviewValidatesTheSampleAgentSlug(t *testing.T) {
 	service := NewManagementService(repository, NewCompiledPipelineState(repository, NewBlockRegistry()), fixedPipelineClock{now: time.Unix(150, 0).UTC()})
 	principal := pipelineManagerPrincipal("organization-1")
 	definitions := []approvalblock.Definition{
-		pipelineDefinition("deny-billing", approvalblock.Deny, approvalblock.Field("/agent/slug").Equals("billing")),
+		decideWhen("deny-billing", approvalblock.Deny, approvalblock.Field("/agent/slug").Equals("billing")),
 	}
 	sample := func(slug string) PreviewSample {
 		return PreviewSample{
@@ -82,7 +82,7 @@ func TestManagementPreviewValidatesTheSampleAgentSlug(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Outcome != BlockDeny || result.TerminalBlockKey != "deny-billing" {
+	if result.Outcome != BlockDeny || result.TerminalBlockKey != outcomeKey("deny-billing") {
 		t.Fatalf("condition on agent.slug did not match the sample: %+v", result)
 	}
 	result, err = service.Preview(context.Background(), principal, "entry", definitions, Route{}, sample("support"))
@@ -100,8 +100,8 @@ func TestManagementCreatesInactiveRevisionAndValidatesBeforeWriting(t *testing.T
 	service := NewManagementService(repository, NewCompiledPipelineState(repository, NewBlockRegistry()), fixedPipelineClock{now: now})
 	principal := pipelineManagerPrincipal("organization-1")
 	definitions := []approvalblock.Definition{
-		pipelineDefinition("first", approvalblock.Approve, approvalblock.Field("/request/tool").Equals("deploy")),
-		pipelineDefinition("second", approvalblock.Human, approvalblock.Field("/request/tool").NotEquals("deploy")),
+		decideWhen("first", approvalblock.Approve, approvalblock.Field("/request/tool").Equals("deploy")),
+		decideWhen("second", approvalblock.Human, approvalblock.Field("/request/tool").NotEquals("deploy")),
 	}
 
 	created, err := service.CreateRevision(context.Background(), principal, "release", pipelineName("release"), definitions, Route{})
@@ -111,7 +111,8 @@ func TestManagementCreatesInactiveRevisionAndValidatesBeforeWriting(t *testing.T
 	if created.Revision.Revision != 2 || created.Revision.IsActive || created.Revision.OrganizationID != principal.OrganizationID {
 		t.Fatalf("unexpected created revision: %+v", created.Revision)
 	}
-	if len(created.Blocks) != 2 || created.Blocks[0].Definition.ID != "first" || created.Blocks[1].Definition.ID != "second" {
+	if len(created.Blocks) != 2 || created.Blocks[0].Definition.ID != "first" || created.Blocks[1].Definition.ID != "second" ||
+		len(created.Revision.BlockIDs) != 4 || created.Blocks[1].Blocks[0].Definition.ID != outcomeKey("second") {
 		t.Fatalf("ordered definitions were not preserved: %+v", created.Blocks)
 	}
 	if repository.createCalls != 1 {
@@ -132,7 +133,7 @@ func TestManagementActivationCompilesThenUsesExpectedActiveRevision(t *testing.T
 	service := NewManagementService(repository, NewCompiledPipelineState(repository, NewBlockRegistry()), fixedPipelineClock{now: time.Unix(300, 0).UTC()})
 	principal := pipelineManagerPrincipal("organization-1")
 	created, err := service.CreateRevision(context.Background(), principal, "billing", pipelineName("billing"), []approvalblock.Definition{
-		pipelineDefinition("small-refund", approvalblock.Approve, approvalblock.Field("/request/arguments/amount").LessThan(1000)),
+		decideWhen("small-refund", approvalblock.Approve, approvalblock.Field("/request/arguments/amount").LessThan(1000)),
 	}, Route{})
 	if err != nil {
 		t.Fatal(err)
@@ -147,7 +148,7 @@ func TestManagementActivationCompilesThenUsesExpectedActiveRevision(t *testing.T
 	}
 
 	corruptTarget, err := service.CreateRevision(context.Background(), principal, "billing", pipelineName("billing"), []approvalblock.Definition{
-		pipelineDefinition("large-refund", approvalblock.Human, approvalblock.Field("/request/arguments/amount").GreaterThanOrEqual(1000)),
+		decideWhen("large-refund", approvalblock.Human, approvalblock.Field("/request/arguments/amount").GreaterThanOrEqual(1000)),
 	}, Route{})
 	if err != nil {
 		t.Fatal(err)
@@ -446,11 +447,26 @@ func pipelineManagerPrincipal(organizationID domain.ID) domain.Principal {
 	}.WithGrants(domain.OrganizationGrants([]domain.Permission{domain.PermissionPipelineRead, domain.PermissionPipelineWrite, domain.PermissionPipelineActivate}))
 }
 
-func pipelineDefinition(id string, outcome approvalblock.Outcome, condition approvalblock.Condition) approvalblock.Definition {
+// decideWhen is the rule "when condition matches, decide outcome": a
+// branch the condition enters, holding the one outcome block (keyed
+// id+"-outcome") that decides. Options configure that outcome block, so a
+// human exit's route sits on the block that takes it.
+func decideWhen(id string, outcome approvalblock.Outcome, condition approvalblock.Condition, options ...approvalblock.Option) approvalblock.Definition {
 	condition.ID = uuid.NewString()
-	return approvalblock.Definition{
-		ID: id, Name: id, Type: approvalblock.TypeCEL, Enabled: true, Timeout: "50ms", MaxAttempts: 1,
-		CEL: &approvalblock.CELConfig{When: condition, OnMatch: outcome, Reason: "Configured reason."},
+	decide := outcomeKey(id)
+	options = append([]approvalblock.Option{approvalblock.Name(decide), approvalblock.Reason("Configured reason.")}, options...)
+	return *approvalblock.DefineBranch(id, []approvalblock.Definition{*approvalblock.DefineOutcome(decide, outcome, options...)},
+		approvalblock.Name(id), approvalblock.When(condition))
+}
+
+// outcomeKey is the key of the outcome block inside decideWhen's branch.
+func outcomeKey(id string) string { return id + "-outcome" }
+
+// routedTo sends an outcome block's human exit to path, asking the agent's
+// owner first when askOwner is set.
+func routedTo(path string, askOwner bool) approvalblock.Option {
+	return func(definition *approvalblock.Definition) {
+		definition.Outcome.EscalationPath, definition.Outcome.AskAgentOwner = path, askOwner
 	}
 }
 
@@ -498,12 +514,9 @@ func TestManagementReferencesReportEachDependencyState(t *testing.T) {
 	}}
 	service := NewManagementService(repository, NewCompiledPipelineState(repository, NewBlockRegistry()), fixedPipelineClock{now: time.Unix(300, 0).UTC()}, WithEscalationPathResolver(resolver))
 	principal := pipelineManagerPrincipal("organization-1")
-	review := pipelineDefinition("review", approvalblock.Human, approvalblock.Field("/request/tool").Equals("stripe.refund"))
-	review.CEL.EscalationPath = "payments"
-	second := pipelineDefinition("second-look", approvalblock.Human, approvalblock.Field("/request/tool").Equals("stripe.payout"))
-	second.CEL.EscalationPath = "payments"
-	fine := pipelineDefinition("fine", approvalblock.Human, approvalblock.Field("/request/tool").Equals("stripe.charge"))
-	fine.CEL.EscalationPath = "ops"
+	review := decideWhen("review", approvalblock.Human, approvalblock.Field("/request/tool").Equals("stripe.refund"), routedTo("payments", false))
+	second := decideWhen("second-look", approvalblock.Human, approvalblock.Field("/request/tool").Equals("stripe.payout"), routedTo("payments", false))
+	fine := decideWhen("fine", approvalblock.Human, approvalblock.Field("/request/tool").Equals("stripe.charge"), routedTo("ops", false))
 	// Creation only requires the paths to exist, so the missing default
 	// must be introduced after the revision is stored.
 	resolver.resolved = application.ResolvedEscalationPaths{}
@@ -524,8 +537,8 @@ func TestManagementReferencesReportEachDependencyState(t *testing.T) {
 		t.Fatal("revision with an inactive and a missing path reported activatable")
 	}
 	want := []EscalationPathReference{
-		{PathKey: "payments", BlockKeys: []string{"review", "second-look"}, Exists: true, Active: false},
-		{PathKey: "ops", BlockKeys: []string{"fine"}, Exists: true, Active: true},
+		{PathKey: "payments", BlockKeys: []string{outcomeKey("review"), outcomeKey("second-look")}, Exists: true, Active: false},
+		{PathKey: "ops", BlockKeys: []string{outcomeKey("fine")}, Exists: true, Active: true},
 		{PathKey: "gone", BlockKeys: []string{}, Default: true, Exists: false, Active: false},
 	}
 	if len(references.EscalationPaths) != len(want) {
@@ -538,7 +551,7 @@ func TestManagementReferencesReportEachDependencyState(t *testing.T) {
 		}
 	}
 	if len(references.WebhookEndpoints) != 0 || len(references.Blocks) != 0 {
-		t.Fatalf("cel-only revision reported endpoints or block problems: %+v", references)
+		t.Fatalf("a revision of conditions and outcomes reported endpoints or block problems: %+v", references)
 	}
 
 	resolver.resolved = application.ResolvedEscalationPaths{}

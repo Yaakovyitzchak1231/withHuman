@@ -16,7 +16,7 @@ import (
 // compiles the revision from its stored snapshots.
 func TestABranchEndCanAskTheAgentOwner(t *testing.T) {
 	now := time.Unix(7_000, 0).UTC()
-	branch := refundsBranch(pipelineDefinition("never", approvalblock.Approve, approvalblock.Field("/request/tool").Equals("other")))
+	branch := refundsBranch(decideWhen("never", approvalblock.Approve, approvalblock.Field("/request/tool").Equals("other")))
 	branch.Branch.AskAgentOwner = true
 	service, _ := branchFixture(t, now, NewBlockRegistry(), branchScope{key: "entry", definitions: []approvalblock.Definition{branch}})
 	input, err := service.Evaluate(context.Background(), branchRequest(now, "stripe.refund", `{}`))
@@ -34,9 +34,8 @@ func TestABranchEndCanAskTheAgentOwner(t *testing.T) {
 // inherits the default route whole.
 func TestTheOwnerRouteTravelsWithItsPath(t *testing.T) {
 	now := time.Unix(7_000, 0).UTC()
-	ownPath := pipelineDefinition("own-path", approvalblock.Human, approvalblock.Field("/request/tool").Equals("deploy"))
-	ownPath.CEL.EscalationPath = "release-managers"
-	inherits := pipelineDefinition("inherits", approvalblock.Human, approvalblock.Field("/request/tool").Equals("push"))
+	ownPath := decideWhen("own-path", approvalblock.Human, approvalblock.Field("/request/tool").Equals("deploy"), routedTo("release-managers", false))
+	inherits := decideWhen("inherits", approvalblock.Human, approvalblock.Field("/request/tool").Equals("push"))
 	service, _ := branchFixture(t, now, NewBlockRegistry(), branchScope{
 		key: "entry", defaultPath: "on-call", askOwner: true,
 		definitions: []approvalblock.Definition{ownPath, inherits},
@@ -70,8 +69,7 @@ func TestPreviewReportsTheOwnerRoute(t *testing.T) {
 	repository := newMemoryPipelineRepository()
 	management := NewManagementService(repository, NewCompiledPipelineState(repository, NewBlockRegistry()), fixedPipelineClock{now: time.Unix(7_000, 0).UTC()})
 	sample := PreviewSample{Request: BlockRequest{Tool: "push", Arguments: json.RawMessage(`{}`)}, Agent: BlockAgent{Slug: "billing", Name: "Billing"}}
-	asks := pipelineDefinition("asks", approvalblock.Human, approvalblock.Field("/request/tool").Equals("push"))
-	asks.CEL.EscalationPath, asks.CEL.AskAgentOwner = "platform", true
+	asks := decideWhen("asks", approvalblock.Human, approvalblock.Field("/request/tool").Equals("push"), routedTo("platform", true))
 
 	result, err := management.Preview(context.Background(), pipelineManagerPrincipal("organization-1"), "billing",
 		[]approvalblock.Definition{asks}, Route{EscalationPath: "on-call"}, sample)
@@ -100,8 +98,7 @@ func TestAnOwnerRouteRequiresItsFallback(t *testing.T) {
 	if _, err := management.CreateRevision(context.Background(), principal, "billing", pipelineName("billing"), nil, Route{AskAgentOwner: true}); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("a default owner route without a path must be invalid: %v", err)
 	}
-	block := pipelineDefinition("asks", approvalblock.Human, approvalblock.Field("/request/tool").Equals("push"))
-	block.CEL.AskAgentOwner = true
+	block := decideWhen("asks", approvalblock.Human, approvalblock.Field("/request/tool").Equals("push"), routedTo("", true))
 	if _, err := management.CreateRevision(context.Background(), principal, "billing", pipelineName("billing"), []approvalblock.Definition{block}, Route{}); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("a block owner route without a path must be invalid: %v", err)
 	}

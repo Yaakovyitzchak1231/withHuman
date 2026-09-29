@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"testing"
 	"time"
 
@@ -14,6 +13,13 @@ import (
 	"github.com/withHumanAI/withHuman/domain"
 )
 
+// delegateDefinition is a delegate block to pipelineKey for the requests
+// condition matches.
+func delegateDefinition(id, pipelineKey string, condition approvalblock.Condition) approvalblock.Definition {
+	condition.ID = uuid.NewString()
+	return *approvalblock.DefineDelegate(id, pipelineKey, approvalblock.Name(id), approvalblock.When(condition))
+}
+
 // billingDelegate hands billing-agent requests to the billing pipeline.
 func billingDelegate() approvalblock.Definition {
 	return delegateDefinition("to-billing", "billing", approvalblock.Field("/agent/slug").Equals("billing"))
@@ -22,10 +28,10 @@ func billingDelegate() approvalblock.Definition {
 func TestADelegateIsSkippedByRequestsItsConditionDoesNotMatch(t *testing.T) {
 	now := time.Unix(7_000, 0).UTC()
 	service, _ := branchFixture(t, now, NewBlockRegistry(),
-		branchScope{key: "billing", definitions: []approvalblock.Definition{alwaysDefinition("billing-denies", approvalblock.Deny)}},
+		branchScope{key: "billing", definitions: []approvalblock.Definition{outcomeDefinition("billing-denies", approvalblock.Deny)}},
 		branchScope{key: "entry", definitions: []approvalblock.Definition{
 			delegateDefinition("refunds", "billing", approvalblock.Field("/request/tool").Equals("stripe.refund")),
-			alwaysDefinition("everything-else", approvalblock.Approve),
+			outcomeDefinition("everything-else", approvalblock.Approve),
 		}},
 	)
 	input, err := service.Evaluate(context.Background(), branchRequest(now, "deploy", `{}`))
@@ -48,9 +54,9 @@ func TestBlocksInsideADelegatedPipelineDecide(t *testing.T) {
 	now := time.Unix(7_000, 0).UTC()
 	service, repository := branchFixture(t, now, NewBlockRegistry(),
 		branchScope{key: "billing", definitions: []approvalblock.Definition{
-			pipelineDefinition("fraudster", approvalblock.Deny, approvalblock.Field("/request/arguments/customer").Equals("fraudster")),
+			decideWhen("fraudster", approvalblock.Deny, approvalblock.Field("/request/arguments/customer").Equals("fraudster")),
 		}},
-		branchScope{key: "entry", definitions: []approvalblock.Definition{billingDelegate(), alwaysDefinition("everything-else", approvalblock.Approve)}},
+		branchScope{key: "entry", definitions: []approvalblock.Definition{billingDelegate(), outcomeDefinition("everything-else", approvalblock.Approve)}},
 	)
 	input, err := service.Evaluate(context.Background(), branchRequest(now, "stripe.refund", `{"customer":"fraudster"}`))
 	if err != nil {
@@ -60,14 +66,14 @@ func TestBlocksInsideADelegatedPipelineDecide(t *testing.T) {
 		t.Fatalf("the delegated pipeline's block did not decide: %#v", input.Decision)
 	}
 	evaluated := evaluatedEvents(t, input.AuditEvents)
-	if got := steps(evaluated); got != "to-billing:enter@0 fraudster:deny@1" {
+	if got := steps(evaluated); got != "to-billing:enter@0 fraudster:enter@1 fraudster-outcome:deny@2" {
 		t.Fatalf("got steps %s", got)
 	}
-	if evaluated[0]["target_pipeline_key"] != "billing" || evaluated[1]["pipeline_key"] != "billing" || evaluated[1]["pipeline_id"] != string(repository.revisions["billing"][1].ID) {
+	if evaluated[0]["target_pipeline_key"] != "billing" || evaluated[2]["pipeline_key"] != "billing" || evaluated[2]["pipeline_id"] != string(repository.revisions["billing"][1].ID) {
 		t.Fatalf("evidence must name the delegated pipeline: %#v", evaluated)
 	}
 	completed := completedEvent(t, input.AuditEvents)
-	if completed["terminal_block_pipeline_key"] != "billing" || completed["terminal_block_key"] != "fraudster" {
+	if completed["terminal_block_pipeline_key"] != "billing" || completed["terminal_block_key"] != outcomeKey("fraudster") {
 		t.Fatalf("unexpected terminal evidence: %#v", completed)
 	}
 }
@@ -93,9 +99,9 @@ func TestADelegatedPipelineThatDecidesNothingRoutesByTheNearestDefault(t *testin
 		t.Run(test.name, func(t *testing.T) {
 			service, repository := branchFixture(t, now, NewBlockRegistry(),
 				branchScope{key: "billing", defaultPath: test.billingPath, definitions: []approvalblock.Definition{
-					pipelineDefinition("never", approvalblock.Approve, approvalblock.Field("/request/tool").Equals("other")),
+					decideWhen("never", approvalblock.Approve, approvalblock.Field("/request/tool").Equals("other")),
 				}},
-				branchScope{key: "entry", defaultPath: test.entryPath, definitions: []approvalblock.Definition{billingDelegate(), alwaysDefinition("everything-else", approvalblock.Approve)}},
+				branchScope{key: "entry", defaultPath: test.entryPath, definitions: []approvalblock.Definition{billingDelegate(), outcomeDefinition("everything-else", approvalblock.Approve)}},
 			)
 			input, err := service.Evaluate(context.Background(), branchRequest(now, "stripe.refund", `{}`))
 			if err != nil {
@@ -127,7 +133,7 @@ func TestAHumanExitInsideADelegatedPipelineFollowsTheSameChain(t *testing.T) {
 	now := time.Unix(7_000, 0).UTC()
 	service, repository := branchFixture(t, now, NewBlockRegistry(),
 		branchScope{key: "billing", definitions: []approvalblock.Definition{
-			pipelineDefinition("ask", approvalblock.Human, approvalblock.Field("/request/tool").Exists()),
+			decideWhen("ask", approvalblock.Human, approvalblock.Field("/request/tool").Exists()),
 		}},
 		branchScope{key: "entry", defaultPath: "on-call", definitions: []approvalblock.Definition{billingDelegate()}},
 	)
@@ -148,8 +154,8 @@ func TestAFailedDelegateConditionRoutesFromThePipelineHoldingIt(t *testing.T) {
 	now := time.Unix(7_000, 0).UTC()
 	failing := delegateDefinition("to-billing", "billing", approvalblock.Field("/request/arguments/amount").LessThan(10))
 	service, repository := branchFixture(t, now, NewBlockRegistry(),
-		branchScope{key: "billing", defaultPath: "payments-review", definitions: []approvalblock.Definition{alwaysDefinition("billing-approves", approvalblock.Approve)}},
-		branchScope{key: "entry", defaultPath: "on-call", definitions: []approvalblock.Definition{failing, alwaysDefinition("rest", approvalblock.Approve)}},
+		branchScope{key: "billing", defaultPath: "payments-review", definitions: []approvalblock.Definition{outcomeDefinition("billing-approves", approvalblock.Approve)}},
+		branchScope{key: "entry", defaultPath: "on-call", definitions: []approvalblock.Definition{failing, outcomeDefinition("rest", approvalblock.Approve)}},
 	)
 	input, err := service.Evaluate(context.Background(), branchRequest(now, "stripe.refund", `{"amount":"many"}`))
 	if err != nil {
@@ -170,7 +176,7 @@ func TestAnEmptyDelegatedPipelineEndsAtOnce(t *testing.T) {
 	if _, err := management.Create(context.Background(), pipelineManagerPrincipal("organization-1"), "billing", "Billing", nil, Route{EscalationPath: "payments-review"}); err != nil {
 		t.Fatal(err)
 	}
-	created, err := management.CreateRevision(context.Background(), pipelineManagerPrincipal("organization-1"), "entry", "Entry", []approvalblock.Definition{billingDelegate(), alwaysDefinition("rest", approvalblock.Approve)}, Route{})
+	created, err := management.CreateRevision(context.Background(), pipelineManagerPrincipal("organization-1"), "entry", "Entry", []approvalblock.Definition{billingDelegate(), outcomeDefinition("rest", approvalblock.Approve)}, Route{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,7 +202,7 @@ func TestAnEmptyDelegatedPipelineEndsAtOnce(t *testing.T) {
 func TestADiamondPinsOneRevisionPerKey(t *testing.T) {
 	now := time.Unix(7_000, 0).UTC()
 	service, _ := branchFixture(t, now, NewBlockRegistry(),
-		branchScope{key: "checks", definitions: []approvalblock.Definition{alwaysDefinition("checked", approvalblock.Approve)}},
+		branchScope{key: "checks", definitions: []approvalblock.Definition{outcomeDefinition("checked", approvalblock.Approve)}},
 		branchScope{key: "billing", definitions: []approvalblock.Definition{
 			delegateDefinition("billing-checks", "checks", approvalblock.Field("/request/tool").Exists()),
 		}},
@@ -223,8 +229,8 @@ func TestAnAsynchronousBlockInsideADelegatedPipelineResumesThere(t *testing.T) {
 	now := time.Unix(7_000, 0).UTC()
 	check := newScripted(scriptedOutcome(BlockNext))
 	service, repository := scriptedBranchFixture(t, now, check,
-		branchScope{key: "billing", definitions: []approvalblock.Definition{scriptedDefinition(), alwaysDefinition("billing-approves", approvalblock.Approve)}},
-		branchScope{key: "entry", definitions: []approvalblock.Definition{billingDelegate(), alwaysDefinition("rest", approvalblock.Deny)}},
+		branchScope{key: "billing", definitions: []approvalblock.Definition{scriptedDefinition(), outcomeDefinition("billing-approves", approvalblock.Approve)}},
+		branchScope{key: "entry", definitions: []approvalblock.Definition{billingDelegate(), outcomeDefinition("rest", approvalblock.Deny)}},
 	)
 	initialization, err := service.Evaluate(context.Background(), branchRequest(now, "stripe.refund", `{}`))
 	if err != nil {
@@ -300,7 +306,7 @@ func TestResumeWithAMissingOrForeignPinAbandonsToAHuman(t *testing.T) {
 func TestACycleOrDepthOverTheLimitHandsTheRequestToAHuman(t *testing.T) {
 	now := time.Unix(7_000, 0).UTC()
 	service, repository := branchFixture(t, now, NewBlockRegistry(),
-		branchScope{key: "billing", definitions: []approvalblock.Definition{alwaysDefinition("billing-approves", approvalblock.Approve)}},
+		branchScope{key: "billing", definitions: []approvalblock.Definition{outcomeDefinition("billing-approves", approvalblock.Approve)}},
 		branchScope{key: "checks", definitions: []approvalblock.Definition{delegateDefinition("back", "billing", approvalblock.Field("/request/tool").Exists())}},
 		branchScope{key: "entry", defaultPath: "on-call", definitions: []approvalblock.Definition{billingDelegate()}},
 	)
@@ -335,7 +341,7 @@ func TestPreviewExpandsDelegatesAndRefusesSelfDelegation(t *testing.T) {
 	management := NewManagementService(repository, NewCompiledPipelineState(repository, registry), fixedPipelineClock{now: now})
 	principal := pipelineManagerPrincipal("organization-1")
 	if _, err := management.Create(context.Background(), principal, "billing", "Billing", []approvalblock.Definition{
-		pipelineDefinition("small", approvalblock.Approve, approvalblock.Field("/request/arguments/amount").LessThan(10)),
+		decideWhen("small", approvalblock.Approve, approvalblock.Field("/request/arguments/amount").LessThan(10)),
 	}, Route{EscalationPath: "payments-review"}); err != nil {
 		t.Fatal(err)
 	}
@@ -344,7 +350,7 @@ func TestPreviewExpandsDelegatesAndRefusesSelfDelegation(t *testing.T) {
 		t.Fatal(err)
 	}
 	management = NewManagementService(repository, compiled, fixedPipelineClock{now: now})
-	document := []approvalblock.Definition{billingDelegate(), alwaysDefinition("rest", approvalblock.Deny)}
+	document := []approvalblock.Definition{billingDelegate(), outcomeDefinition("rest", approvalblock.Deny)}
 	sample := func(tool, arguments string) PreviewSample {
 		return PreviewSample{Request: BlockRequest{Tool: tool, Arguments: json.RawMessage(arguments)}, Agent: BlockAgent{Slug: "billing", Name: "Billing"}}
 	}
@@ -353,7 +359,7 @@ func TestPreviewExpandsDelegatesAndRefusesSelfDelegation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Outcome != BlockApprove || len(result.Blocks) != 2 || result.Blocks[1].PipelineKey != "billing" || result.Blocks[1].BlockKey != "small" {
+	if result.Outcome != BlockApprove || len(result.Blocks) != 3 || result.Blocks[2].PipelineKey != "billing" || result.Blocks[2].BlockKey != outcomeKey("small") {
 		t.Fatalf("preview did not walk the delegated pipeline: %+v", result)
 	}
 	result, err = management.Preview(context.Background(), principal, "entry", document, Route{EscalationPath: "on-call"}, sample("stripe.refund", `{"amount":50}`))
@@ -390,20 +396,16 @@ func TestPreviewExpandsDelegatesAndRefusesSelfDelegation(t *testing.T) {
 	}
 }
 
-// Delegate conditions spend the same budget as cel blocks, so an entry
-// pipeline of 999 non-matching conditions and one delegate whose target
-// holds one more still fits the audit cap.
+// Delegate and branch conditions spend one budget, so an entry pipeline
+// of 999 non-matching conditions and one delegate whose target holds one
+// more is refused at the last and still fits the audit cap.
 func TestADelegateAtTheBudgetFitsTheAuditCap(t *testing.T) {
 	now := time.Unix(7_000, 0).UTC()
-	checks := make([]approvalblock.Definition, approvalblock.MaximumPipelineBlocks-1)
-	for index := range checks {
-		checks[index] = pipelineDefinition(fmt.Sprintf("check-%d", index), approvalblock.Deny, approvalblock.Field("/request/tool").Equals("other"))
-	}
-	service, _ := branchFixture(t, now, NewBlockRegistry(),
+	service, _ := branchFixture(t, now, NewBlockRegistry(), checksScope(),
 		branchScope{key: "billing", definitions: []approvalblock.Definition{
-			pipelineDefinition("last", approvalblock.Deny, approvalblock.Field("/request/tool").Equals("other")),
+			decideWhen("last", approvalblock.Deny, approvalblock.Field("/request/tool").Equals("other")),
 		}},
-		branchScope{key: "entry", definitions: append(checks, billingDelegate())},
+		branchScope{key: "entry", definitions: append(skippedChecks(approvalblock.MaximumConditionsPerRequest-1), billingDelegate())},
 	)
 	input, err := service.Evaluate(context.Background(), branchRequest(now, "deploy", `{}`))
 	if err != nil {
@@ -411,7 +413,7 @@ func TestADelegateAtTheBudgetFitsTheAuditCap(t *testing.T) {
 	}
 	evaluated := evaluatedEvents(t, input.AuditEvents)
 	last := evaluated[len(evaluated)-1]
-	if len(evaluated) != approvalblock.MaximumPipelineBlocks+1 || last["error_code"] != string(ErrorResourceLimit) {
+	if len(evaluated) != approvalblock.MaximumConditionsPerRequest+1 || last["block_key"] != "last" || last["error_code"] != string(ErrorResourceLimit) {
 		t.Fatalf("got %d evaluated events, last %#v", len(evaluated), last)
 	}
 	input.AuditEvents = append(input.AuditEvents, domain.AuditEvent{

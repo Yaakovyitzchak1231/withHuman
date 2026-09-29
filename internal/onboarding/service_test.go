@@ -634,10 +634,14 @@ func TestGuidedSetupHappyPath(t *testing.T) {
 		t.Fatalf("the runtime's branch must ask the agent's owner with the setup path as the fallback: %+v", entry[1].Branch)
 	}
 	codex := entry[1].Branch.Blocks
-	if !codex[0].CEL.AskAgentOwner {
-		t.Fatalf("the gate must ask the agent's owner: %+v", codex[0].CEL)
+	if len(codex) != 2 || codex[0].Branch == nil || len(codex[0].Branch.Blocks) != 1 || codex[0].Branch.Blocks[0].Outcome == nil {
+		t.Fatalf("codex branch blocks: %+v", codex)
 	}
-	if codex[0].CEL.EscalationPath != "notify-chris-battarbee" || codex[1].Always == nil || codex[1].Always.Outcome != approvalblock.Approve {
+	ask := codex[0].Branch.Blocks[0].Outcome
+	if ask.Outcome != approvalblock.Human || !ask.AskAgentOwner {
+		t.Fatalf("the gate must ask the agent's owner: %+v", ask)
+	}
+	if ask.EscalationPath != "notify-chris-battarbee" || codex[1].Outcome == nil || codex[1].Outcome.Outcome != approvalblock.Approve {
 		t.Fatalf("codex branch blocks: %+v", codex)
 	}
 	if h.pipelines.active[EntryPipelineKey].Revision.DefaultEscalationPath != "notify-chris-battarbee" {
@@ -791,8 +795,10 @@ func TestSecondRunUnionsPipelineAndReusesAgent(t *testing.T) {
 	h := newHarness()
 	// The entry already holds a foreign rule, the runtime's starting
 	// branch gating Write, and a trailing catch-all.
-	foreign := approvalblock.Define("deny-prod", approvalblock.Name("Deny production"), approvalblock.When(approvalblock.Field("/request/tool").Equals("prod_deploy")), approvalblock.OnMatch(approvalblock.Deny), approvalblock.Reason("Never."))
-	catchAll := approvalblock.DefineAlways("everything-else", approvalblock.Approve, approvalblock.Name("Approve the rest"), approvalblock.Reason("Routine."))
+	foreign := approvalblock.DefineBranch("deny-prod", []approvalblock.Definition{
+		*approvalblock.DefineOutcome("deny-prod-deploys", approvalblock.Deny, approvalblock.Name("Deny"), approvalblock.Reason("Never.")),
+	}, approvalblock.Name("Deny production"), approvalblock.When(approvalblock.Field("/request/tool").Equals("prod_deploy")))
+	catchAll := approvalblock.DefineOutcome("everything-else", approvalblock.Approve, approvalblock.Name("Approve the rest"), approvalblock.Reason("Routine."))
 	h.pipelines.active[EntryPipelineKey] = approvalpipeline.PipelineRevision{
 		Revision: domain.RequestApprovalPipelineRevision{PipelineKey: EntryPipelineKey, Name: "Entry pipeline", Revision: 3, IsActive: true, DefaultEscalationPath: "on-call"},
 		Blocks: []approvalpipeline.PipelineBlock{
@@ -949,6 +955,12 @@ func TestGenerators(t *testing.T) {
 	if blocks[0].Name != "Review tools chosen in setup" || blocks[1].Name != "Approve every other tool" {
 		t.Fatalf("block names: %q, %q", blocks[0].Name, blocks[1].Name)
 	}
+	// The gate is a branch holding the one outcome block that asks.
+	if gate := blocks[0].Branch; gate == nil || len(gate.Blocks) != 1 || gate.Blocks[0].ID != "codex-ask-about-selected-tools" || gate.Blocks[0].Name != "Ask about these tools" ||
+		gate.Blocks[0].Outcome == nil || gate.Blocks[0].Outcome.Outcome != approvalblock.Human || gate.Blocks[0].Outcome.EscalationPath != "notify-x" ||
+		gate.Blocks[0].Outcome.Reason != "This tool was suggested for human approval during the guided setup." {
+		t.Fatalf("gate: %+v", blocks[0])
+	}
 	if GatedToolsOf(entry, "claude-code") != nil || GatedToolsOf(nil, "codex") != nil {
 		t.Fatal("GatedToolsOf should answer nil for a missing branch")
 	}
@@ -962,10 +974,11 @@ func TestGenerators(t *testing.T) {
 	if err := empty.Validate(); err != nil || len(empty.Branch.Blocks) != 1 || len(GatedToolsOf(EntryBlocks(nil, empty), "codex")) != 0 {
 		t.Fatalf("an empty gate list must validate with the approve block alone: %v %+v", err, empty)
 	}
-	// A new branch lands before the first top-level always; an existing
-	// one is replaced in place; a rewritten body is not the starting shape.
-	always := approvalblock.DefineAlways("rest", approvalblock.Approve, approvalblock.Name("Rest"), approvalblock.Reason("Routine."))
-	placed := EntryBlocks([]approvalblock.Definition{*always}, branch)
+	// A new branch lands before the first top-level outcome block; an
+	// existing one is replaced in place; a rewritten body is not the
+	// starting shape.
+	rest := approvalblock.DefineOutcome("rest", approvalblock.Approve, approvalblock.Name("Rest"), approvalblock.Reason("Routine."))
+	placed := EntryBlocks([]approvalblock.Definition{*rest}, branch)
 	if len(placed) != 2 || placed[0].ID != "codex" || placed[1].ID != "rest" {
 		t.Fatalf("EntryBlocks placement: %+v", placed)
 	}
@@ -973,7 +986,7 @@ func TestGenerators(t *testing.T) {
 	if len(replaced) != 2 || len(replaced[0].Branch.Blocks) != 1 {
 		t.Fatalf("EntryBlocks replacement: %+v", replaced)
 	}
-	rewritten := RuntimeBranch("codex", []approvalblock.Definition{*always}, "notify-x")
+	rewritten := RuntimeBranch("codex", []approvalblock.Definition{*rest}, "notify-x")
 	if StartingShape("codex", rewritten) || !StartingShape("codex", branch) || !StartingShape("codex", empty) {
 		t.Fatal("StartingShape")
 	}

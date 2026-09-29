@@ -12,7 +12,7 @@ import {
   HoverCardTitle,
 } from "@/ds/components/hover-card";
 import { PathTree } from "@/ds/components/escalation-tree";
-import { type PolicyBlockDraft } from "@/ds/components/policy-block";
+import type { BlockOutcome } from "@/ds/components/outcome-select";
 import { Timeline, TimelineItem } from "@/ds/components/timeline";
 import { summarizeWebhook } from "@/ds/components/webhook-block";
 import { Referenced, ReferenceCardsProvider, type Reference } from "@/ds/components/reference";
@@ -39,6 +39,7 @@ import { useAccess } from "./authorization";
 import { auditLinkProps, blockKind, extensions, requireBlockKind, useAuditLinks } from "./extensions";
 import { formatRelative, formatRemaining, shortId } from "./format";
 import { blockTypeOf, draftsFromBlocks, pathTarget, type BlockDraft } from "./pipeline-blocks";
+import { pipelineReachability } from "./pipeline-tree";
 import { useSession } from "./principal";
 import { ReferenceChip } from "./reference-chip";
 import { pipelineLink } from "./pipeline-link";
@@ -550,8 +551,7 @@ function EscalationPathCard({ pathKey, name }: { pathKey: string; name: string }
 }
 
 const CORE_BLOCK_KIND: Record<string, string> = {
-  always: "Always",
-  cel: "Condition",
+  outcome: "Outcome",
   webhook: "Webhook",
   branch: "Branch",
   delegate: "Delegate",
@@ -563,13 +563,13 @@ function kindLabel(type: string): string {
   return CORE_BLOCK_KIND[type] ?? blockKind(type)?.kindLabel ?? type;
 }
 
-const OUTCOME_LABEL: Record<PolicyBlockDraft["outcome"], string> = {
+const OUTCOME_LABEL: Record<BlockOutcome, string> = {
   approve: "Approve",
   deny: "Deny",
   human: "Ask a human",
 };
 
-const OUTCOME_TONE: Record<PolicyBlockDraft["outcome"], Tone> = {
+const OUTCOME_TONE: Record<BlockOutcome, Tone> = {
   approve: "approve",
   deny: "deny",
   human: "warn",
@@ -669,7 +669,9 @@ const PICKED = "-mx-2 -my-1.5 rounded-md border-hairline border-edge-strong bg-f
 
 /* One rail of blocks as a timeline, markers numbering the blocks on this
  * rail. A branch's blocks nest as a timeline of their own under it,
- * ending where the branch sends a request nothing decided. */
+ * ending where the branch sends a request nothing decided, unless an
+ * Outcome block inside decides everything first ("if this, approve"),
+ * when the nested timeline simply ends at that block. */
 export function PipelineRailTimeline({
   blocks,
   fallback,
@@ -715,7 +717,9 @@ export function PipelineRailTimeline({
                 blocks={block.blocks}
                 fallback={fallback}
                 highlight={highlight}
-                end={<BranchEndItem branch={block} fallback={fallback} highlight={highlight} />}
+                end={pipelineReachability(block.blocks).stoppedBy
+                  ? null
+                  : <BranchEndItem branch={block} fallback={fallback} highlight={highlight} />}
               />
             ) : null}
           </TimelineItem>
@@ -837,10 +841,8 @@ function PipelineBlockCard({ block }: { block: Extract<Reference, { kind: "pipel
 
 function BlockSummary({ block }: { block: BlockDraft }) {
   switch (block.kind) {
-    case "always":
-      return <>Always · Every remaining request</>;
-    case "cel":
-      return <>Condition · <ConditionSummary node={block.when} /></>;
+    case "outcome":
+      return <>Outcome · Every request that reaches it</>;
     case "branch":
       return <>Branch · <ConditionSummary node={block.when} /></>;
     case "delegate":
@@ -861,7 +863,7 @@ function BlockSummary({ block }: { block: BlockDraft }) {
   }
 }
 
-/* Where a block's match goes. A condition block has one outcome; a
+/* Where a block's decision goes. An Outcome block has one outcome; a
  * webhook, or a kind the edition adds, answers for itself, so only its
  * human exit's path is worth a line. A branch's blocks and end nest
  * beneath it instead. */
@@ -878,11 +880,9 @@ function BlockExit({ block }: { block: BlockDraft }) {
   }
   const target = block.target;
   switch (block.kind) {
-    case "cel":
-    case "always":
+    case "outcome":
       return (
         <p className="flex flex-wrap items-center gap-y-1 text-body text-ink-secondary">
-          <span className="mr-1">{block.kind === "always" ? "Always" : "On match"}</span>
           <Badge className="-my-1" tone={OUTCOME_TONE[block.outcome]}>
             {OUTCOME_LABEL[block.outcome]}
           </Badge>

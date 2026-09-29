@@ -35,7 +35,8 @@ export interface BranchBlockDraft<Child = unknown> {
   when: ConditionNode;
   /* The branch's own blocks, in order. The app decides what a block is. */
   blocks: Child[];
-  /* The explanation sent with the request when no block inside decides. */
+  /* The explanation recorded when no block inside decides. Optional:
+   * a branch whose blocks end in an Outcome block never needs one. */
   reason: string;
   /* Who is asked when no block inside decides. null or absent uses the
    * pipeline default. Blocks inside never inherit it. */
@@ -83,6 +84,9 @@ export interface BranchBlockCardProps<Child = unknown> extends BlockMenuHandlers
   directory?: ReviewerTarget[];
   /* The resolved reviewer destination, included in the field help. */
   describeRoute?: (target: ReviewerTarget | null) => string;
+  /* False when a block inside decides every request that gets that far,
+   * so the branch never runs out and its end's fields mean nothing. */
+  endReachable?: boolean;
 }
 
 export function BranchBlockCard<Child>({
@@ -101,6 +105,7 @@ export function BranchBlockCard<Child>({
   scope,
   directory,
   describeRoute,
+  endReachable = true,
   ...menu
 }: BranchBlockCardProps<Child>) {
   const actions = blockMenuActions({
@@ -158,11 +163,13 @@ export function BranchBlockCard<Child>({
         />
       </div>
 
-      <p className="text-body text-ink-secondary">
-        If no block in this branch decides, the request goes to a human and the pipeline stops.
-      </p>
+      {endReachable ? (
+        <p className="text-body text-ink-secondary">
+          If no block in this branch decides, the request goes to a human and the pipeline stops.
+        </p>
+      ) : null}
 
-      {directory ? (
+      {endReachable && directory ? (
         <div className="flex flex-col gap-1.5">
           <InfoLabel
             className="text-label text-ink-secondary"
@@ -183,14 +190,16 @@ export function BranchBlockCard<Child>({
         </div>
       ) : null}
 
-      <TextField
-        label="Reason"
-        info="The explanation the agent receives when no block in this branch decides and the request goes to a human."
-        docsLinks={[BRANCH_DOCS.end]}
-        value={block.reason}
-        onChange={(event) => onChange({ ...block, reason: event.target.value })}
-        placeholder="Refunds need a person when no check decides."
-      />
+      {endReachable ? (
+        <TextField
+          label="Reason (optional)"
+          info="The explanation reviewers see when no block in this branch decides and the request goes to a human."
+          docsLinks={[BRANCH_DOCS.end]}
+          value={block.reason}
+          onChange={(event) => onChange({ ...block, reason: event.target.value })}
+          placeholder="Refunds need a person when no check decides."
+        />
+      ) : null}
     </BlockCard>
   );
 }
@@ -204,6 +213,7 @@ export function BranchBlockSummaryCard({
   expanded,
   onExpandedChange,
   describeRoute,
+  endReachable = true,
 }: {
   block: BranchBlockDraft;
   position: BlockPosition;
@@ -214,6 +224,8 @@ export function BranchBlockSummaryCard({
   onExpandedChange?: (expanded: boolean) => void;
   /* The resolved reviewer destination, shown under the path. */
   describeRoute?: (target: ReviewerTarget | null) => string;
+  /* False when the branch never runs out; its end is then left out. */
+  endReachable?: boolean;
 }) {
   const route = describeRoute?.(block.target ?? null);
   return (
@@ -230,18 +242,22 @@ export function BranchBlockSummaryCard({
         <ConditionTree node={block.when} />
       </SummaryField>
 
-      <SummaryField label="If no block in this branch decides">
-        <span className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-body text-ink">
-          <PersonIcon width={13} height={13} className="shrink-0 text-ink-muted" />
-          Ask a human, and the pipeline stops
-        </span>
-        <TargetBadge target={block.target ?? null} fallbackLabel="Pipeline default" className="self-start" />
-        {route ? <p className="text-micro text-ink-muted">{route}</p> : null}
-      </SummaryField>
+      {endReachable ? (
+        <>
+          <SummaryField label="If no block in this branch decides">
+            <span className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-body text-ink">
+              <PersonIcon width={13} height={13} className="shrink-0 text-ink-muted" />
+              Ask a human, and the pipeline stops
+            </span>
+            <TargetBadge target={block.target ?? null} fallbackLabel="Pipeline default" className="self-start" />
+            {route ? <p className="text-micro text-ink-muted">{route}</p> : null}
+          </SummaryField>
 
-      <SummaryField label="Reason">
-        <SummaryText empty="No reason given. The agent receives only the outcome.">{block.reason}</SummaryText>
-      </SummaryField>
+          <SummaryField label="Reason">
+            <SummaryText empty="No reason given.">{block.reason}</SummaryText>
+          </SummaryField>
+        </>
+      ) : null}
     </BlockSummaryCard>
   );
 }
