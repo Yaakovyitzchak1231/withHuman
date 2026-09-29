@@ -68,6 +68,26 @@ async function loadRecentRequests(agents: AgentSummary[]): Promise<ApprovalReque
   return pages.flat().sort((a, b) => b.created_at.localeCompare(a.created_at));
 }
 
+/* The arguments a registered server's requests always carry, as a schema
+ * that applies to every tool, so the editors offer them as fields with
+ * their values even for a server whose tools were never discovered. */
+export function serverArgumentSchemas(directory: ServerDirectoryEntry[]): ToolSchema[] {
+  return directory
+    .filter((entry) => (entry.arguments ?? []).length > 0)
+    .map((entry) => ({
+      name: entry.name,
+      source: entry.source,
+      everyTool: true,
+      inputSchema: {
+        type: "object",
+        properties: Object.fromEntries(entry.arguments!.map((argument) => [
+          argument.name,
+          { type: "string", description: argument.description, ...(argument.values.length > 0 ? { enum: argument.values } : {}) },
+        ])),
+      },
+    }));
+}
+
 /* The edition's centrally registered servers, when it has any; a
  * refused or failed read is an empty directory. */
 function loadServerDirectory(): Promise<ServerDirectoryEntry[]> {
@@ -109,7 +129,7 @@ export async function loadPipelineSuggestions(): Promise<{
   ].filter(Boolean);
   const newest = requests[0];
   return {
-    toolSchemas: catalogSchemas(catalogue.tools, requests),
+    toolSchemas: [...catalogSchemas(catalogue.tools, requests), ...serverArgumentSchemas(directory)],
     valueSuggestions: mergeValueSuggestions({
       "/request/tool": tools,
       "/request/server": servers,

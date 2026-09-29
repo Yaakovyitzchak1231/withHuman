@@ -19,6 +19,14 @@ describe("tool schemas", () => {
   const unbounded = { id: "root", all: [{ id: "choices", any: [tool("refund"), field("other", "anything")] }, field("amount", "amount")] };
   expect(applicableToolNames(unbounded, "amount")).toBeNull();
  });
+ it("applies a server's arguments whichever tool a condition names", () => {
+  const server: ToolSchema = { name: "Cloudflare", source: "gateway", everyTool: true, inputSchema: { type: "object", properties: { withhuman_scope: { type: "string", enum: ["read", "write"] } } } };
+  const root = { id: "root", all: [tool("refund"), field("scope", "withhuman_scope")] };
+  const hints = fieldHints(root, "scope", [...tools, server]);
+  expect(hints.fields["/request/arguments/withhuman_scope"].values).toEqual(["read", "write"]);
+  expect(hints.fields["/request/arguments/amount"]).toBeTruthy();
+  expect(hints.fields["/request/arguments/environment"]).toBeUndefined();
+ });
  it("supports in selections and never claims conflicting definitions are universal", () => {
   const root = { id: "root", all: [{ id: "t", field: "/request/tool", operator: "in", value: ["refund", "deploy"] }, field("a", "amount")] };
   const hints = fieldHints(root, "a", tools);
