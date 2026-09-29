@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { cn } from "@/ds/lib/cn";
 import { Avatar } from "./avatar";
 import { Badge } from "./badge";
@@ -42,20 +42,18 @@ export interface ReviewerTarget {
 }
 
 /* The picker also offers "no explicit target", and in a route picker the
- * agent's owner, which needs a path to fall back to: without one it is
- * listed but disabled, saying why, so it never silently disappears. */
+ * agent's owner. */
 type TargetOption =
   | ReviewerTarget
   | { type: "default"; id: "default"; name: string }
-  | { type: "owner"; id: "owner"; name: string; disabled?: boolean };
+  | { type: "owner"; id: "owner"; name: string };
 
 const OWNER_OPTION = { type: "owner" as const, id: "owner" as const, name: "The agent's owner" };
-const OWNER_NEEDS_PATH = "Create an escalation path first, for agents without an owner";
 
-/* An agent-owner route with the fallback it names, as the chip and the
- * hover card say it. */
+/* An agent-owner route as its chip says it: the fallback path when it
+ * names one; without one the pipeline default is the fallback. */
 export function agentOwnerLabel(fallbackName: string): string {
-  return `Agent owner, else ${fallbackName}`;
+  return fallbackName ? `Agent owner, else ${fallbackName}` : "Agent owner";
 }
 
 function optionKey(option: TargetOption): string {
@@ -125,7 +123,7 @@ export function TargetBadge({
       <HoverCardBody>
         The person who owns the agent instance that made the request is asked, and only they
         can decide it. If the agent has no owner, such as a service agent, the request goes to{" "}
-        {target.name} instead.
+        {target.id ? target.name : "the pipeline default"} instead.
       </HoverCardBody>
     </>}>
       {chip}
@@ -272,10 +270,9 @@ export function TargetSelect({
    * nothing yet; it may instead ask the agent's owner, keeping a path as
    * the fallback. */
   const routePicker = paths.length === directory.length;
-  const owner = useMemo(() => ({ ...OWNER_OPTION, disabled: paths.length === 0 }), [paths.length]);
   const items: TargetOption[] = [
     ...(fallbackLabel ? [{ type: "default" as const, id: "default" as const, name: fallbackLabel }] : []),
-    ...(routePicker ? [owner] : []),
+    ...(routePicker ? [OWNER_OPTION] : []),
     ...paths,
     ...broadcasts,
     ...teams,
@@ -283,7 +280,7 @@ export function TargetSelect({
   ];
   const selected: TargetOption | null =
     value?.type === "agent_owner"
-      ? owner
+      ? OWNER_OPTION
       : value
         ? (items.find((item) => optionKey(item) === optionKey(value)) ?? value)
         : (items.find((item) => item.type === "default") ?? null);
@@ -298,9 +295,10 @@ export function TargetSelect({
         const option = next as TargetOption | null;
         if (!option || option.type === "default") onChange(null);
         else if (option.type === "owner") {
-          /* Keep the path already chosen as the fallback, else the first. */
-          const fallback = value?.type === "escalation_path" || value?.type === "agent_owner" ? value : paths[0];
-          if (fallback) onChange({ type: "agent_owner", id: fallback.id, name: fallback.name });
+          /* Keep the path already chosen as the fallback; without one the
+           * pipeline default is the fallback. */
+          const fallback = value?.type === "escalation_path" || value?.type === "agent_owner" ? value : null;
+          onChange({ type: "agent_owner", id: fallback?.id ?? "", name: fallback?.name ?? "" });
         } else onChange(option);
       }}
     >
@@ -314,7 +312,7 @@ export function TargetSelect({
       )}
       <SelectContent<TargetOption> filterPlaceholder="Filter">
         {(item) => (
-          <SelectItem key={optionKey(item)} value={item} disabled={item.type === "owner" && item.disabled}>
+          <SelectItem key={optionKey(item)} value={item}>
             <span className="flex items-center gap-2">
               {item.type === "team" ? (
                 <PeopleIcon width={13} height={13} className="text-ink-muted" />
@@ -339,9 +337,6 @@ export function TargetSelect({
               {item.type !== "default" && item.type !== "owner" && item.detail ? (
                 <span className="text-micro font-normal text-ink-faint">{item.detail}</span>
               ) : null}
-              {item.type === "owner" && item.disabled ? (
-                <span className="truncate text-micro font-normal text-ink-faint">{OWNER_NEEDS_PATH}</span>
-              ) : null}
             </span>
           </SelectItem>
         )}
@@ -349,28 +344,42 @@ export function TargetSelect({
     </Select>
   );
   if (value?.type !== "agent_owner") return picker;
-  /* Asking the owner names the path a request without one goes to. */
+  /* Asking the owner may name the path a request without one goes to;
+   * without one the pipeline default is the fallback. */
+  const inherited: TargetOption = { type: "default", id: "default", name: fallbackLabel ?? "Pipeline default" };
+  const fallbacks: TargetOption[] = [inherited, ...paths];
+  const fallback = value.id ? (paths.find((path) => path.id === value.id) ?? { ...value, type: "escalation_path" as const }) : inherited;
   return (
     <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
       {picker}
       <span className="text-micro text-ink-muted">If the agent has no owner</span>
       <Select
-        items={paths}
-        itemToStringLabel={(item) => (item as ReviewerTarget).name}
-        value={paths.find((path) => path.id === value.id) ?? { ...value, type: "escalation_path" }}
+        items={fallbacks}
+        itemToStringLabel={(item) => (item as TargetOption).name}
+        value={fallback}
         onValueChange={(next) => {
-          const path = next as ReviewerTarget | null;
-          if (path) onChange({ type: "agent_owner", id: path.id, name: path.name });
+          const option = next as TargetOption | null;
+          if (!option || option.type === "default") onChange({ type: "agent_owner", id: "", name: "" });
+          else onChange({ type: "agent_owner", id: option.id, name: option.name });
         }}
       >
         <SelectTrigger aria-label={`${ariaLabel} fallback`} className={cn("w-60", className)} placeholder="Choose" />
-        <SelectContent<ReviewerTarget> filterPlaceholder="Filter">
+        <SelectContent<TargetOption> filterPlaceholder="Filter">
           {(item) => (
             <SelectItem key={optionKey(item)} value={item}>
               <span className="flex items-center gap-2">
-                <ProgressIcon width={13} height={13} className="text-ink-muted" />
-                <Referenced reference={referenceOf(item)} focusable={false} inline>{item.name}</Referenced>
-                {item.detail ? <span className="text-micro font-normal text-ink-faint">{item.detail}</span> : null}
+                {item.type === "default" ? (
+                  <>
+                    <InboxIcon width={13} height={13} className="text-ink-muted" />
+                    <span className="text-ink-muted">{item.name}</span>
+                  </>
+                ) : item.type === "escalation_path" ? (
+                  <>
+                    <ProgressIcon width={13} height={13} className="text-ink-muted" />
+                    <Referenced reference={referenceOf(item)} focusable={false} inline>{item.name}</Referenced>
+                    {item.detail ? <span className="text-micro font-normal text-ink-faint">{item.detail}</span> : null}
+                  </>
+                ) : null}
               </span>
             </SelectItem>
           )}

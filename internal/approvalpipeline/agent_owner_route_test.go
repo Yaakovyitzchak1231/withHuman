@@ -90,23 +90,51 @@ func TestPreviewReportsTheOwnerRoute(t *testing.T) {
 	}
 }
 
-func TestAnOwnerRouteRequiresItsFallback(t *testing.T) {
-	repository := newMemoryPipelineRepository()
-	management := NewManagementService(repository, NewCompiledPipelineState(repository, NewBlockRegistry()), fixedPipelineClock{now: time.Unix(7_000, 0).UTC()})
-	principal := pipelineManagerPrincipal("organization-1")
-
-	if _, err := management.CreateRevision(context.Background(), principal, "billing", pipelineName("billing"), nil, Route{AskAgentOwner: true}); !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("a default owner route without a path must be invalid: %v", err)
-	}
-	block := decideWhen("asks", approvalblock.Human, approvalblock.Field("/request/tool").Equals("push"), routedTo("", true))
-	if _, err := management.CreateRevision(context.Background(), principal, "billing", pipelineName("billing"), []approvalblock.Definition{block}, Route{}); !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("a block owner route without a path must be invalid: %v", err)
-	}
-	created, err := management.CreateRevision(context.Background(), principal, "billing", pipelineName("billing"), nil, Route{EscalationPath: "on-call", AskAgentOwner: true})
+// Asking the owner needs no path of its own: a block's owner route falls
+// back to the pipeline default's path, and a default that asks the owner
+// without a path falls back to any authorized reviewer.
+func TestAnOwnerRouteWithoutAPathFallsBackToThePipelineDefault(t *testing.T) {
+	now := time.Unix(7_000, 0).UTC()
+	asks := decideWhen("asks", approvalblock.Human, approvalblock.Field("/request/tool").Equals("push"), routedTo("", true))
+	service, _ := branchFixture(t, now, NewBlockRegistry(), branchScope{
+		key: "entry", defaultPath: "on-call", definitions: []approvalblock.Definition{asks},
+	})
+	push, err := service.Evaluate(context.Background(), branchRequest(now, "push", `{}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !created.Revision.DefaultAskAgentOwner || created.Revision.DefaultEscalationPath != "on-call" {
+	if route := push.HumanReview; route == nil || !route.AskAgentOwner || route.PathKey != "on-call" ||
+		route.Reason != domain.RoutingReasonBlockEscalation || route.BlockID == "" {
+		t.Fatalf("a block's owner route must fall back to the default path: %#v", route)
+	}
+
+	bare, _ := branchFixture(t, now, NewBlockRegistry(), branchScope{
+		key: "entry", askOwner: true, definitions: []approvalblock.Definition{asks},
+	})
+	for _, tool := range []string{"push", "read"} {
+		input, err := bare.Evaluate(context.Background(), branchRequest(now, tool, `{}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if route := input.HumanReview; route == nil || !route.AskAgentOwner || route.PathKey != "" {
+			t.Fatalf("%s: an owner route with no path anywhere must ask the owner alone: %#v", tool, route)
+		}
+	}
+}
+
+func TestAnOwnerRouteNeedsNoPath(t *testing.T) {
+	repository := newMemoryPipelineRepository()
+	management := NewManagementService(repository, NewCompiledPipelineState(repository, NewBlockRegistry()), fixedPipelineClock{now: time.Unix(7_000, 0).UTC()})
+	principal := pipelineManagerPrincipal("organization-1")
+	block := decideWhen("asks", approvalblock.Human, approvalblock.Field("/request/tool").Equals("push"), routedTo("", true))
+	created, err := management.CreateRevision(context.Background(), principal, "billing", pipelineName("billing"), []approvalblock.Definition{block}, Route{AskAgentOwner: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !created.Revision.DefaultAskAgentOwner || created.Revision.DefaultEscalationPath != "" {
 		t.Fatalf("revision = %#v", created.Revision)
+	}
+	if _, err := management.CreateRevision(context.Background(), principal, "billing", pipelineName("billing"), nil, Route{EscalationPath: "Not A Key", AskAgentOwner: true}); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("a malformed fallback path must be invalid: %v", err)
 	}
 }

@@ -540,3 +540,27 @@ func TestDecorateIgnoresTheOwnerWithoutAnOwnerRoute(t *testing.T) {
 		t.Fatalf("snapshot = %+v", snapshot)
 	}
 }
+
+// An owner route with no fallback path anywhere: the owner takes the
+// request, and without one able to decide, any authorized reviewer does.
+func TestDecorateAnOwnerRouteWithoutAPath(t *testing.T) {
+	ownerID := domain.ID(uuid.NewString())
+	service := evaluationService(pathReaderStub{
+		owners: map[domain.ID]application.AgentOwnerStanding{ownerID: {Active: true, CanDecide: true}},
+	})
+	withoutPath := func(owner domain.ID) application.InitializeApprovalInput {
+		initialization := ownerInitialization(owner)
+		initialization.HumanReview.PathKey = ""
+		return initialization
+	}
+	decorated := service.Decorate(context.Background(), withoutPath(ownerID))
+	if snapshot := decorated.Routing; snapshot.Outcome != domain.RoutingAgentOwner || snapshot.AgentOwnerMembershipID != ownerID ||
+		snapshot.EscalationPathKey != "" || snapshot.EscalationPathRevisionID != "" || snapshot.Reason != domain.RoutingReasonPipelineDefault {
+		t.Fatalf("snapshot = %+v", snapshot)
+	}
+	decorated = service.Decorate(context.Background(), withoutPath(""))
+	if snapshot := decorated.Routing; snapshot.Outcome != domain.RoutingDefaultQueue || snapshot.Reason != domain.RoutingReasonNoEscalation ||
+		snapshot.AgentOwnerFallback != domain.AgentOwnerFallbackNoOwner {
+		t.Fatalf("snapshot = %+v", snapshot)
+	}
+}

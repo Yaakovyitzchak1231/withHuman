@@ -99,15 +99,17 @@ func (service *EvaluationService) evaluate(ctx context.Context, request domain.A
 	if route != nil && route.PipelineRevisionID != "" {
 		detail["pipeline_revision_id"] = route.PipelineRevisionID
 	}
-	if route == nil || route.PathKey == "" {
+	if route == nil || (route.PathKey == "" && !route.AskAgentOwner) {
 		return fallback(domain.RoutingReasonNoEscalation), detail
 	}
-	if !routing.ValidPathKey(route.PathKey) || (route.Reason != domain.RoutingReasonBlockEscalation && route.Reason != domain.RoutingReasonPipelineDefault) {
+	if (route.PathKey != "" && !routing.ValidPathKey(route.PathKey)) || (route.Reason != domain.RoutingReasonBlockEscalation && route.Reason != domain.RoutingReasonPipelineDefault) {
 		service.logger.WarnContext(ctx, "pipeline handed an unusable escalation route; request falls to the default queue",
 			"approval_request_id", request.ID, "reason", route.Reason)
 		return fallback(domain.RoutingReasonEvaluationError), detail
 	}
-	detail["escalation_path_key"] = route.PathKey
+	if route.PathKey != "" {
+		detail["escalation_path_key"] = route.PathKey
+	}
 	if route.BlockID != "" {
 		detail["block_id"] = route.BlockID
 	}
@@ -130,6 +132,14 @@ func (service *EvaluationService) evaluate(ctx context.Context, request domain.A
 			snapshot.BlockID = route.BlockID
 		}
 		return snapshot
+	}
+	// An owner route without a fallback path: the owner takes it, or,
+	// without one able to decide, any authorized reviewer.
+	if route.PathKey == "" {
+		if ownerID != "" {
+			return ownerRoute(domain.ApprovalRequestRouting{}), detail
+		}
+		return fallback(domain.RoutingReasonNoEscalation), detail
 	}
 	path, err := service.paths.GetActiveEscalationPathRevision(ctx, application.GetActiveEscalationPathRevisionInput{
 		OrganizationID: request.OrganizationID,

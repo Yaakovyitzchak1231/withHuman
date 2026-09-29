@@ -95,7 +95,6 @@ func (input CreateRequestApprovalPipelineRevisionInput) Validate() error {
 		validPipelineKey(input.PipelineKey),
 		validPipelineName(input.Name),
 		validOptionalEscalationPathKey(input.DefaultEscalationPath),
-		agentOwnerFallback(input.DefaultEscalationPath, input.DefaultAskAgentOwner),
 		requiredID("creating membership ID", input.CreatedByActorID),
 		requiredTime("current time", input.Now),
 	}); err != nil {

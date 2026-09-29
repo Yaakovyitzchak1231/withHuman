@@ -434,7 +434,7 @@ export function PipelineViewScreen({
   const inheritedLabel = entry ? "Any authorized reviewer" : "The delegating pipeline's default";
   const describeTargetRoute = (target: ReviewerTarget | null) =>
     target?.type === "agent_owner"
-      ? `Asks the person who owns the agent instance that made the request, and only they can decide it. If the agent has no owner, it goes to ${target.name}.`
+      ? `Asks the person who owns the agent instance that made the request, and only they can decide it. If the agent has no owner, it goes to ${target.id ? target.name : "the pipeline default"}.`
       : target
         ? ""
         : `Uses pipeline default: ${currentDefault?.type === "agent_owner" ? agentOwnerLabel(currentDefault.name) : (currentDefault?.name ?? inheritedLabel)}.`;
@@ -1295,9 +1295,6 @@ export function parseDocument(text: string): {
   const askOwner = parsed.default_ask_agent_owner;
   if (askOwner !== undefined && typeof askOwner !== "boolean") {
     throw new Error("default_ask_agent_owner must be true or false.");
-  }
-  if (askOwner && !defaultPath) {
-    throw new Error("default_ask_agent_owner needs default_escalation_path as the fallback for agents without an owner.");
   }
   return {
     blocks: parsed.blocks as RequestApprovalBlockDefinition[],

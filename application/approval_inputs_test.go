@@ -91,8 +91,11 @@ func TestApprovalInitializationRoutingShapes(t *testing.T) {
 		"owner with an inactive fallback": {domain.ApprovalRequestRouting{
 			Outcome: domain.RoutingAgentOwner, AgentOwnerMembershipID: "owner-1", EscalationPathKey: "platform",
 		}, true},
-		"owner without the fallback key": {domain.ApprovalRequestRouting{
+		"owner without a fallback path": {domain.ApprovalRequestRouting{
 			Outcome: domain.RoutingAgentOwner, AgentOwnerMembershipID: "owner-1",
+		}, true},
+		"owner with a pinned revision but no path key": {domain.ApprovalRequestRouting{
+			Outcome: domain.RoutingAgentOwner, AgentOwnerMembershipID: "owner-1", EscalationPathRevisionID: "path-revision-1",
 		}, false},
 		"owner outcome without an owner": {domain.ApprovalRequestRouting{
 			Outcome: domain.RoutingAgentOwner, EscalationPathKey: "platform",

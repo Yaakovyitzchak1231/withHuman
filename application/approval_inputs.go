@@ -236,10 +236,11 @@ func validateApprovalInitializationRouting(request domain.ApprovalRequest, routi
 			return invalidField("approval routing", "only an agent_owner outcome names the agent's owner")
 		}
 	case domain.RoutingAgentOwner:
-		// The fallback path's key is always pinned beside the owner; its
-		// revision only when the path had an active one.
-		if routing.AgentOwnerMembershipID == "" || routing.EscalationPathKey == "" || routing.AgentOwnerFallback != "" {
-			return invalidField("approval routing", "an agent_owner outcome names the owner and its fallback path key, and no fallback reason")
+		// The fallback path, when the route had one, is pinned beside the
+		// owner: its key always, its revision when the path was active.
+		if routing.AgentOwnerMembershipID == "" || routing.AgentOwnerFallback != "" ||
+			(routing.EscalationPathRevisionID != "" && routing.EscalationPathKey == "") {
+			return invalidField("approval routing", "an agent_owner outcome names the owner, no fallback reason, and a pinned revision only with its path key")
 		}
 	default:
 		return invalidField("approval routing outcome", "must be agent_owner, escalated or default_queue")

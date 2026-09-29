@@ -176,7 +176,7 @@ export function PipelinesScreen({ page }: { page: PipelinesPage }) {
       const revision = await api.createRequestApprovalPipelineRevision(ENTRY_PIPELINE_KEY, {
         blocks: definitionsFromStored(entryRevision.blocks),
         ...(key ? { default_escalation_path: key } : {}),
-        ...(key && asksAgentOwner(draftDefault) ? { default_ask_agent_owner: true } : {}),
+        ...(asksAgentOwner(draftDefault) ? { default_ask_agent_owner: true } : {}),
       });
       await revisionActivation.offer({
         revision: revision.revision,

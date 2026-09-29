@@ -130,7 +130,8 @@ export function pathTarget(
   directory: ReviewerTarget[],
   askAgentOwner?: boolean,
 ): ReviewerTarget | null {
-  if (!key) return null;
+  /* Asking the owner without a path falls back to the pipeline default. */
+  if (!key) return askAgentOwner ? { type: "agent_owner", id: "", name: "" } : null;
   const known = directory.find((entry) => entry.type === "escalation_path" && entry.id === key);
   const path = known ?? { type: "escalation_path" as const, id: key, name: key };
   return askAgentOwner ? { type: "agent_owner", id: path.id, name: path.name } : path;
@@ -139,7 +140,7 @@ export function pathTarget(
 /* The path a target names: the path itself, or an owner route's
  * fallback. */
 export function pathKeyOf(target: ReviewerTarget | null | undefined): string | undefined {
-  return target?.type === "escalation_path" || target?.type === "agent_owner" ? target.id : undefined;
+  return target?.type === "escalation_path" || target?.type === "agent_owner" ? target.id || undefined : undefined;
 }
 
 /* A route as one comparable string: the path, and whether the owner is
@@ -156,8 +157,7 @@ export function asksAgentOwner(target: ReviewerTarget | null | undefined): boole
 /* The route keys a human exit's config carries for target. */
 function routeConfig(target: ReviewerTarget | null | undefined): { escalation_path?: string; ask_agent_owner?: true } {
   const key = pathKeyOf(target);
-  if (!key) return {};
-  return asksAgentOwner(target) ? { escalation_path: key, ask_agent_owner: true } : { escalation_path: key };
+  return { ...(key ? { escalation_path: key } : {}), ...(asksAgentOwner(target) ? { ask_agent_owner: true as const } : {}) };
 }
 
 /* A kind the switch does not know: the union grew and this mapping did
@@ -339,7 +339,7 @@ function definitionFromDraft(draft: BlockDraft): RequestApprovalBlockDefinition 
        * typed as core's kinds, which is where it rides along. Asking the
        * agent's owner rides beside the path the kind wrote. */
       const definition = requireBlockKind(draft.type).toDefinition(draft, escalationPath);
-      if (asksAgentOwner(draft.target) && definition.config.escalation_path) {
+      if (asksAgentOwner(draft.target)) {
         definition.config = { ...definition.config, ask_agent_owner: true };
       }
       return definition as unknown as RequestApprovalBlockDefinition;
@@ -359,7 +359,7 @@ export function documentFromDrafts(
   return {
     blocks: drafts.map(definitionFromDraft),
     ...(key ? { default_escalation_path: key } : {}),
-    ...(key && asksAgentOwner(defaultPath) ? { default_ask_agent_owner: true } : {}),
+    ...(asksAgentOwner(defaultPath) ? { default_ask_agent_owner: true } : {}),
   };
 }
 
