@@ -669,14 +669,16 @@ function ConditionLeafRow({
         typeHint={field && !field.unknown && field.types.length === 1 ? field.types[0] : undefined}
       />
       {suitable ? <Button size="sm" variant="ghost" onClick={() => setAllOperators(!allOperators)}>{allOperators ? "Suggested operators" : "All operators"}</Button> : null}
-      {node.field === "/request/tool" && (catalog?.tools.length ?? 0) > 0 ? <p className="w-full text-micro text-ink-muted">A tool name matches every source that sends that name.</p> : null}
-      {field ? <p className="w-full text-micro text-ink-muted">{field.description} {field.types.join(" | ")}{field.required ? " · Required" : ""}{field.partial ? " · Present in some definitions" : ""}. {field.sources.join(", ")}</p> : null}
-      {warning ? <p role="status" className="w-full text-micro text-warn">{warning}</p> : null}
+      {/* The remove button belongs to the controls' line; the full-width
+          notes below wrap onto their own lines after it. */}
       {onRemove ? (
         <IconButton aria-label="Remove condition" size="sm" onClick={onRemove}>
           <XIcon width={12} height={12} />
         </IconButton>
       ) : null}
+      {node.field === "/request/tool" && (catalog?.tools.length ?? 0) > 0 ? <p className="w-full text-micro text-ink-muted">A tool name matches every source that sends that name.</p> : null}
+      {field ? <p className="w-full text-micro text-ink-muted">{field.description} {field.types.join(" | ")}{field.required ? " · Required" : ""}{field.partial ? " · Present in some definitions" : ""}. {field.sources.join(", ")}</p> : null}
+      {warning ? <p role="status" className="w-full text-micro text-warn">{warning}</p> : null}
     </div>
   );
 }
