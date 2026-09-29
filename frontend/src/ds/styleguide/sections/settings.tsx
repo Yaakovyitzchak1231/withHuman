@@ -20,7 +20,7 @@ import { SlackIcon } from "@/ds/icons/brands";
 import { Section, Demo } from "../section";
 
 interface PolicyDraft {
-  selfApproval: boolean;
+  personalKeys: boolean;
   name: string;
 }
 
@@ -30,14 +30,14 @@ function SaveBarDemo() {
   const toast = useToast();
   const navigate = useNavigate();
   const [saved, setSaved] = useState<PolicyDraft>({
-    selfApproval: false,
+    personalKeys: false,
     name: "Acme",
   });
   const [draft, setDraft] = useState<PolicyDraft>(saved);
   const [saving, setSaving] = useState(false);
 
   const dirty =
-    Number(draft.selfApproval !== saved.selfApproval) +
+    Number(draft.personalKeys !== saved.personalKeys) +
     Number(draft.name !== saved.name);
 
   function save(): Promise<void> {
@@ -56,15 +56,15 @@ function SaveBarDemo() {
     <>
       <SettingsSection title="Decisions" description="Edit anything and the save bar rises; put it back and the bar sinks.">
         <SettingRow
-          label="Allow self-approval"
-          description="Let the requester approve their own action."
+          label="Allow personal API keys"
+          description="Let members create keys for their own scripts."
         >
           <Switch
-            checked={draft.selfApproval}
+            checked={draft.personalKeys}
             onCheckedChange={(next) =>
-              setDraft((current) => ({ ...current, selfApproval: next }))
+              setDraft((current) => ({ ...current, personalKeys: next }))
             }
-            aria-label="Allow self-approval"
+            aria-label="Allow personal API keys"
           />
         </SettingRow>
         <SettingRow
@@ -212,7 +212,7 @@ function WayDemo() {
 }
 
 export function SettingsSection_() {
-  const [selfApproval, setSelfApproval] = useState(false);
+  const [personalKeys, setPersonalKeys] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const toast = useToast();
   return (
@@ -296,13 +296,13 @@ export function SettingsSection_() {
             description="How approvals are authorized."
           >
             <SettingRow
-              label="Allow self-approval"
-              description="Let the requester approve their own action."
+              label="Allow personal API keys"
+              description="Let members create keys for their own scripts."
             >
               <Switch
-                checked={selfApproval}
-                onCheckedChange={setSelfApproval}
-                aria-label="Allow self-approval"
+                checked={personalKeys}
+                onCheckedChange={setPersonalKeys}
+                aria-label="Allow personal API keys"
               />
             </SettingRow>
             <SettingRow

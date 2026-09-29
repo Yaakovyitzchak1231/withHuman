@@ -1,6 +1,6 @@
 # withHuman authentication and identity architecture
 
-Status: draft · Last updated: 2026-09-18
+Status: draft · Last updated: 2026-09-29 (self-approval policy removed)
 
 > **Prototype.** Same caveat as
 > [00-general-design.md](00-general-design.md): everything here can change
@@ -471,7 +471,6 @@ Each organization owns policy independent of provider configuration:
 login_mode: any | sso_preferred | sso_required
 admission_mode: invite_only | jit | directory_only
 mfa_mode: optional | reviewers_required | everyone_required
-self_approval: allow | deny
 approval_reauth_window: duration
 session_max_age: duration
 ```
@@ -500,10 +499,14 @@ accepted only if all of these checks pass atomically:
    `not_targeted`), plus anyone added to the request since;
    `request.decide.unrouted` bypasses with an acknowledgement, a path
    that reaches nobody leaves the request to those holders, and requests
-   without a matched snapshot are open to any authorized reviewer.
-4. Organization self-approval policy allows the actor to decide this request.
-5. Authentication strength and freshness satisfy organization policy.
-6. The request is still pending.
+   without a matched snapshot are open to any authorized reviewer. A
+   request routed to its agent's owner is decidable only by that owner
+   ([06-routing-and-escalation.md](06-routing-and-escalation.md)).
+4. Authentication strength and freshness satisfy organization policy.
+5. The request is still pending.
+
+There is no self-approval check: a person may decide a request their own
+agent raised whenever routing reaches them.
 
 The terminal decision stores the canonical membership, authentication context,
 channel, timestamp, and optional note. Display name and email are denormalized

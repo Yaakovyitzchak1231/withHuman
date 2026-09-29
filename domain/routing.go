@@ -53,10 +53,28 @@ const (
 	// RoutingDefaultQueue means no path applies: any authorized reviewer
 	// may decide from the queue.
 	RoutingDefaultQueue RoutingOutcome = "default_queue"
+	// RoutingAgentOwner means the request was handed to the owner of the
+	// personal agent instance that raised it, the only person routing
+	// admits. The fallback path is pinned beside it and takes over only
+	// if the owner is suspended or deprovisioned while it is pending.
+	RoutingAgentOwner RoutingOutcome = "agent_owner"
 )
 
-// Routing reason codes. The first two accompany escalated; the rest
-// explain a default_queue outcome.
+// Why an agent-owner route went to its fallback path at routing time.
+const (
+	// AgentOwnerFallbackNoOwner is a request from a service agent.
+	AgentOwnerFallbackNoOwner = "no_agent_owner"
+	// AgentOwnerFallbackInactive is an owner whose membership or account
+	// was no longer active when the request was routed.
+	AgentOwnerFallbackInactive = "agent_owner_inactive"
+	// AgentOwnerFallbackCannotDecide is an owner who does not hold
+	// request.decide for the request.
+	AgentOwnerFallbackCannotDecide = "agent_owner_cannot_decide"
+)
+
+// Routing reason codes. The first two accompany escalated and
+// agent_owner, naming where the route came from; the rest explain a
+// default_queue outcome.
 const (
 	RoutingReasonBlockEscalation = "block_escalation"
 	RoutingReasonPipelineDefault = "pipeline_default"
@@ -79,6 +97,13 @@ type ApprovalRequestRouting struct {
 	PipelineRevisionID       ID
 	BlockID                  ID
 	Urgency                  string
+	// AgentOwnerMembershipID is the owner an agent_owner snapshot admits.
+	// The snapshot's path fields then describe the pinned fallback.
+	AgentOwnerMembershipID ID
+	// AgentOwnerFallback says why an agent-owner route went to its
+	// fallback at routing time (the AgentOwnerFallback* reasons); empty
+	// for every other snapshot.
+	AgentOwnerFallback string
 	// TeamPolicies pins the active policy revision of every team the
 	// pinned path can reach for this request that had one at routing
 	// time. A team absent here is notified all at once when a level

@@ -46,6 +46,9 @@ type WebhookConfig struct {
 	// a failure that falls closed to human, hands the request to. Empty
 	// inherits the pipeline default.
 	EscalationPath string `json:"escalation_path,omitempty"`
+	// AskAgentOwner sends a human answer to the agent's owner, with
+	// EscalationPath as the fallback for a request without one.
+	AskAgentOwner bool `json:"ask_agent_owner,omitempty"`
 }
 
 // Allows reports whether the endpoint may return outcome.
@@ -75,7 +78,7 @@ func (config WebhookConfig) Validate() error {
 	if strings.TrimSpace(config.Reason) == "" {
 		return errors.New("block reason is required")
 	}
-	return validateOptionalEscalationPath(config.EscalationPath)
+	return ValidateRoute(config.EscalationPath, config.AskAgentOwner)
 }
 
 // DefaultWebhookAllowedOutcomes makes a new webhook block an enrichment or

@@ -130,7 +130,11 @@ func (s *Service) Create(ctx context.Context, principal domain.Principal, input 
 		ID: domain.ID(requestID.String()), OrganizationID: principal.OrganizationID,
 		AgentID: principal.ActorID, AgentInstanceID: principal.AgentInstanceID,
 		AgentSlug: principal.AgentSlug,
-		Tool:      input.Tool, Server: input.Server, Arguments: input.Arguments, Timeout: input.TimeoutText,
+		// A personal instance's principal carries its owner, so routing
+		// can ask the owner before the request is stored; the insert
+		// copies the same owner from the instance row.
+		RequesterMembershipID: principal.MembershipID,
+		Tool:                  input.Tool, Server: input.Server, Arguments: input.Arguments, Timeout: input.TimeoutText,
 		AgentReasoning: input.AgentReasoning, Context: input.Context,
 		IdempotencyKey: input.IdempotencyKey, SemanticHash: semanticHash(input.Tool, input.Server, input.Arguments),
 		Status: domain.ApprovalPending, DeadlineAt: now.Add(input.Timeout), CreatedAt: now, UpdatedAt: now,
@@ -610,8 +614,6 @@ func operationError(operation domain.DecisionOperation) error {
 		return domain.ErrAuthenticationStale
 	case "authentication_weak":
 		return domain.ErrAuthenticationWeak
-	case "self_approval":
-		return domain.ErrSelfApproval
 	case "not_targeted", "break_glass_only", "outside_routing_required":
 		return RoutingRejection{Code: operation.ErrorCode}
 	case "already_terminal":

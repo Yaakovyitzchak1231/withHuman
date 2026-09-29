@@ -289,11 +289,11 @@ func readOrganizationPolicy(ctx context.Context, q routingQuerier, organizationI
 	var policy domain.OrganizationPolicy
 	var admissionMode, mfaMode, unrouted, visibility string
 	var reauthSeconds, sessionSeconds, claimRetriggerSeconds int64
-	err := q.QueryRow(ctx, `SELECT admission_mode, mfa_mode, allow_self_approval,
+	err := q.QueryRow(ctx, `SELECT admission_mode, mfa_mode,
         approval_reauth_window_seconds, session_max_age_seconds, claim_retrigger_seconds,
         unrouted_requests, request_visibility, personal_api_keys_allowed, organization_api_keys_allowed
       FROM organization_policies WHERE organization_id = $1 `+lock, organizationID).Scan(
-		&admissionMode, &mfaMode, &policy.AllowSelfApproval, &reauthSeconds, &sessionSeconds, &claimRetriggerSeconds,
+		&admissionMode, &mfaMode, &reauthSeconds, &sessionSeconds, &claimRetriggerSeconds,
 		&unrouted, &visibility, &policy.PersonalAPIKeysAllowed, &policy.OrganizationAPIKeysAllowed,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -312,7 +312,6 @@ func readOrganizationPolicy(ctx context.Context, q routingQuerier, organizationI
 // whole change rather than only the fields that moved.
 func policyAuditFields(policy domain.OrganizationPolicy) map[string]any {
 	return map[string]any{
-		"allow_self_approval":           policy.AllowSelfApproval,
 		"mfa_mode":                      policy.MFAMode,
 		"approval_reauth_window":        policy.ApprovalReauthWindow.String(),
 		"claim_retrigger_window":        policy.ClaimRetriggerWindow.String(),
@@ -340,11 +339,11 @@ func (s *Store) UpdateOrganizationPolicy(ctx context.Context, input application.
 		return domain.OrganizationPolicy{}, err
 	}
 	if _, err := tx.Exec(ctx, `UPDATE organization_policies
-        SET allow_self_approval = $2, mfa_mode = $3, approval_reauth_window_seconds = $4,
-            claim_retrigger_seconds = $5, unrouted_requests = $6, request_visibility = $7,
-            personal_api_keys_allowed = $8, organization_api_keys_allowed = $9
+        SET mfa_mode = $2, approval_reauth_window_seconds = $3,
+            claim_retrigger_seconds = $4, unrouted_requests = $5, request_visibility = $6,
+            personal_api_keys_allowed = $7, organization_api_keys_allowed = $8
         WHERE organization_id = $1`,
-		input.OrganizationID, input.AllowSelfApproval, string(input.MFAMode),
+		input.OrganizationID, string(input.MFAMode),
 		int64(input.ApprovalReauthWindow/time.Second), int64(input.ClaimRetriggerWindow/time.Second),
 		string(input.UnroutedRequests), string(input.RequestVisibility), input.PersonalAPIKeysAllowed, input.OrganizationAPIKeysAllowed); err != nil {
 		return domain.OrganizationPolicy{}, err

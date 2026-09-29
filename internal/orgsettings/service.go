@@ -36,7 +36,6 @@ func NewService(identities application.IdentityRepository, clock application.Clo
 
 // PolicyPatch is a partial update: a nil field keeps the stored value.
 type PolicyPatch struct {
-	AllowSelfApproval          *bool
 	MFAMode                    *domain.MFAMode
 	ApprovalReauthWindow       *time.Duration
 	ClaimRetriggerWindow       *time.Duration
@@ -74,7 +73,6 @@ func (s *Service) UpdatePolicy(ctx context.Context, principal domain.Principal, 
 	}
 	input := application.UpdateOrganizationPolicyInput{
 		OrganizationID:             principal.OrganizationID,
-		AllowSelfApproval:          current.AllowSelfApproval,
 		MFAMode:                    current.MFAMode,
 		ApprovalReauthWindow:       current.ApprovalReauthWindow,
 		ClaimRetriggerWindow:       current.ClaimRetriggerWindow,
@@ -84,9 +82,6 @@ func (s *Service) UpdatePolicy(ctx context.Context, principal domain.Principal, 
 		OrganizationAPIKeysAllowed: current.OrganizationAPIKeysAllowed,
 		ActorMembershipID:          principal.MembershipID,
 		Now:                        s.clock.Now(),
-	}
-	if patch.AllowSelfApproval != nil {
-		input.AllowSelfApproval = *patch.AllowSelfApproval
 	}
 	if patch.MFAMode != nil {
 		input.MFAMode = *patch.MFAMode

@@ -155,8 +155,16 @@ type approvalRoutingResponse struct {
 	EscalationPathRevisionID domain.ID             `json:"escalation_path_revision_id,omitempty"`
 	PipelineRevisionID       domain.ID             `json:"pipeline_revision_id,omitempty"`
 	BlockID                  domain.ID             `json:"block_id,omitempty"`
-	// Targets is who the pinned path reaches for this request, in path
-	// order; only they and the added reviewers may claim or decide.
+	// AgentOwner is the person an agent_owner snapshot sent the request
+	// to; AgentOwnerFallback says why an agent-owner route went to its
+	// fallback at routing time, and AgentOwnerHandedOffAt when the owner
+	// was deactivated and the fallback took over.
+	AgentOwner            *approvalRoutingTargetResponse `json:"agent_owner,omitempty"`
+	AgentOwnerFallback    string                         `json:"agent_owner_fallback,omitempty"`
+	AgentOwnerHandedOffAt *time.Time                     `json:"agent_owner_handed_off_at,omitempty"`
+	// Targets is who current routing admits, in path order: the agent's
+	// owner until a handoff, otherwise who the pinned path reaches. Only
+	// they and the added reviewers may claim or decide.
 	// Empty for a default queue snapshot. Empty for an escalated one
 	// means the path reaches nobody and only a break-glass reviewer may
 	// decide.
@@ -262,7 +270,12 @@ func newEscalationProgressResponse(progress *application.EscalationProgress) *es
 }
 
 func newApprovalRoutingResponse(snapshot application.ApprovalRoutingView, added []domain.ApprovalReviewer) approvalRoutingResponse {
+	var owner *approvalRoutingTargetResponse
+	if snapshot.AgentOwnerMembershipID != "" {
+		owner = &approvalRoutingTargetResponse{Type: "user", ID: snapshot.AgentOwnerMembershipID, Name: snapshot.AgentOwnerName}
+	}
 	return approvalRoutingResponse{
+		AgentOwner: owner, AgentOwnerFallback: snapshot.AgentOwnerFallback, AgentOwnerHandedOffAt: snapshot.AgentOwnerHandedOffAt,
 		Outcome: snapshot.Outcome, Reason: snapshot.Reason, Urgency: snapshot.Urgency,
 		EscalationPathKey: snapshot.EscalationPathKey, EscalationPathName: snapshot.EscalationPathName,
 		EscalationPathRevisionID: snapshot.EscalationPathRevisionID,

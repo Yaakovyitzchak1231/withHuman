@@ -102,7 +102,7 @@ File names follow the language and framework rather than one universal case:
 - Default to `NOT NULL`. Use `NULL` only when absence has domain meaning. Do
   not use an empty string, zero UUID, zero time, or magic number to mean
   missing. Boolean names must read affirmatively, such as `active`,
-  `email_verified`, or `allow_self_approval`.
+  `email_verified`, or `personal_api_keys_allowed`.
 - Prefer normalized relational columns. Use `jsonb` only for genuinely
   unstructured or external payloads; its owned keys still use snake_case.
   Represent bounded states as `text` plus a `CHECK` constraint rather than a

@@ -18,7 +18,7 @@ import (
 // agent_slug IS NULL stores the organization scope; the Go layer represents
 // that scope as an empty AgentSlug, so reads coalesce and writes NULLIF.
 const requestApprovalPipelineSelect = `SELECT id::text, organization_id::text, COALESCE(agent_slug, ''), revision,
-	is_active, block_ids::text[], COALESCE(default_escalation_path, ''),
+	is_active, block_ids::text[], COALESCE(default_escalation_path, ''), default_ask_agent_owner,
 	created_by_actor_id::text, created_at, archived_at
 	FROM request_approval_pipelines `
 
@@ -68,14 +68,14 @@ func (s *Store) CreateRequestApprovalPipelineRevision(ctx context.Context, input
 	revision := domain.RequestApprovalPipelineRevision{
 		ID: input.ID, OrganizationID: input.OrganizationID, AgentSlug: input.AgentSlug,
 		Revision: revisionNumber, IsActive: false, BlockIDs: blockIDs, DefaultEscalationPath: input.DefaultEscalationPath,
-		CreatedByActorID: input.CreatedByActorID, CreatedAt: input.Now,
+		DefaultAskAgentOwner: input.DefaultAskAgentOwner, CreatedByActorID: input.CreatedByActorID, CreatedAt: input.Now,
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO request_approval_pipelines
 		(id, organization_id, agent_slug, revision, is_active, block_ids, default_escalation_path,
-		 created_by_actor_id, created_at)
-		VALUES ($1, $2, NULLIF($3, ''), $4, false, $5, NULLIF($6, ''), $7, $8)`, revision.ID, revision.OrganizationID,
+		 default_ask_agent_owner, created_by_actor_id, created_at)
+		VALUES ($1, $2, NULLIF($3, ''), $4, false, $5, NULLIF($6, ''), $7, $8, $9)`, revision.ID, revision.OrganizationID,
 		revision.AgentSlug, revision.Revision, idStrings(revision.BlockIDs), revision.DefaultEscalationPath,
-		revision.CreatedByActorID, revision.CreatedAt); err != nil {
+		revision.DefaultAskAgentOwner, revision.CreatedByActorID, revision.CreatedAt); err != nil {
 		return domain.RequestApprovalPipelineRevision{}, err
 	}
 	data, _ := json.Marshal(map[string]any{
@@ -584,7 +584,7 @@ func scanRequestApprovalPipelineRevision(row rowScanner) (domain.RequestApproval
 	var id, organizationID, agentSlug, membershipID string
 	var blockIDs []string
 	err := row.Scan(&id, &organizationID, &agentSlug, &revision.Revision, &revision.IsActive,
-		&blockIDs, &revision.DefaultEscalationPath, &membershipID, &revision.CreatedAt, &revision.ArchivedAt)
+		&blockIDs, &revision.DefaultEscalationPath, &revision.DefaultAskAgentOwner, &membershipID, &revision.CreatedAt, &revision.ArchivedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.RequestApprovalPipelineRevision{}, domain.ErrNotFound
 	}

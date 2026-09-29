@@ -26,6 +26,9 @@ type BranchConfig struct {
 	// only: a block inside the branch that names no path uses the pipeline
 	// default, never this one.
 	EscalationPath string `json:"escalation_path,omitempty"`
+	// AskAgentOwner sends a request that runs out of the branch to the
+	// agent's owner, with EscalationPath as the fallback.
+	AskAgentOwner bool `json:"ask_agent_owner,omitempty"`
 }
 
 // Validate checks the branch's own condition, reason, and path, and that it
@@ -35,7 +38,7 @@ func (config BranchConfig) Validate() error {
 	if strings.TrimSpace(config.Reason) == "" {
 		return errors.New("block reason is required")
 	}
-	if err := validateOptionalEscalationPath(config.EscalationPath); err != nil {
+	if err := ValidateRoute(config.EscalationPath, config.AskAgentOwner); err != nil {
 		return err
 	}
 	if len(config.Blocks) == 0 {
@@ -67,6 +70,7 @@ type branchConfigShape struct {
 	When           Condition `json:"when"`
 	Reason         string    `json:"reason"`
 	EscalationPath string    `json:"escalation_path,omitempty"`
+	AskAgentOwner  bool      `json:"ask_agent_owner,omitempty"`
 }
 
 // branchConfigFromValue converts one decoded branch configuration. The
@@ -88,7 +92,7 @@ func branchConfigFromValue(value any) (*BranchConfig, error) {
 	if err := decodeStrictValue(object, &shape); err != nil {
 		return nil, err
 	}
-	config := &BranchConfig{When: shape.When, Reason: shape.Reason, EscalationPath: shape.EscalationPath}
+	config := &BranchConfig{When: shape.When, Reason: shape.Reason, EscalationPath: shape.EscalationPath, AskAgentOwner: shape.AskAgentOwner}
 	if !hasBlocks || blocksValue == nil {
 		return config, nil
 	}
@@ -115,6 +119,7 @@ type branchConfigWire struct {
 	Blocks         []definitionWire `json:"blocks"`
 	Reason         string           `json:"reason"`
 	EscalationPath string           `json:"escalation_path,omitempty"`
+	AskAgentOwner  bool             `json:"ask_agent_owner,omitempty"`
 }
 
 func (config BranchConfig) wire() (branchConfigWire, error) {
@@ -126,5 +131,5 @@ func (config BranchConfig) wire() (branchConfigWire, error) {
 		}
 		blocks[index] = encoded
 	}
-	return branchConfigWire{When: config.When, Blocks: blocks, Reason: config.Reason, EscalationPath: config.EscalationPath}, nil
+	return branchConfigWire{When: config.When, Blocks: blocks, Reason: config.Reason, EscalationPath: config.EscalationPath, AskAgentOwner: config.AskAgentOwner}, nil
 }

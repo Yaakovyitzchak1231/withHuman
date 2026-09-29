@@ -96,18 +96,41 @@ export async function loadPathDirectory(): Promise<ReviewerTarget[]> {
 /* An escalation path key as the editor's target, with its name looked
  * up in the directory of paths. A key the directory no longer knows
  * keeps the key as its name, so it stays visible rather than silently
- * vanishing. */
+ * vanishing. Asking the agent's owner makes the path the fallback of an
+ * agent_owner target. */
 export function pathTarget(
   key: string | undefined | null,
   directory: ReviewerTarget[],
+  askAgentOwner?: boolean,
 ): ReviewerTarget | null {
   if (!key) return null;
   const known = directory.find((entry) => entry.type === "escalation_path" && entry.id === key);
-  return known ?? { type: "escalation_path", id: key, name: key };
+  const path = known ?? { type: "escalation_path" as const, id: key, name: key };
+  return askAgentOwner ? { type: "agent_owner", id: path.id, name: path.name } : path;
 }
 
+/* The path a target names: the path itself, or an owner route's
+ * fallback. */
 export function pathKeyOf(target: ReviewerTarget | null | undefined): string | undefined {
-  return target?.type === "escalation_path" ? target.id : undefined;
+  return target?.type === "escalation_path" || target?.type === "agent_owner" ? target.id : undefined;
+}
+
+/* A route as one comparable string: the path, and whether the owner is
+ * asked first. */
+export function routeKeyOf(target: ReviewerTarget | null | undefined): string {
+  return `${asksAgentOwner(target) ? "owner:" : ""}${pathKeyOf(target) ?? ""}`;
+}
+
+/* Whether a target asks the agent's owner first. */
+export function asksAgentOwner(target: ReviewerTarget | null | undefined): boolean {
+  return target?.type === "agent_owner";
+}
+
+/* The route keys a human exit's config carries for target. */
+function routeConfig(target: ReviewerTarget | null | undefined): { escalation_path?: string; ask_agent_owner?: true } {
+  const key = pathKeyOf(target);
+  if (!key) return {};
+  return asksAgentOwner(target) ? { escalation_path: key, ask_agent_owner: true } : { escalation_path: key };
 }
 
 /* A kind the switch does not know: the union grew and this mapping did
@@ -143,7 +166,8 @@ function draftFromBlock(
   block: RequestApprovalBlockDefinition | StoredRequestApprovalBlock,
   directory: ReviewerTarget[],
 ): BlockDraft {
-  const target = pathTarget(block.config.escalation_path, directory);
+  const config = block.config as { escalation_path?: string; ask_agent_owner?: boolean };
+  const target = pathTarget(config.escalation_path, directory, config.ask_agent_owner);
   switch (block.type) {
     case "always":
       return { kind: "always", id: block.id, name: block.name, enabled: true,
@@ -209,6 +233,7 @@ function draftFromBlock(
 
 function definitionFromDraft(draft: BlockDraft): RequestApprovalBlockDefinition {
   const escalationPath = pathKeyOf(draft.target);
+  const route = routeConfig(draft.target);
   switch (draft.kind) {
     case "always": {
       const definition: AlwaysBlockDefinition = {
@@ -216,7 +241,7 @@ function definitionFromDraft(draft: BlockDraft): RequestApprovalBlockDefinition 
         ...BLOCK_ENVELOPE_DEFAULTS.always,
         config: {
           outcome: draft.outcome, reason: draft.reason,
-          ...(escalationPath && draft.outcome === "human" ? { escalation_path: escalationPath } : {}),
+          ...(draft.outcome === "human" ? route : {}),
         },
       };
       return definition;
@@ -235,7 +260,7 @@ function definitionFromDraft(draft: BlockDraft): RequestApprovalBlockDefinition 
           reason: draft.reason,
           /* Only a human outcome has a "where"; the server rejects a path
            * on an automatic one. */
-          ...(escalationPath && draft.outcome === "human" ? { escalation_path: escalationPath } : {}),
+          ...(draft.outcome === "human" ? route : {}),
         },
       };
       return definition;
@@ -257,7 +282,7 @@ function definitionFromDraft(draft: BlockDraft): RequestApprovalBlockDefinition 
             previous_metadata: draft.include.previousMetadata,
           },
           reason: draft.reason,
-          ...(escalationPath ? { escalation_path: escalationPath } : {}),
+          ...route,
         },
       };
       return definition;
@@ -276,15 +301,21 @@ function definitionFromDraft(draft: BlockDraft): RequestApprovalBlockDefinition 
           when: draft.when as unknown as Record<string, unknown>,
           blocks: draft.blocks.map(definitionFromDraft),
           reason: draft.reason,
-          ...(escalationPath ? { escalation_path: escalationPath } : {}),
+          ...route,
         },
       };
       return definition;
     }
-    case "edition":
+    case "edition": {
       /* The kind writes its own definition; the document's array is
-       * typed as core's kinds, which is where it rides along. */
-      return requireBlockKind(draft.type).toDefinition(draft, escalationPath) as unknown as RequestApprovalBlockDefinition;
+       * typed as core's kinds, which is where it rides along. Asking the
+       * agent's owner rides beside the path the kind wrote. */
+      const definition = requireBlockKind(draft.type).toDefinition(draft, escalationPath);
+      if (asksAgentOwner(draft.target) && definition.config.escalation_path) {
+        definition.config = { ...definition.config, ask_agent_owner: true };
+      }
+      return definition as unknown as RequestApprovalBlockDefinition;
+    }
     case "unknown":
       return { ...draft.definition, id: draft.id, name: draft.name } as unknown as RequestApprovalBlockDefinition;
     default:
@@ -297,7 +328,11 @@ export function documentFromDrafts(
   defaultPath: ReviewerTarget | null = null,
 ): RequestApprovalPipelineDocument {
   const key = pathKeyOf(defaultPath);
-  return { blocks: drafts.map(definitionFromDraft), ...(key ? { default_escalation_path: key } : {}) };
+  return {
+    blocks: drafts.map(definitionFromDraft),
+    ...(key ? { default_escalation_path: key } : {}),
+    ...(key && asksAgentOwner(defaultPath) ? { default_ask_agent_owner: true } : {}),
+  };
 }
 
 /* A stored revision's blocks as a document to save again, exactly as

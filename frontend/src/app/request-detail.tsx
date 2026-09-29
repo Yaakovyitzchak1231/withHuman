@@ -570,16 +570,28 @@ export function RequestDetail({
             <span className="flex flex-col items-start gap-0.5">
               {/* The pull that lines the chip's icon up with the label
                   wraps the chip, so its hover bubble keeps its shape. */}
-              {routing?.outcome === "escalated" && routing.escalation_path_key ? (
-                <span className="-ml-2 inline-flex">
-                  <TargetBadge
-                    target={{
-                      type: "escalation_path",
-                      id: routing.escalation_path_key,
-                      name: routing.escalation_path_name || routing.escalation_path_key,
-                    }}
-                  />
-                </span>
+              {routing?.outcome === "agent_owner" && routing.agent_owner && !routing.agent_owner_handed_off_at ? (
+                <>
+                  <span className="-ml-2 inline-flex">
+                    <TargetBadge target={{ type: "user", id: routing.agent_owner.id, name: routing.agent_owner.name }} />
+                  </span>
+                  <span className="text-label font-normal text-ink-faint">The agent's owner</span>
+                </>
+              ) : (routing?.outcome === "escalated" || routing?.outcome === "agent_owner") && routing.escalation_path_key ? (
+                <>
+                  <span className="-ml-2 inline-flex">
+                    <TargetBadge
+                      target={{
+                        type: "escalation_path",
+                        id: routing.escalation_path_key,
+                        name: routing.escalation_path_name || routing.escalation_path_key,
+                      }}
+                    />
+                  </span>
+                  {agentOwnerFallbackNote(routing) ? (
+                    <span className="text-label font-normal text-ink-faint">{agentOwnerFallbackNote(routing)}</span>
+                  ) : null}
+                </>
               ) : routing ? (
                 <span className="-ml-2 inline-flex">
                   <HoverCard
@@ -793,7 +805,10 @@ function BlockedCallout({
       </Callout>
     );
   }
-  if (routing?.outcome === "escalated" && routing.targets.length === 0) {
+  if (
+    (routing?.outcome === "escalated" || (routing?.outcome === "agent_owner" && routing.agent_owner_handed_off_at)) &&
+    routing.targets.length === 0
+  ) {
     const pathName = routing.escalation_path_name || routing.escalation_path_key || "The escalation path";
     return (
       <Callout
@@ -941,12 +956,17 @@ export function requestMoments(
     />
   ) : null;
   if (routing) {
+    const owner = routing.agent_owner ? (
+      <ReferenceChip inline reference={{ kind: "person", id: routing.agent_owner.id, name: routing.agent_owner.name }} />
+    ) : null;
     list.push({
       key: "routed",
       at: routing.created_at,
       tone: "neutral",
       title:
-        routing.outcome === "escalated"
+        routing.outcome === "agent_owner"
+          ? <>Sent to {owner ?? "the agent's owner"}, the agent's owner</>
+          : routing.outcome === "escalated"
           ? <>Sent to {path ?? "the escalation path"}</>
           : <>
               Sent to{" "}
@@ -959,6 +979,16 @@ export function requestMoments(
             </>,
       detail: routing.urgency === "interrupt" ? "interrupt" : "standard urgency",
     });
+    if (routing.agent_owner_handed_off_at) {
+      list.push({
+        key: "agent-owner-handoff",
+        at: routing.agent_owner_handed_off_at,
+        tone: "neutral",
+        title: path
+          ? <>The agent's owner was deactivated, so {path} took over</>
+          : <>The agent's owner was deactivated, so every authorized reviewer can decide</>,
+      });
+    }
   }
   for (const reviewer of review?.added_reviewers ?? []) {
     list.push({
@@ -1198,4 +1228,21 @@ function PresentationFooter({ request }: { request: ApprovalRequest }) {
       )}
     </p>
   );
+}
+
+/* Why a route that asks the agent's owner is at its fallback path, as the
+ * line under the path chip says it; null when the owner route is not
+ * involved. */
+function agentOwnerFallbackNote(routing: ApprovalRouting): string | null {
+  if (routing.agent_owner_handed_off_at) return "The agent's owner was deactivated";
+  switch (routing.agent_owner_fallback) {
+    case "no_agent_owner":
+      return "This agent has no owner";
+    case "agent_owner_inactive":
+      return "The agent's owner is deactivated";
+    case "agent_owner_cannot_decide":
+      return "The agent's owner cannot decide requests";
+    default:
+      return null;
+  }
 }

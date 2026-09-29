@@ -36,7 +36,17 @@ type stubEscalationRepository struct {
 }
 
 func (r *stubEscalationRepository) LoadEscalationProgram(context.Context, application.LoadEscalationProgramInput) (application.EscalationProgramRecord, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	return r.record, nil
+}
+
+// pin replaces the program the store serves, the way a committed
+// agent-owner handoff exposes the pinned fallback.
+func (r *stubEscalationRepository) pin(record application.EscalationProgramRecord) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.record = record
 }
 
 func (r *stubEscalationRepository) RecordEscalationProgress(_ context.Context, input application.RecordEscalationProgressInput) (application.EscalationProgressResult, error) {
@@ -559,5 +569,36 @@ func TestApplyEscalationEffectsReportsAStaleTick(t *testing.T) {
 	}
 	if !output.Stale || len(output.Steps) != 0 || len(resolver.inputs) != 0 {
 		t.Fatalf("a refused sequence must resolve nobody: %#v resolved=%d", output, len(resolver.inputs))
+	}
+}
+
+// An agent_owner request pages its owner through the plan; the handoff
+// signal starts the pinned fallback from its first level at that moment,
+// and a repeated signal changes nothing.
+func TestAgentOwnerHandoffStartsTheFallbackPath(t *testing.T) {
+	run := newEscalationRun(t, 10*time.Minute, application.EscalationProgramRecord{Escalated: false})
+	run.env.RegisterDelayedCallback(func() {
+		run.programs.pin(pinnedProgram(t, twoLevelPath(), nil))
+		run.env.SignalWorkflow(AgentOwnerHandoffSignal, agentOwnerHandoffSignal{})
+	}, 2*time.Minute)
+	run.env.RegisterDelayedCallback(func() {
+		run.env.SignalWorkflow(AgentOwnerHandoffSignal, agentOwnerHandoffSignal{})
+	}, 4*time.Minute)
+	run.execute(t)
+
+	if run.resolver.approvalCalls != 1 {
+		t.Fatalf("the owner must be paged once through the plan: %d", run.resolver.approvalCalls)
+	}
+	if got := run.programs.levelEnteredAt(t, run.request, "level-1"); got != 2*time.Minute {
+		t.Fatalf("the fallback's first level entered at %s, want 2m", got)
+	}
+	if got := run.programs.levelEnteredAt(t, run.request, "level-2"); got != 5*time.Minute {
+		t.Fatalf("the fallback's second level entered at %s, want 5m", got)
+	}
+	if run.notifier.callCount() != 3 {
+		t.Fatalf("deliveries = %d, want the owner then both fallback levels", run.notifier.callCount())
+	}
+	if run.repository.expired != 1 {
+		t.Fatal("request did not expire at its deadline")
 	}
 }

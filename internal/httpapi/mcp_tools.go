@@ -46,6 +46,7 @@ type mcpUpdatePipelineInput struct {
 	AgentSlug             string           `json:"agent_slug,omitempty" jsonschema:"Agent slug whose pipeline to replace. Omit for the organization pipeline."`
 	Blocks                []map[string]any `json:"blocks" jsonschema:"The complete ordered block list for the new revision (it replaces the current blocks, so include the ones to keep). Each block: id (key-shaped, unique across the whole pipeline including blocks inside branches), name, type (always | cel | webhook | branch, or a kind this deployment adds; see read_reference), enabled: true, timeout (for example 50ms), max_attempts (1 for always, cel and branch), and config for its type; a branch holds its own ordered blocks in config.blocks. See read_reference topic pipeline_blocks. An empty list sends every request to human review."`
 	DefaultEscalationPath string           `json:"default_escalation_path,omitempty" jsonschema:"Escalation path key that takes human exits which name no path of their own, and requests the pipeline hands to a person by falling through. Omit to leave them to any authorized reviewer."`
+	DefaultAskAgentOwner  bool             `json:"default_ask_agent_owner,omitempty" jsonschema:"Send those requests to the person who owns the agent instance that made them instead, with default_escalation_path as the fallback for requests from agents without an owner (service agents). Requires default_escalation_path."`
 	Activate              *bool            `json:"activate,omitempty" jsonschema:"Activate the new revision right away so new requests use it. Defaults to true. False saves a draft revision you can activate later with activate_pipeline_revision."`
 }
 
@@ -62,6 +63,7 @@ type mcpPreviewPipelineInput struct {
 	AgentSlug             string           `json:"agent_slug,omitempty" jsonschema:"Agent slug whose pipeline scope to preview in. Omit for the organization pipeline."`
 	Blocks                []map[string]any `json:"blocks" jsonschema:"The blocks to run the sample through, in order; the same shape update_pipeline takes. Pass the current blocks from get_pipeline to test what is active."`
 	DefaultEscalationPath string           `json:"default_escalation_path,omitempty" jsonschema:"The default escalation path to assume, as update_pipeline takes it."`
+	DefaultAskAgentOwner  bool             `json:"default_ask_agent_owner,omitempty" jsonschema:"Whether the default asks the agent's owner first, as update_pipeline takes it."`
 	Sample                mcpPreviewSample `json:"sample" jsonschema:"The request to run through the blocks. Nothing is created: no approval request, no notification."`
 }
 
@@ -283,6 +285,9 @@ func (a *API) registerMCPTools(server *mcp.Server) {
 		if input.DefaultEscalationPath != "" {
 			body["default_escalation_path"] = input.DefaultEscalationPath
 		}
+		if input.DefaultAskAgentOwner {
+			body["default_ask_agent_owner"] = true
+		}
 		created, err := call.post(base+"/revisions", body, nil)
 		if err != nil {
 			return nil, nil, err
@@ -346,6 +351,9 @@ func (a *API) registerMCPTools(server *mcp.Server) {
 		}
 		if input.DefaultEscalationPath != "" {
 			body["default_escalation_path"] = input.DefaultEscalationPath
+		}
+		if input.DefaultAskAgentOwner {
+			body["default_ask_agent_owner"] = true
 		}
 		response, err := call.post(pipelineScopePath(input.AgentSlug)+"/preview", body, nil)
 		if err != nil {

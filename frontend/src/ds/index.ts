@@ -240,6 +240,7 @@ export {
 } from "./components/policy-block";
 export {
   TargetBadge,
+  agentOwnerLabel,
   TargetSelect,
   type ReviewerTarget,
   type ReviewerTargetType,

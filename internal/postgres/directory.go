@@ -196,6 +196,9 @@ func (a directoryApplier) applyUser(ctx context.Context, externalID string, data
 			a.organizationID, userID, a.input.Now); err != nil {
 			return err
 		}
+		if err := a.store.handOffAgentOwnerRequests(ctx, a.tx, domain.ID(a.organizationID), domain.ID(membershipID), domain.ActorSystem, "", a.input.Now); err != nil {
+			return err
+		}
 	}
 	if targetStatus == domain.MembershipDeprovisioned {
 		if err := a.store.revokeMembershipAPIKeys(ctx, a.tx, domain.ID(a.organizationID), domain.ID(membershipID), domain.ActorSystem, "", a.input.Now); err != nil {

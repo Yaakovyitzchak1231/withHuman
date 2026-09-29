@@ -14,16 +14,25 @@ import (
 const approvalWorkflowDispatchInterval = 250 * time.Millisecond
 
 // ApprovalWorkflowDispatcher completes the durable PostgreSQL-to-Temporal
-// handoff for pending human reviews. Workflow IDs make repeated delivery safe.
+// handoff for pending human reviews, and signals the agent-owner handoffs
+// written when an owner is deactivated. Workflow IDs make repeated
+// delivery safe, and the workflow ignores a repeated handoff signal.
 type ApprovalWorkflowDispatcher struct {
 	approvals    application.ApprovalRepository
-	handoffs     application.ApprovalWorkflowOutboxRepository
+	handoffs     WorkflowOutboxRepository
 	orchestrator application.LifecycleOrchestrator
 	clock        application.Clock
 	logger       *slog.Logger
 }
 
-func NewApprovalWorkflowDispatcher(approvals application.ApprovalRepository, handoffs application.ApprovalWorkflowOutboxRepository, orchestrator application.LifecycleOrchestrator, clock application.Clock, logger *slog.Logger) *ApprovalWorkflowDispatcher {
+// WorkflowOutboxRepository is the outbox the dispatcher drains: workflow
+// starts and agent-owner handoff signals.
+type WorkflowOutboxRepository interface {
+	application.ApprovalWorkflowOutboxRepository
+	application.AgentOwnerHandoffOutboxRepository
+}
+
+func NewApprovalWorkflowDispatcher(approvals application.ApprovalRepository, handoffs WorkflowOutboxRepository, orchestrator application.LifecycleOrchestrator, clock application.Clock, logger *slog.Logger) *ApprovalWorkflowDispatcher {
 	return &ApprovalWorkflowDispatcher{
 		approvals: approvals, handoffs: handoffs, orchestrator: orchestrator, clock: clock, logger: logger,
 	}
@@ -70,6 +79,31 @@ func (dispatcher *ApprovalWorkflowDispatcher) Dispatch(ctx context.Context) erro
 			OrganizationID: start.OrganizationID,
 			RequestID:      start.RequestID,
 			PublishedAt:    dispatcher.clock.Now(),
+		}); err != nil && !errors.Is(err, domain.ErrNotFound) {
+			return dispatcher.failed(requestContext, err)
+		}
+	}
+	return dispatcher.dispatchAgentOwnerHandoffs(ctx)
+}
+
+func (dispatcher *ApprovalWorkflowDispatcher) dispatchAgentOwnerHandoffs(ctx context.Context) error {
+	handoffs, err := dispatcher.handoffs.ListAgentOwnerHandoffSignals(ctx, application.ListAgentOwnerHandoffSignalsInput{Limit: 100})
+	if err != nil {
+		return dispatcher.failed(ctx, err)
+	}
+	for _, handoff := range handoffs {
+		requestContext := loggermdc.With(ctx, loggermdc.Fields{
+			loggermdc.KeyOrganizationID:    string(handoff.OrganizationID),
+			loggermdc.KeyApprovalRequestID: string(handoff.RequestID),
+			loggermdc.KeyWorkflowID:        WorkflowID(handoff.OrganizationID, handoff.RequestID),
+		})
+		if err := dispatcher.orchestrator.SubmitAgentOwnerHandoff(requestContext, application.SubmitAgentOwnerHandoffInput{
+			OrganizationID: handoff.OrganizationID, RequestID: handoff.RequestID,
+		}); err != nil {
+			return dispatcher.failed(requestContext, err)
+		}
+		if err := dispatcher.handoffs.MarkAgentOwnerHandoffSignaled(requestContext, application.MarkAgentOwnerHandoffSignaledInput{
+			OrganizationID: handoff.OrganizationID, RequestID: handoff.RequestID, SignaledAt: dispatcher.clock.Now(),
 		}); err != nil && !errors.Is(err, domain.ErrNotFound) {
 			return dispatcher.failed(requestContext, err)
 		}

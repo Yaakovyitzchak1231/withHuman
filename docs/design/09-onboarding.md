@@ -1,6 +1,6 @@
 # Guided onboarding: from first sign-in to a decided request
 
-Status: draft · Last updated: 2026-09-24
+Status: draft · Last updated: 2026-09-29 (starting pipelines ask the agent's owner)
 
 > **Prototype.** Same caveat as [00-general-design.md](00-general-design.md):
 > everything here can change without migration paths.
@@ -245,8 +245,8 @@ tools (`get_pipeline`, `update_pipeline`, `preview_pipeline`,
 `list_pipeline_revisions`, `activate_pipeline_revision`) and the
 service refuses any call outside the session's own agents or aimed at
 the organization pipeline; `update_pipeline` gets the setup's
-escalation path as `default_escalation_path` unless the model named
-one. One tool is the setup's own: `set_test_prompt` records, per agent,
+escalation path as `default_escalation_path`, with
+`default_ask_agent_owner: true`, unless the model named a path. One tool is the setup's own: `set_test_prompt` records, per agent,
 the instruction the test step shows, and refuses a sample the active
 rules would not hand to a person (the service previews it first), so
 the test always produces a request.
@@ -278,9 +278,13 @@ abandoned.
 - One starting pipeline revision per selected runtime, in that agent's
   pipeline scope (`agents/<slug>`): block `gate-selected-tools`, named
   "Review tools chosen in setup" (`/request/tool in [suggested...]` →
-  human, escalation path above) then `approve-the-rest`, named "Approve
-  every other tool" (`/request/tool exists` → approve), default
-  escalation path set to the same path. Names are verb-first like every
+  human, asking the agent's owner with the path above as the fallback)
+  then `approve-the-rest`, named "Approve every other tool"
+  (`/request/tool exists` → approve), and the same owner route as the
+  revision's default. The runtime agents are personal, so each member's
+  requests go to that member; the path is used only if a request ever
+  arrives without an owner. See
+  [06-routing-and-escalation.md](06-routing-and-escalation.md#agent-owner-route). Names are verb-first like every
   other block because the product quotes them inside sentences ("Review
   tools chosen in setup" asked for a human). A second machine unions the
   gated list with the active revision's; onboarding never removes a

@@ -164,6 +164,10 @@ func (o *lifecycleStub) SubmitDecision(context.Context, application.SubmitDecisi
 	o.decisions++
 	return o.decisionErr
 }
+func (*lifecycleStub) SubmitAgentOwnerHandoff(context.Context, application.SubmitAgentOwnerHandoffInput) error {
+	return nil
+}
+
 func (*lifecycleStub) SubmitClaimRelease(context.Context, application.SubmitClaimReleaseInput) error {
 	return nil
 }
@@ -653,8 +657,5 @@ func TestOperationErrorCarriesTheRoutingRejectionCode(t *testing.T) {
 		if !errors.As(err, &rejection) || rejection.Code != code || !errors.Is(err, domain.ErrNotTargeted) {
 			t.Fatalf("%s: %v", code, err)
 		}
-	}
-	if err := operationError(domain.DecisionOperation{Status: domain.OperationRejected, ErrorCode: "self_approval"}); !errors.Is(err, domain.ErrSelfApproval) {
-		t.Fatalf("self_approval: %v", err)
 	}
 }

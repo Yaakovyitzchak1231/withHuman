@@ -455,8 +455,8 @@ func (turn *assistantTurn) call(ctx context.Context, call application.ToolUseBlo
 }
 
 // withDefaultPath makes every pipeline the assistant saves hand human
-// exits to the person: the setup's path is the default unless the model
-// named one.
+// exits to the agent's owner, with the setup's path as the fallback,
+// unless the model named a default path of its own.
 func withDefaultPath(input json.RawMessage, pathKey string) json.RawMessage {
 	if pathKey == "" {
 		return input
@@ -469,6 +469,7 @@ func withDefaultPath(input json.RawMessage, pathKey string) json.RawMessage {
 		return input
 	}
 	body["default_escalation_path"] = pathKey
+	body["default_ask_agent_owner"] = true
 	encoded, err := json.Marshal(body)
 	if err != nil {
 		return input
@@ -602,7 +603,9 @@ func (turn *assistantTurn) setTestPrompt(ctx context.Context, raw json.RawMessag
 	for index, block := range active.Blocks {
 		definitions[index] = block.Definition
 	}
-	preview, err := turn.service.pipelines.Preview(ctx, turn.principal, domain.AgentSlug(input.AgentSlug), definitions, active.Revision.DefaultEscalationPath, approvalpipeline.PreviewSample{
+	preview, err := turn.service.pipelines.Preview(ctx, turn.principal, domain.AgentSlug(input.AgentSlug), definitions, approvalpipeline.Route{
+		EscalationPath: active.Revision.DefaultEscalationPath, AskAgentOwner: active.Revision.DefaultAskAgentOwner,
+	}, approvalpipeline.PreviewSample{
 		Request: approvalpipeline.BlockRequest{Tool: tool.Name, Server: tool.Server, Arguments: arguments},
 		Agent:   approvalpipeline.BlockAgent{Slug: input.AgentSlug, Name: agent},
 	})

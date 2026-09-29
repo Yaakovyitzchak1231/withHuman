@@ -29,7 +29,6 @@ func TestEvaluateDecision(t *testing.T) {
 		{name: "active and authorized", mutate: func(*DecisionInput) {}},
 		{name: "inactive membership", mutate: func(input *DecisionInput) { input.MembershipStatus = domain.MembershipSuspended }, code: "membership_inactive", err: domain.ErrMembershipInactive},
 		{name: "missing permission", mutate: func(input *DecisionInput) { input.Grants = nil }, code: "forbidden", err: domain.ErrForbidden},
-		{name: "self approval", mutate: func(input *DecisionInput) { input.RequesterMembershipID = input.ReviewerMembershipID }, code: "self_approval", err: domain.ErrSelfApproval},
 		{name: "stale authentication", mutate: func(input *DecisionInput) { input.Authentication.AuthenticatedAt = now.Add(-2 * time.Hour) }, code: "authentication_stale", err: domain.ErrAuthenticationStale},
 		{name: "missing authentication time", mutate: func(input *DecisionInput) { input.Authentication.AuthenticatedAt = time.Time{} }, code: "authentication_stale", err: domain.ErrAuthenticationStale},
 		{name: "weak authentication", mutate: func(input *DecisionInput) {

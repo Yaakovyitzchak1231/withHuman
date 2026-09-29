@@ -71,6 +71,7 @@ type branchStoredConfig struct {
 	BlockKeys      []string                `json:"block_keys"`
 	Reason         string                  `json:"reason"`
 	EscalationPath string                  `json:"escalation_path,omitempty"`
+	AskAgentOwner  bool                    `json:"ask_agent_owner,omitempty"`
 }
 
 func branchStoredConfigJSON(definition approvalblock.Definition) (json.RawMessage, error) {
@@ -84,6 +85,7 @@ func branchStoredConfigJSON(definition approvalblock.Definition) (json.RawMessag
 	return json.Marshal(branchStoredConfig{
 		When: definition.Branch.When, BlockKeys: keys,
 		Reason: definition.Branch.Reason, EscalationPath: definition.Branch.EscalationPath,
+		AskAgentOwner: definition.Branch.AskAgentOwner,
 	})
 }
 
@@ -99,6 +101,8 @@ func decodeBranchStoredConfig(definition *approvalblock.Definition, config json.
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return nil, errors.New("config must contain one JSON value")
 	}
-	definition.Branch = &approvalblock.BranchConfig{When: stored.When, Reason: stored.Reason, EscalationPath: stored.EscalationPath}
+	definition.Branch = &approvalblock.BranchConfig{
+		When: stored.When, Reason: stored.Reason, EscalationPath: stored.EscalationPath, AskAgentOwner: stored.AskAgentOwner,
+	}
 	return stored.BlockKeys, nil
 }

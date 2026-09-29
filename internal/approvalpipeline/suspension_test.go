@@ -25,7 +25,7 @@ func suspensionFixture(t *testing.T, now time.Time, check *scriptedModel) (*Exec
 		scriptedDefinition(),
 		pipelineDefinition("approve-rest", approvalblock.Approve, approvalblock.Field("/request/tool").Equals("deploy")),
 	}
-	created, err := management.CreateRevision(context.Background(), pipelineManagerPrincipal("organization-1"), "", definitions, "")
+	created, err := management.CreateRevision(context.Background(), pipelineManagerPrincipal("organization-1"), "", definitions, Route{})
 	if err != nil {
 		t.Fatal(err)
 	}

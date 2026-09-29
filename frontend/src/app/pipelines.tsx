@@ -27,9 +27,11 @@ import {
   defaultSample,
   definitionsFromStored,
   handOffTestSample,
+  asksAgentOwner,
   loadPathDirectory,
   pathKeyOf,
   pathTarget,
+  routeKeyOf,
 } from "./pipeline-blocks";
 import { TestRequestDialog } from "./pipeline-view";
 import type {
@@ -85,7 +87,7 @@ export async function loadPipelinesPage(): Promise<PipelinesPage> {
       agentNames: Object.fromEntries(agents.map((agent) => [agent.slug, agent.name])),
       organizationRevision,
       directory,
-      defaultReviewers: pathTarget(organizationRevision?.default_escalation_path, directory),
+      defaultReviewers: pathTarget(organizationRevision?.default_escalation_path, directory, organizationRevision?.default_ask_agent_owner),
       error: "",
     };
   } catch (reason) {
@@ -185,7 +187,10 @@ export function PipelinesScreen({ page }: { page: PipelinesPage }) {
   }
   async function saveDefault() {
     if (!organizationRevision) return;
-    if ((pathKeyOf(draftDefault) ?? "") === (organizationRevision.default_escalation_path ?? "")) {
+    if (
+      routeKeyOf(draftDefault) ===
+      routeKeyOf(pathTarget(organizationRevision.default_escalation_path, [], organizationRevision.default_ask_agent_owner))
+    ) {
       setEditingDefault(false);
       return;
     }
@@ -196,6 +201,7 @@ export function PipelinesScreen({ page }: { page: PipelinesPage }) {
       const revision = await api.createRequestApprovalPipelineRevision("", {
         blocks: definitionsFromStored(organizationRevision.blocks),
         ...(key ? { default_escalation_path: key } : {}),
+        ...(key && asksAgentOwner(draftDefault) ? { default_ask_agent_owner: true } : {}),
       });
       await revisionActivation.offer({
         revision: revision.revision,

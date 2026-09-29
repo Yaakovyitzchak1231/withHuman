@@ -668,6 +668,7 @@ export interface AlwaysBlockDefinition {
     outcome: Exclude<PipelineOutcome, "next">;
     reason: string;
     escalation_path?: string;
+    ask_agent_owner?: boolean;
   };
 }
 
@@ -685,6 +686,9 @@ export interface CELBlockDefinition {
     /* The escalation path a human match hands the request to; absent
      * inherits the pipeline default. */
     escalation_path?: string;
+    /* Ask the agent's owner instead, with escalation_path as the
+     * fallback for a request without one. */
+    ask_agent_owner?: boolean;
   };
 }
 
@@ -709,6 +713,7 @@ export interface WebhookBlockDefinition {
     };
     reason: string;
     escalation_path?: string;
+    ask_agent_owner?: boolean;
   };
 }
 
@@ -723,6 +728,7 @@ export interface BranchBlockConfig<Child> {
   blocks: Child[];
   reason: string;
   escalation_path?: string;
+  ask_agent_owner?: boolean;
 }
 
 export interface BranchBlockDefinition {
@@ -861,6 +867,9 @@ export interface RequestApprovalPipelineDocument {
    * that names no path go to. The agent section's default wins over the
    * organization's. */
   default_escalation_path?: string;
+  /* Ask the agent's owner instead, with default_escalation_path as the
+   * fallback for a request without one. */
+  default_ask_agent_owner?: boolean;
 }
 
 /* "organization" is the scope whose blocks run before the agent section
@@ -893,6 +902,7 @@ export interface RequestApprovalPipelineRevisionSummary {
   /* Every block, including the blocks inside branches. */
   block_count: number;
   default_escalation_path?: string;
+  default_ask_agent_owner?: boolean;
   created_by_actor_id: string;
   created_at: string;
   /* Present when the revision was archived with its agent; it can be
@@ -986,6 +996,9 @@ export interface RequestApprovalPipelinePreview {
   /* The path a human outcome is handed to within this scope alone. */
   escalation_path?: string;
   escalation_path_reason?: "block_escalation" | "pipeline_default" | "no_escalation";
+  /* The route asks the agent's owner, with escalation_path as the
+   * fallback. A preview names the route, never a person. */
+  ask_agent_owner?: boolean;
 }
 
 /* Reviewer routing wire types, mirroring the OpenAPI schemas. */
@@ -1215,9 +1228,15 @@ export interface ApprovalRoutingTarget {
   name: string;
 }
 
-/* Where a request was handed when it entered human review. */
+/* Why a route that asks the agent's owner went to its fallback path when
+ * the request arrived. */
+export type AgentOwnerFallback = "no_agent_owner" | "agent_owner_inactive" | "agent_owner_cannot_decide";
+
+/* Where a request was handed when it entered human review. agent_owner
+ * sent it to the person who owns the agent instance that made it; the
+ * path fields then describe the fallback pinned beside them. */
 export interface ApprovalRouting {
-  outcome: "escalated" | "default_queue";
+  outcome: "agent_owner" | "escalated" | "default_queue";
   reason: "block_escalation" | "pipeline_default" | "no_escalation" | "path_inactive" | "evaluation_error";
   urgency: RoutingUrgency;
   escalation_path_key?: string;
@@ -1225,9 +1244,15 @@ export interface ApprovalRouting {
   escalation_path_revision_id?: string;
   pipeline_revision_id?: string;
   block_id?: string;
+  /* The owner an agent_owner request went to. */
+  agent_owner?: ApprovalRoutingTarget;
+  agent_owner_fallback?: AgentOwnerFallback;
+  /* When the owner was deactivated and the fallback took over. */
+  agent_owner_handed_off_at?: string;
   created_at: string;
-  /* Who the pinned path reaches for this request, in path order: only
-   * they and the added reviewers may claim or decide. Empty for
+  /* Who current routing admits: the agent's owner until a handoff,
+   * otherwise who the pinned path reaches, in path order. Only they and
+   * the added reviewers may claim or decide. Empty for
    * default_queue; empty for escalated means the path reaches nobody and
    * only a break-glass reviewer may decide. */
   targets: ApprovalRoutingTarget[];
@@ -1440,7 +1465,6 @@ export type RequestVisibilityPolicy = "all_readers" | "routed_only";
  * strings ("24h0m0s"); src/app/duration.ts converts them. */
 export interface OrganizationPolicy {
   organization_api_keys_allowed: boolean;
-  allow_self_approval: boolean;
   mfa_mode: MFAMode;
   approval_reauth_window: string;
   claim_retrigger_window: string;

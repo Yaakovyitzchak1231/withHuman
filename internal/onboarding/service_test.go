@@ -292,6 +292,7 @@ func (m *minterStub) CreateAgentInstanceCredential(_ context.Context, _ domain.P
 type pipelinesStub struct {
 	active    map[domain.AgentSlug]approvalpipeline.PipelineRevision
 	created   map[domain.AgentSlug][]approvalblock.Definition
+	defaults  map[domain.AgentSlug]approvalpipeline.Route
 	activated map[domain.AgentSlug]int64
 	failOn    domain.AgentSlug
 	// previews records every sample the assistant checked, and
@@ -300,7 +301,7 @@ type pipelinesStub struct {
 	previewOutcome approvalpipeline.BlockOutcome
 }
 
-func (p *pipelinesStub) Preview(_ context.Context, _ domain.Principal, _ domain.AgentSlug, _ []approvalblock.Definition, _ string, sample approvalpipeline.PreviewSample) (approvalpipeline.PreviewResult, error) {
+func (p *pipelinesStub) Preview(_ context.Context, _ domain.Principal, _ domain.AgentSlug, _ []approvalblock.Definition, _ approvalpipeline.Route, sample approvalpipeline.PreviewSample) (approvalpipeline.PreviewResult, error) {
 	p.previews = append(p.previews, sample)
 	outcome := p.previewOutcome
 	if outcome == "" {
@@ -318,7 +319,7 @@ func (p *pipelinesStub) GetActive(_ context.Context, _ domain.Principal, agentSl
 	return approvalpipeline.PipelineRevision{Revision: domain.RequestApprovalPipelineRevision{AgentSlug: agentSlug, Revision: 1, IsActive: true}}, nil
 }
 
-func (p *pipelinesStub) CreateRevision(_ context.Context, _ domain.Principal, agentSlug domain.AgentSlug, definitions []approvalblock.Definition, defaultPath string) (approvalpipeline.PipelineRevision, error) {
+func (p *pipelinesStub) CreateRevision(_ context.Context, _ domain.Principal, agentSlug domain.AgentSlug, definitions []approvalblock.Definition, defaultRoute approvalpipeline.Route) (approvalpipeline.PipelineRevision, error) {
 	if agentSlug == p.failOn {
 		return approvalpipeline.PipelineRevision{}, fmt.Errorf("boom: %w", domain.ErrInvalid)
 	}
@@ -326,11 +327,17 @@ func (p *pipelinesStub) CreateRevision(_ context.Context, _ domain.Principal, ag
 		p.created = map[domain.AgentSlug][]approvalblock.Definition{}
 	}
 	p.created[agentSlug] = definitions
+	if p.defaults == nil {
+		p.defaults = map[domain.AgentSlug]approvalpipeline.Route{}
+	}
+	p.defaults[agentSlug] = defaultRoute
 	next := int64(2)
 	if active, ok := p.active[agentSlug]; ok {
 		next = active.Revision.Revision + 1
 	}
-	return approvalpipeline.PipelineRevision{Revision: domain.RequestApprovalPipelineRevision{Revision: next, DefaultEscalationPath: defaultPath}}, nil
+	return approvalpipeline.PipelineRevision{Revision: domain.RequestApprovalPipelineRevision{
+		Revision: next, DefaultEscalationPath: defaultRoute.EscalationPath, DefaultAskAgentOwner: defaultRoute.AskAgentOwner,
+	}}, nil
 }
 
 func (p *pipelinesStub) Activate(_ context.Context, _ domain.Principal, agentSlug domain.AgentSlug, revision int64, expected int64) (approvalpipeline.PipelineRevision, error) {
@@ -586,6 +593,10 @@ func TestGuidedSetupHappyPath(t *testing.T) {
 	}
 	if got := GatedToolsOf(h.pipelines.created["codex"]); strings.Join(got, ",") != "Bash" {
 		t.Fatalf("codex gated tools: %v", got)
+	}
+	if gate := h.pipelines.created["codex"][0].CEL; !gate.AskAgentOwner ||
+		h.pipelines.defaults["codex"] != (approvalpipeline.Route{EscalationPath: "notify-chris-battarbee", AskAgentOwner: true}) {
+		t.Fatalf("starting pipeline must ask the agent's owner with the setup path as the fallback: gate %+v, default %+v", gate, h.pipelines.defaults["codex"])
 	}
 	if h.pipelines.created["codex"][0].CEL.EscalationPath != "notify-chris-battarbee" || h.pipelines.created["codex"][1].Always == nil || h.pipelines.created["codex"][1].Always.Outcome != approvalblock.Approve {
 		t.Fatalf("pipeline blocks: %+v", h.pipelines.created["codex"])

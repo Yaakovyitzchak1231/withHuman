@@ -24,7 +24,7 @@ func TestExecutionSelectsAgentStopsAtFirstTerminalAndCachesRevision(t *testing.T
 	management := NewManagementService(pipelines, NewCompiledPipelineState(pipelines, NewBlockRegistry()), fixedPipelineClock{now: now})
 	release, err := management.CreateRevision(context.Background(), pipelineManagerPrincipal("organization-1"), "release", []approvalblock.Definition{
 		pipelineDefinition("approve", approvalblock.Approve, approvalblock.Field("/request/tool").Equals("deploy")),
-	}, "")
+	}, Route{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +200,7 @@ func TestExecutionOrganizationSectionOutcomePreemptsAgentSection(t *testing.T) {
 	management := NewManagementService(repository, NewCompiledPipelineState(repository, NewBlockRegistry()), fixedPipelineClock{now: now})
 	created, err := management.CreateRevision(context.Background(), pipelineManagerPrincipal("organization-1"), "billing", []approvalblock.Definition{
 		pipelineDefinition("deny", approvalblock.Deny, approvalblock.Field("/request/tool").Equals("deploy")),
-	}, "")
+	}, Route{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,7 +236,7 @@ func TestExecutionFallsThroughOrganizationSectionIntoAgentSection(t *testing.T) 
 	management := NewManagementService(repository, NewCompiledPipelineState(repository, NewBlockRegistry()), fixedPipelineClock{now: now})
 	created, err := management.CreateRevision(context.Background(), pipelineManagerPrincipal("organization-1"), "billing", []approvalblock.Definition{
 		pipelineDefinition("deny", approvalblock.Deny, approvalblock.Field("/request/tool").Equals("deploy")),
-	}, "")
+	}, Route{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -360,7 +360,7 @@ func activeExecutionPipeline(t *testing.T, now time.Time, agentSlug domain.Agent
 	t.Helper()
 	repository := newMemoryPipelineRepository()
 	management := NewManagementService(repository, NewCompiledPipelineState(repository, NewBlockRegistry()), fixedPipelineClock{now: now})
-	created, err := management.CreateRevision(context.Background(), pipelineManagerPrincipal("organization-1"), agentSlug, definitions, "")
+	created, err := management.CreateRevision(context.Background(), pipelineManagerPrincipal("organization-1"), agentSlug, definitions, Route{})
 	if err != nil {
 		t.Fatal(err)
 	}

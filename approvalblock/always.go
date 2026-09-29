@@ -12,6 +12,9 @@ type AlwaysConfig struct {
 	Outcome        Outcome `json:"outcome"`
 	Reason         string  `json:"reason"`
 	EscalationPath string  `json:"escalation_path,omitempty"`
+	// AskAgentOwner sends the request to the agent's owner, with
+	// EscalationPath as the fallback for a request without one.
+	AskAgentOwner bool `json:"ask_agent_owner,omitempty"`
 }
 
 func (config AlwaysConfig) Validate() error {
@@ -24,7 +27,7 @@ func (config AlwaysConfig) Validate() error {
 	if config.EscalationPath != "" && config.Outcome != Human {
 		return errors.New("escalation_path requires outcome to be human")
 	}
-	return validateOptionalEscalationPath(config.EscalationPath)
+	return ValidateRoute(config.EscalationPath, config.AskAgentOwner)
 }
 
 // DefineAlways builds an unconditional block with the synchronous defaults.
