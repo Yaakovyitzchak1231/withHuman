@@ -131,6 +131,25 @@ describe("condition value suggestions", () => {
     expect(page.valueDetails).toEqual({ "/request/server": { "github-prod": "Gateway: GitHub production" } });
   });
 
+  it("offers a registered server's arguments as fields on every tool, before any discovery", async () => {
+    mockDirectory();
+    registerExtensions({
+      serverDirectory: async () => [
+        { server: "cloudflare", name: "Cloudflare", source: "gateway", arguments: [{ name: "withhuman_scope", description: "The scope the call runs with.", values: ["personal_read", "personal_write"] }] },
+        { server: "linear", name: "Linear", source: "gateway" },
+      ],
+    });
+    const page = await loadPipelineSuggestions("support");
+    const schema = page.toolSchemas.find((tool) => tool.everyTool);
+    expect(schema).toEqual({
+      name: "Cloudflare",
+      source: "gateway",
+      everyTool: true,
+      inputSchema: { type: "object", properties: { withhuman_scope: { type: "string", description: "The scope the call runs with.", enum: ["personal_read", "personal_write"] } } },
+    });
+    expect(page.toolSchemas.filter((tool) => tool.everyTool)).toHaveLength(1);
+  });
+
   it("keeps the observed servers when the edition's directory refuses the reader", async () => {
     mockDirectory();
     registerExtensions({ serverDirectory: () => Promise.reject(new Error("Forbidden")) });

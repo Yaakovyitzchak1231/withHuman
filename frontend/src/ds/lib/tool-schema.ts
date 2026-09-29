@@ -7,6 +7,10 @@ export interface ToolSchema {
   inputSchema?: Record<string, unknown>;
   observedPaths?: string[];
   observedValues?: Record<string, (string | number)[]>;
+  /* A server's arguments rather than one tool's: every request through
+   * the server carries them, so they apply whichever tool a condition
+   * names. */
+  everyTool?: boolean;
 }
 export interface SchemaField {
   path: string;
@@ -103,7 +107,7 @@ export function applicableToolNames(root: Condition, id: string): Names {
 }
 export function fieldHints(root: Condition, id: string, tools: ToolSchema[]): { fields: Record<string, FieldHint>; tools: ToolSchema[]; narrowed: boolean } {
   const names = applicableToolNames(root, id);
-  const selected = tools.filter((tool) => names === null || names.has(tool.name));
+  const selected = tools.filter((tool) => tool.everyTool || names === null || names.has(tool.name));
   const fields: Record<string, FieldHint> = {};
   const counts = new Map<string, number>();
   for (const tool of selected) {
