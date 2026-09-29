@@ -105,6 +105,9 @@ type CELConfig struct {
 	// EscalationPath is the key of the escalation path a human outcome
 	// hands the request to. Empty inherits the pipeline default.
 	EscalationPath string `json:"escalation_path,omitempty"`
+	// AskAgentOwner sends a human outcome to the agent's owner, with
+	// EscalationPath as the fallback for a request without one.
+	AskAgentOwner bool `json:"ask_agent_owner,omitempty"`
 }
 
 // TypeLimits are the envelope limits one block type accepts.
@@ -539,7 +542,7 @@ func (config CELConfig) Validate() error {
 	if config.EscalationPath != "" && config.OnMatch != Human {
 		return errors.New("escalation_path requires on_match to be human")
 	}
-	if err := validateOptionalEscalationPath(config.EscalationPath); err != nil {
+	if err := ValidateRoute(config.EscalationPath, config.AskAgentOwner); err != nil {
 		return err
 	}
 	state := validationState{ids: make(map[string]struct{})}

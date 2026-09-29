@@ -32,7 +32,7 @@ func webhookFixture(t *testing.T, now time.Time, deliverer *fakeDeliverer, allow
 		webhookDefinition(options...),
 		pipelineDefinition("approve-low-risk", approvalblock.Approve, approvalblock.Field("/previous_metadata/entry/fraud-check/risk_score").LessThan(50)),
 	}
-	created, err := management.CreateRevision(context.Background(), pipelineManagerPrincipal("organization-1"), "entry", pipelineName("entry"), definitions, "")
+	created, err := management.CreateRevision(context.Background(), pipelineManagerPrincipal("organization-1"), "entry", pipelineName("entry"), definitions, Route{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +171,7 @@ func TestManagementRejectsWebhookBlocksWhoseEndpointDoesNotExist(t *testing.T) {
 	endpoints := &fakeEndpoints{endpoint: domain.WebhookEndpointRevision{ID: testEndpointRevisionID, EndpointKey: testEndpointKey, Revision: 1, IsActive: true, OrganizationID: "organization-1"}, missing: true}
 	registry := NewBlockRegistry(WithWebhooks(WebhookRuntime{Endpoints: endpoints, Deliverer: &fakeDeliverer{}}))
 	service := NewManagementService(repository, NewCompiledPipelineState(repository, registry), fixedPipelineClock{now: now})
-	_, err := service.CreateRevision(context.Background(), pipelineManagerPrincipal("organization-1"), "entry", pipelineName("entry"), []approvalblock.Definition{webhookDefinition()}, "")
+	_, err := service.CreateRevision(context.Background(), pipelineManagerPrincipal("organization-1"), "entry", pipelineName("entry"), []approvalblock.Definition{webhookDefinition()}, Route{})
 	if !errors.Is(err, domain.ErrWebhookEndpointNotFound) {
 		t.Fatalf("missing endpoint accepted: %v", err)
 	}
@@ -196,7 +196,7 @@ func TestPreviewNamespacesMetadataByPipelineKeyAndSeedsPreviousMetadata(t *testi
 		Request: BlockRequest{Tool: "stripe.refund", Arguments: json.RawMessage(`{"amount_cents":900}`)},
 		Agent:   BlockAgent{Slug: "billing", Name: "billing-agent"},
 	}
-	result, err := service.Preview(context.Background(), pipelineManagerPrincipal("organization-1"), "billing", definitions, "", sample)
+	result, err := service.Preview(context.Background(), pipelineManagerPrincipal("organization-1"), "billing", definitions, Route{}, sample)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +214,7 @@ func TestPreviewNamespacesMetadataByPipelineKeyAndSeedsPreviousMetadata(t *testi
 
 	deliverer.script = []scriptedDelivery{ok(`{"outcome":"next","metadata":{"risk_score":10}}`)}
 	sample.PreviousMetadata = map[string]json.RawMessage{"entry/verifier": json.RawMessage(`{"verified":true}`)}
-	result, err = service.Preview(context.Background(), pipelineManagerPrincipal("organization-1"), "billing", definitions, "", sample)
+	result, err = service.Preview(context.Background(), pipelineManagerPrincipal("organization-1"), "billing", definitions, Route{}, sample)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,7 +222,7 @@ func TestPreviewNamespacesMetadataByPipelineKeyAndSeedsPreviousMetadata(t *testi
 		t.Fatalf("seeded previous metadata was not visible: %+v", result)
 	}
 	sample.PreviousMetadata = map[string]json.RawMessage{"verifier": json.RawMessage(`{}`)}
-	if _, err := service.Preview(context.Background(), pipelineManagerPrincipal("organization-1"), "billing", definitions, "", sample); !errors.Is(err, domain.ErrInvalid) {
+	if _, err := service.Preview(context.Background(), pipelineManagerPrincipal("organization-1"), "billing", definitions, Route{}, sample); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("unscoped previous metadata accepted: %v", err)
 	}
 }

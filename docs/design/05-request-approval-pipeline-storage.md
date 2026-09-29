@@ -1,6 +1,6 @@
 # withHuman: request approval pipeline storage and APIs
 
-Status: accepted · Last updated: 2026-09-23
+Status: accepted · Last updated: 2026-09-29 (agent-owner route keys)
 
 > **Amended 2026-09-29.** Pipelines are now keyed (`pipeline_key`, `name`) with a reserved `entry` key, the agent scope is gone, and suspensions pin one revision per pipeline in `approval_request_pipeline_suspension_pins`. See [16-pipeline-delegation.md](16-pipeline-delegation.md).
 
@@ -139,7 +139,9 @@ section.
 ## CEL block
 
 The `always` block stores `config.outcome` (`approve`, `deny`, or `human`),
-a required `config.reason`, and optional `config.escalation_path` for `human`.
+a required `config.reason`, and optional `config.escalation_path` for `human`,
+with optional `config.ask_agent_owner` beside it (see
+[06-routing-and-escalation.md](06-routing-and-escalation.md#agent-owner-route)).
 It has no condition tree. Its synchronous runtime returns the configured
 outcome and reason, with zero condition cost and no condition trace, through
 the same fail-safe execution boundary as other blocks. It uses a 50ms default
@@ -199,7 +201,8 @@ The complete CEL authoring and evaluation model is defined in
 
 The `branch` block, the fifth type after `always`, `cel`, `llm_judge`, and
 `webhook`, has a condition (`when`, the CEL envelope), its own ordered
-blocks of any type, a required `reason`, and an optional `escalation_path`.
+blocks of any type, a required `reason`, and an optional `escalation_path`
+(with optional `ask_agent_owner`).
 A non-match skips its blocks; a match runs them, and a request that no block
 inside decides goes to a human with the branch's reason and path, after
 which nothing else runs. The envelope matches `cel`: a 50ms default timeout,

@@ -167,10 +167,10 @@ func TestAnEmptyDelegatedPipelineEndsAtOnce(t *testing.T) {
 	now := time.Unix(7_000, 0).UTC()
 	repository := newMemoryPipelineRepository()
 	management := NewManagementService(repository, NewCompiledPipelineState(repository, NewBlockRegistry()), fixedPipelineClock{now: now})
-	if _, err := management.Create(context.Background(), pipelineManagerPrincipal("organization-1"), "billing", "Billing", nil, "payments-review"); err != nil {
+	if _, err := management.Create(context.Background(), pipelineManagerPrincipal("organization-1"), "billing", "Billing", nil, Route{EscalationPath: "payments-review"}); err != nil {
 		t.Fatal(err)
 	}
-	created, err := management.CreateRevision(context.Background(), pipelineManagerPrincipal("organization-1"), "entry", "Entry", []approvalblock.Definition{billingDelegate(), alwaysDefinition("rest", approvalblock.Approve)}, "")
+	created, err := management.CreateRevision(context.Background(), pipelineManagerPrincipal("organization-1"), "entry", "Entry", []approvalblock.Definition{billingDelegate(), alwaysDefinition("rest", approvalblock.Approve)}, Route{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -306,7 +306,7 @@ func TestACycleOrDepthOverTheLimitHandsTheRequestToAHuman(t *testing.T) {
 	)
 	loop := delegateDefinition("loop", "checks", approvalblock.Field("/request/tool").Exists())
 	management := NewManagementService(repository, NewCompiledPipelineState(repository, NewBlockRegistry()), fixedPipelineClock{now: now})
-	created, err := management.CreateRevision(context.Background(), pipelineManagerPrincipal("organization-1"), "billing", "", []approvalblock.Definition{loop}, "")
+	created, err := management.CreateRevision(context.Background(), pipelineManagerPrincipal("organization-1"), "billing", "", []approvalblock.Definition{loop}, Route{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -336,7 +336,7 @@ func TestPreviewExpandsDelegatesAndRefusesSelfDelegation(t *testing.T) {
 	principal := pipelineManagerPrincipal("organization-1")
 	if _, err := management.Create(context.Background(), principal, "billing", "Billing", []approvalblock.Definition{
 		pipelineDefinition("small", approvalblock.Approve, approvalblock.Field("/request/arguments/amount").LessThan(10)),
-	}, "payments-review"); err != nil {
+	}, Route{EscalationPath: "payments-review"}); err != nil {
 		t.Fatal(err)
 	}
 	compiled := NewCompiledPipelineState(repository, registry)
@@ -349,14 +349,14 @@ func TestPreviewExpandsDelegatesAndRefusesSelfDelegation(t *testing.T) {
 		return PreviewSample{Request: BlockRequest{Tool: tool, Arguments: json.RawMessage(arguments)}, Agent: BlockAgent{Slug: "billing", Name: "Billing"}}
 	}
 
-	result, err := management.Preview(context.Background(), principal, "entry", document, "on-call", sample("stripe.refund", `{"amount":5}`))
+	result, err := management.Preview(context.Background(), principal, "entry", document, Route{EscalationPath: "on-call"}, sample("stripe.refund", `{"amount":5}`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if result.Outcome != BlockApprove || len(result.Blocks) != 2 || result.Blocks[1].PipelineKey != "billing" || result.Blocks[1].BlockKey != "small" {
 		t.Fatalf("preview did not walk the delegated pipeline: %+v", result)
 	}
-	result, err = management.Preview(context.Background(), principal, "entry", document, "on-call", sample("stripe.refund", `{"amount":50}`))
+	result, err = management.Preview(context.Background(), principal, "entry", document, Route{EscalationPath: "on-call"}, sample("stripe.refund", `{"amount":50}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -365,7 +365,7 @@ func TestPreviewExpandsDelegatesAndRefusesSelfDelegation(t *testing.T) {
 		t.Fatalf("running out of the delegated pipeline must route by its default: %+v", result)
 	}
 	other := PreviewSample{Request: BlockRequest{Tool: "deploy", Arguments: json.RawMessage(`{}`)}, Agent: BlockAgent{Slug: "support", Name: "Support"}}
-	result, err = management.Preview(context.Background(), principal, "entry", document, "on-call", other)
+	result, err = management.Preview(context.Background(), principal, "entry", document, Route{EscalationPath: "on-call"}, other)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -374,18 +374,18 @@ func TestPreviewExpandsDelegatesAndRefusesSelfDelegation(t *testing.T) {
 	}
 
 	self := []approvalblock.Definition{delegateDefinition("me", "entry", approvalblock.Field("/request/tool").Exists())}
-	if _, err := management.Preview(context.Background(), principal, "entry", self, "", sample("deploy", `{}`)); !errors.Is(err, domain.ErrInvalid) {
+	if _, err := management.Preview(context.Background(), principal, "entry", self, Route{}, sample("deploy", `{}`)); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("delegating to the entry pipeline previewed: %v", err)
 	}
 	loop := []approvalblock.Definition{delegateDefinition("me", "billing", approvalblock.Field("/request/tool").Exists())}
-	if _, err := management.Preview(context.Background(), principal, "billing", loop, "", sample("deploy", `{}`)); !errors.Is(err, domain.ErrInvalid) {
+	if _, err := management.Preview(context.Background(), principal, "billing", loop, Route{}, sample("deploy", `{}`)); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("a pipeline delegating to itself previewed: %v", err)
 	}
-	if _, err := management.CreateRevision(context.Background(), principal, "billing", "", loop, ""); !errors.Is(err, domain.ErrInvalid) {
+	if _, err := management.CreateRevision(context.Background(), principal, "billing", "", loop, Route{}); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("a pipeline delegating to itself was stored: %v", err)
 	}
 	missing := []approvalblock.Definition{delegateDefinition("gone", "nowhere", approvalblock.Field("/request/tool").Exists())}
-	if _, err := management.Preview(context.Background(), principal, "entry", missing, "", sample("deploy", `{}`)); !errors.Is(err, domain.ErrRequestApprovalPipelineNotFound) {
+	if _, err := management.Preview(context.Background(), principal, "entry", missing, Route{}, sample("deploy", `{}`)); !errors.Is(err, domain.ErrRequestApprovalPipelineNotFound) {
 		t.Fatalf("a missing target previewed: %v", err)
 	}
 }
@@ -429,18 +429,18 @@ func TestManagementReferencesArchiveAndUsesForDelegates(t *testing.T) {
 	repository := newMemoryPipelineRepository()
 	service := NewManagementService(repository, NewCompiledPipelineState(repository, NewBlockRegistry()), fixedPipelineClock{now: now}, WithPipelineKeyResolver(repository))
 	principal := pipelineManagerPrincipal("organization-1")
-	if _, err := service.Create(context.Background(), principal, "billing", "Billing", nil, ""); err != nil {
+	if _, err := service.Create(context.Background(), principal, "billing", "Billing", nil, Route{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.Create(context.Background(), principal, "entry", "Entry", nil, ""); !errors.Is(err, domain.ErrRequestApprovalPipelineEntry) {
+	if _, err := service.Create(context.Background(), principal, "entry", "Entry", nil, Route{}); !errors.Is(err, domain.ErrRequestApprovalPipelineEntry) {
 		t.Fatalf("creating the entry pipeline = %v", err)
 	}
 	if _, err := service.CreateRevision(context.Background(), principal, "entry", "Entry", []approvalblock.Definition{
 		delegateDefinition("gone", "nowhere", approvalblock.Field("/request/tool").Exists()),
-	}, ""); !errors.Is(err, domain.ErrRequestApprovalPipelineNotFound) {
+	}, Route{}); !errors.Is(err, domain.ErrRequestApprovalPipelineNotFound) {
 		t.Fatalf("a delegate to a missing pipeline was stored: %v", err)
 	}
-	created, err := service.CreateRevision(context.Background(), principal, "entry", "Entry", []approvalblock.Definition{billingDelegate()}, "")
+	created, err := service.CreateRevision(context.Background(), principal, "entry", "Entry", []approvalblock.Definition{billingDelegate()}, Route{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -477,10 +477,10 @@ func TestManagementReferencesArchiveAndUsesForDelegates(t *testing.T) {
 		t.Fatalf("references after archive = %+v, %v", references, err)
 	}
 	scoped := principal.WithGrants([]domain.Grant{{Permission: domain.PermissionPipelineWrite, ScopeKind: domain.ScopePipeline, ScopeID: "billing"}})
-	if _, err := service.Create(context.Background(), scoped, "payments", "Payments", nil, ""); !errors.Is(err, domain.ErrForbidden) {
+	if _, err := service.Create(context.Background(), scoped, "payments", "Payments", nil, Route{}); !errors.Is(err, domain.ErrForbidden) {
 		t.Fatalf("a pipeline-scoped grant created a pipeline: %v", err)
 	}
-	if _, err := service.CreateRevision(context.Background(), scoped, "entry", "", nil, ""); !errors.Is(err, domain.ErrForbidden) {
+	if _, err := service.CreateRevision(context.Background(), scoped, "entry", "", nil, Route{}); !errors.Is(err, domain.ErrForbidden) {
 		t.Fatalf("a billing-scoped grant wrote the entry pipeline: %v", err)
 	}
 }

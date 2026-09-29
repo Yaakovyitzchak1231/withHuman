@@ -1,7 +1,7 @@
 # withHuman: reviewer routing and escalation
 
-Status: implemented · Last updated: 2026-09-23 (a branch's end names a
-path like a block)
+Status: implemented · Last updated: 2026-09-29 (agent-owner route;
+self-approval policy removed)
 
 ## Summary
 
@@ -32,6 +32,10 @@ human is needed also says *which* escalation path handles it:
 4. **Paths can read the request.** A branch in a path tests the clock,
    the urgency, or the request itself with the same condition envelope
    pipeline blocks use.
+5. **Or the agent's owner.** Wherever a path can be named, the exit may
+   instead ask the person who owns the agent, naming a fallback path for
+   requests from agents that have no owner. See
+   [Agent-owner route](#agent-owner-route).
 
 Two properties still distinguish approval routing from incident paging.
 The terminal event is a decision, not an acknowledgement, and every
@@ -56,20 +60,31 @@ whether or not they were notified yet.
 
 Pipeline evaluation is synchronous in the request path. When the outcome is
 `human`, the executor also resolves the **route**: the terminal block's
-escalation path, else the effective pipeline default, else none
-(`application.HumanReviewRoute`). The routing service pins the path's
+route, else the effective pipeline default, else none
+(`application.HumanReviewRoute`). A route is an escalation path, or the
+agent's owner with a fallback path. The routing service pins the path's
 active revision in the same transaction that commits the pending request,
 so later edits never re-route it. A suspended pipeline (judge or webhook
 block) is routed by the worker after the resume, and only if it still
 needs a human.
 
+The request carries its owner from the moment it is created: the
+instance that raised it resolves to its owner's membership during
+authentication, and the request records it as `requester_membership_id`
+before the pipeline runs. Routing, including a routing after a resume,
+reads the owner from the request, never from the instance.
+
 ```mermaid
 flowchart LR
-    A["Pipeline returns human (sync)"] --> B["Route: block path, else pipeline default, else none"]
+    A["Pipeline returns human (sync)"] --> B["Route: block route, else pipeline default, else none"]
     B --> C["Pin the path's active revision + commit pending request"]
     C --> D["Start request workflow"]
+    D -->|"agent_owner"| O["Notify the agent's owner"]
+    O -->|"owner deactivated"| E
     D -->|"escalated"| E["Notify the pinned path's targets"]
     D -->|"default_queue"| F["Notify every authorized reviewer"]
+    O -->|"decision"| G
+    O -->|"deadline"| H
     E -->|"decision"| G["Terminal: approved / denied"]
     E -->|"deadline"| H["Terminal: expired"]
     F -->|"decision or deadline"| G
@@ -87,6 +102,17 @@ flowchart LR
   block may carry it only when `on_match` is `human`.
 - **Pipeline default**: the optional `default_escalation_path` key on a
   pipeline revision.
+- **Agent owner**: the membership that owns the personal agent instance
+  that raised the request (`agent_instances.membership_id`, recorded on
+  the request as `requester_membership_id`). An agent's `kind` is
+  `personal` or `service` and never changes; every instance of a
+  personal agent belongs to exactly one member, and service agents have
+  no owner.
+- **Agent-owner route**: `ask_agent_owner: true` beside a block's
+  `escalation_path`, or `default_ask_agent_owner: true` beside a
+  revision's `default_escalation_path`. The request goes to the agent's
+  owner; the named path is the fallback for a request that has no owner
+  able to decide.
 - **Target**: what a path level notifies. In an organization path: a
   membership (`user`) or a `team`. Team membership resolves at
   notification and decision time, never at authoring time. A team target
@@ -120,13 +146,100 @@ section):
 3. Otherwise `no_escalation`: the snapshot's outcome is `default_queue`
    and any active member holding `request.decide` may decide.
 
+The owner flag travels with the path it sits beside: whichever of the
+three steps supplies the path also decides whether the owner is asked. A
+block that names a path without the flag does not ask the owner, even
+when the pipeline default does; a block that names no path takes the
+default's path and flag together.
+
 The router then pins the path's active revision. A path without one falls
 to `default_queue` with reason `path_inactive`; a lookup error falls to
 `default_queue` with `evaluation_error`. Routing never fails a request.
 
-The snapshot (`approval_request_routing`) is append-only: `outcome`
-(`escalated` or `default_queue`), `reason`, the path key and pinned
-revision, and the pipeline revision and block that named it.
+The snapshot (`approval_request_routing`, one append-only row per
+request) holds `outcome` (`agent_owner`, `escalated`, or
+`default_queue`), `reason`, the path key and pinned revision, the
+pipeline revision and block that named it, and for an agent-owner route
+the owner (`agent_owner_membership_id`) or the reason it fell back
+(`agent_owner_fallback`). A handoff never rewrites the row: it adds one
+to `approval_request_agent_owner_handoffs`, and every reader reads the
+pair (`readPinnedRouting`): an `agent_owner` row without a handoff
+admits its owner alone, and with one reads as the escalated snapshot of
+its pinned fallback, or the default queue when the fallback had no
+active revision.
+
+## Agent-owner route
+
+Personal agents act as their owner (a coding agent on someone's laptop
+calls tools as that person), so the natural first reviewer is the person
+running it. The agent-owner route sends the request to that person and
+to nobody else.
+
+```json
+{
+  "outcome": "human",
+  "reason": "Pushing to a shared branch needs a person.",
+  "ask_agent_owner": true,
+  "escalation_path": "platform-review"
+}
+```
+
+The same pair works on every object that can name a path: an `always`,
+`cel`, `llm_judge`, or `webhook` block whose outcome is `human`, a
+branch's end ([15-branch-blocks.md](15-branch-blocks.md)), and a
+pipeline revision's default (`default_ask_agent_owner` with
+`default_escalation_path`). The organization pipeline may use it too:
+it runs for every agent, and service agents take the fallback.
+
+**The fallback is required.** Revision creation refuses
+`ask_agent_owner` without `escalation_path` on the same object, and
+`default_ask_agent_owner` without `default_escalation_path`, as an
+invalid document; the database holds the default's rule too. The path is
+an ordinary named path, so activation and archive guards treat it
+exactly like any other. An edition's block kind joins the route by
+implementing `approvalblock.OwnerRoutedConfig` beside `RoutedConfig`.
+
+**Resolution.** At routing time the router reads the request's owner:
+
+| Owner at routing time | Outcome | Recorded |
+| --- | --- | --- |
+| Active and holds `request.decide` for the request | `agent_owner` | `agent_owner_membership_id` |
+| None (a service agent) | `escalated` via the fallback | `agent_owner_fallback: no_agent_owner` |
+| Suspended or deprovisioned (possible after a suspended pipeline resumes) | `escalated` via the fallback | `agent_owner_fallback: agent_owner_inactive` |
+| Active but without `request.decide` | `escalated` via the fallback | `agent_owner_fallback: agent_owner_cannot_decide` |
+
+For an `agent_owner` outcome the router still pins the fallback path's
+active revision, its team policies, and its request-condition facts, in
+the same transaction, so a later handoff runs the document that was
+active when the request arrived. A fallback with no active revision
+leaves the pin empty; a handoff then goes to the default queue with
+`path_inactive`.
+
+**Notification and timing.** The owner is paged through their own
+notification ladder when the request is routed, at `standard` urgency.
+There are no levels, no `escalate_after`, and no repeat: if the owner
+does not answer, the request stays with them until they decide or its
+deadline expires it. The fallback never takes over because of time. A
+claim changes nothing, because there are no timers to freeze.
+
+**Handoff when the owner leaves.** Suspending or deprovisioning a
+member, by an administrator or by directory sync, writes a handoff row
+for every pending request routed to them as its agent's owner, in the
+same transaction (`handOffAgentOwnerRequests`), with a
+`routing.agent_owner_handoff` audit event and an outbox event
+(`approval.agent_owner_handoff`). From that commit current routing reads
+the pinned fallback. The worker's outbox dispatcher turns the event into
+the request workflow's `agent_owner_deactivated` signal; the workflow
+stops the owner's pages, loads the fallback program, and starts the
+executor from its first node, as though the request had just been routed
+there. A repeated signal is ignored. Reactivation never routes a request
+back to the owner. A role change that removes `request.decide` is not a
+handoff: the request waits for a break-glass reviewer or its deadline.
+
+**Rollout.** The route adds a workflow signal and a snapshot outcome, so
+the server and worker ship together, and replacing the request workflow
+in place needs zero pending requests (or pending requests terminated and
+expired by hand), as for any executor change.
 
 ## Escalation path
 
@@ -307,6 +420,17 @@ colleague through the add-reviewer action. The path editor warns
 meeting a level. A `default_queue` snapshot, or none, leaves the request
 open to any authorized reviewer.
 
+An `agent_owner` snapshot admits exactly the owner it records. The
+fallback path is pinned but not reached, so its targets may not decide
+until a handoff; from then on the fallback's reachable targets decide as
+for any path. Break glass and
+added reviewers work the same way for both outcomes.
+
+There is no self-approval rule. A person may decide a request their own
+agent raised wherever routing reaches them: as its owner, or as a
+target of any path. The organization policy that once forbade it
+(`allow_self_approval`) and its settings row are removed.
+
 The routing view (`GET /requests/{id}/routing`, embedded in the review)
 carries `targets`: the reachable people and teams in path order, so a
 refused reviewer sees who can decide. Notification of a request the
@@ -322,11 +446,13 @@ paged through their own notification ladder from that moment.
 ## Application APIs
 
 Escalation path keys travel inside the pipeline API
-(`/api/v1/request-approval-pipelines/...`): `escalation_path` in block
-configurations, `default_escalation_path` on the document and on revision
-responses, and `escalation_path` plus `escalation_path_reason` on a
+(`/api/v1/request-approval-pipelines/...`): `escalation_path` and
+`ask_agent_owner` in block configurations, `default_escalation_path` and
+`default_ask_agent_owner` on the document and on revision responses, and
+`escalation_path`, `escalation_path_reason`, and `ask_agent_owner` on a
 preview result so the editor's test replay can show where a human outcome
-goes. Gated by `pipeline.read` for reads and `pipeline.write` for revision creation, checked against the agent slug (`pipeline.write` at `agent:<slug>`, see [10-rbac.md](10-rbac.md)); revision creation
+goes. A preview has no real instance, so it reports the route ("the
+agent's owner, else this path"), never a person. Gated by `pipeline.read` for reads and `pipeline.write` for revision creation, checked against the agent slug (`pipeline.write` at `agent:<slug>`, see [10-rbac.md](10-rbac.md)); revision creation
 requires every named path to exist and activation requires each to have
 an active revision.
 
@@ -342,7 +468,7 @@ Escalation paths themselves are gated by `escalation_path.read` (reads), `escala
 | `GET …/revisions` · `GET …/revisions/{revision}` | History |
 | `POST …/revisions/{revision}/activate` | Activate or roll back, `If-Match` |
 | `GET /escalation-paths/{path_key}/uses` | Active pipeline revisions naming the path |
-| `GET /requests/{id}/routing` | The pinned snapshot with the path's name, the pinned team policies, and the executor's position |
+| `GET /requests/{id}/routing` | The snapshot with the path's name, the owner (`agent_owner`, with `agent_owner_handed_off_at` after a handoff) or the reason the owner was skipped (`agent_owner_fallback`), who current routing admits (`targets`), the pinned team policies, and the executor's position |
 
 Team escalation policies live under the team, gated by `team.read`,
 `team.escalation.write`, and `team.escalation.activate` on that team:
@@ -406,6 +532,13 @@ longer exist.
   Reactivation is never guarded, and directory sync applies its own
   deactivations without consulting the paths, because the directory is
   authoritative for the people it manages.
+- Owning a personal agent never blocks suspending or deprovisioning:
+  the owner's pending `agent_owner` requests hand off to their pinned
+  fallbacks in the same transaction, and the handoff table is append-only
+  like the snapshot.
+- A request is routed to its agent's owner only when that owner can
+  decide it at routing time; otherwise it takes the fallback then, and
+  never waits on an owner who cannot act.
 - All routing behavior is invisible to AAP.
 
 ## Product surfaces
@@ -418,14 +551,22 @@ longer exist.
   outcome is human; the terminus card is where the pipeline default is set
   and reads "End of pipeline: escalate via <path>" (the organization
   pipeline's continue card carries its own default). The picker shows each
-  path's tree beneath it.
+  path's tree beneath it. The picker's first choice is "The agent's
+  owner"; choosing it asks for the fallback, labelled "If the agent has
+  no owner", and the chip reads "Agent owner, else <path>".
+- Guided setup ([09-onboarding.md](09-onboarding.md)) creates personal
+  agents whose starting pipeline asks the agent's owner, with the
+  setup's own path as the fallback.
 - Teams: an escalation policy column on the teams table and a policy
   screen per team (the same document editor with a team vocabulary:
   everyone on the team, then members). A team chip in the path editor and
   the pipeline editor opens the team's policy tree inline.
 - The request page shows "Sent to" with the path and the reason, the
   current level and when it escalates next, one line per running team
-  policy, and the escalation steps in the history.
+  policy, and the escalation steps in the history. An `agent_owner`
+  request reads "Sent to <name>, the agent's owner", and a fallback says
+  why ("This agent has no owner", "The agent's owner was deactivated").
+- Organization policies no longer show a self-approval setting.
 
 ## Non-goals (v1)
 
@@ -438,7 +579,16 @@ longer exist.
 - **Expression-based target navigation** ("the team that manages this
   agent") from a pipeline default. Teams hold roles at agents
   (`agent:<slug>`), but nothing navigates from an agent to the teams
-  holding roles on it.
+  holding roles on it. The agent-owner route is the one navigation that
+  exists, and only for personal agents; an accountable owner for service
+  agents is future work.
+- **Escalating away from the owner on a timer.** The owner is the only
+  reviewer of an `agent_owner` request; the fallback covers a missing
+  owner, never a slow one. A pipeline that wants a team to act on a
+  schedule names a path instead.
+- **Owner facts in conditions.** Pipeline and path conditions do not see
+  the agent's kind or owner; the fallback already handles agents without
+  one.
 
 ## Prior art
 

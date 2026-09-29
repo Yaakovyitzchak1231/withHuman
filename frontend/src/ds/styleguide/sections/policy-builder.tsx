@@ -595,11 +595,17 @@ export function PolicyBuilderSection() {
         <div className="flex flex-col gap-3">
           <PipelineBranchEndCard branchName="Refunds" target={REFUND_REVIEWERS} reason={DEMO_BRANCH.reason} />
           <PipelineBranchEndCard branchName="Deploys" defaultTarget={null} />
+          <PipelineBranchEndCard
+            branchName="Pushes"
+            target={{ type: "agent_owner", id: REFUND_REVIEWERS.id, name: REFUND_REVIEWERS.name }}
+          />
           <p className="text-micro text-ink-muted">
             The last card in every well, framed like the pipeline's terminus: no block in the
             branch decided, so a human is asked, through the branch's escalation path or else the
             pipeline default, with the branch's reason. The pipeline stops there; nothing after
-            the branch runs. A test run that ran out of the branch rings this card.
+            the branch runs. A test run that ran out of the branch rings this card. Every picker
+            that offers paths also offers the agent's owner, which then asks for the path a
+            request without an owner falls back to; its chip reads "Agent owner, else" the path.
           </p>
         </div>
       </Demo>

@@ -95,6 +95,18 @@ type PreviewResult struct {
 	EscalationPath            string
 	EscalationPathReason      string
 	EscalationPathPipelineKey string
+	// AskAgentOwner reports that the route asks the agent's owner, with
+	// EscalationPath as the fallback. A preview has no instance, so it
+	// names the route, never a person.
+	AskAgentOwner bool
+}
+
+// Route is where a human outcome goes: an escalation path, or the agent's
+// owner with that path as the fallback for a request without one. The
+// zero value names no path and inherits the pipeline default.
+type Route struct {
+	EscalationPath string
+	AskAgentOwner  bool
 }
 
 // PreviewBlockResult is one step of a preview, in execution order. A branch
@@ -191,7 +203,7 @@ func (service *ManagementService) Uses(ctx context.Context, principal domain.Pri
 // Create brings a pipeline into being with its first revision, active at
 // once. Creating a pipeline is an organization-wide act: the caller holds
 // pipeline.write at the organization, since no narrower scope exists yet.
-func (service *ManagementService) Create(ctx context.Context, principal domain.Principal, pipelineKey, name string, definitions []approvalblock.Definition, defaultEscalationPath string) (PipelineRevision, error) {
+func (service *ManagementService) Create(ctx context.Context, principal domain.Principal, pipelineKey, name string, definitions []approvalblock.Definition, defaultRoute Route) (PipelineRevision, error) {
 	if err := requirePipelineMember(principal); err != nil {
 		return PipelineRevision{}, err
 	}
@@ -204,7 +216,7 @@ func (service *ManagementService) Create(ctx context.Context, principal domain.P
 	if pipelineKey == domain.EntryPipelineKey {
 		return PipelineRevision{}, domain.ErrRequestApprovalPipelineEntry
 	}
-	blocks, err := service.prepareDocument(ctx, principal.OrganizationID, pipelineKey, definitions, defaultEscalationPath)
+	blocks, err := service.prepareDocument(ctx, principal.OrganizationID, pipelineKey, definitions, defaultRoute)
 	if err != nil {
 		return PipelineRevision{}, err
 	}
@@ -214,7 +226,8 @@ func (service *ManagementService) Create(ctx context.Context, principal domain.P
 		PipelineKey:           pipelineKey,
 		Name:                  name,
 		Blocks:                blocks,
-		DefaultEscalationPath: defaultEscalationPath,
+		DefaultEscalationPath: defaultRoute.EscalationPath,
+		DefaultAskAgentOwner:  defaultRoute.AskAgentOwner,
 		CreatedByActorID:      principal.ManagementActorID(),
 		Now:                   service.clock.Now(),
 	})
@@ -226,7 +239,7 @@ func (service *ManagementService) Create(ctx context.Context, principal domain.P
 
 // CreateRevision appends an inactive revision to a live pipeline. An empty
 // name keeps the active revision's.
-func (service *ManagementService) CreateRevision(ctx context.Context, principal domain.Principal, pipelineKey, name string, definitions []approvalblock.Definition, defaultEscalationPath string) (PipelineRevision, error) {
+func (service *ManagementService) CreateRevision(ctx context.Context, principal domain.Principal, pipelineKey, name string, definitions []approvalblock.Definition, defaultRoute Route) (PipelineRevision, error) {
 	if err := authorizePipelineManagement(principal, domain.PermissionPipelineWrite, pipelineKey); err != nil {
 		return PipelineRevision{}, err
 	}
@@ -239,7 +252,7 @@ func (service *ManagementService) CreateRevision(ctx context.Context, principal 
 		}
 		name = active.Name
 	}
-	blocks, err := service.prepareDocument(ctx, principal.OrganizationID, pipelineKey, definitions, defaultEscalationPath)
+	blocks, err := service.prepareDocument(ctx, principal.OrganizationID, pipelineKey, definitions, defaultRoute)
 	if err != nil {
 		return PipelineRevision{}, err
 	}
@@ -249,7 +262,8 @@ func (service *ManagementService) CreateRevision(ctx context.Context, principal 
 		PipelineKey:           pipelineKey,
 		Name:                  name,
 		Blocks:                blocks,
-		DefaultEscalationPath: defaultEscalationPath,
+		DefaultEscalationPath: defaultRoute.EscalationPath,
+		DefaultAskAgentOwner:  defaultRoute.AskAgentOwner,
 		CreatedByActorID:      principal.ManagementActorID(),
 		Now:                   service.clock.Now(),
 	})
@@ -261,7 +275,10 @@ func (service *ManagementService) CreateRevision(ctx context.Context, principal 
 
 // prepareDocument compiles a document and checks everything it references
 // exists, then turns it into snapshot inputs.
-func (service *ManagementService) prepareDocument(ctx context.Context, organizationID domain.ID, pipelineKey string, definitions []approvalblock.Definition, defaultEscalationPath string) ([]application.RequestApprovalBlockSnapshotInput, error) {
+func (service *ManagementService) prepareDocument(ctx context.Context, organizationID domain.ID, pipelineKey string, definitions []approvalblock.Definition, defaultRoute Route) ([]application.RequestApprovalBlockSnapshotInput, error) {
+	if err := approvalblock.ValidateRoute(defaultRoute.EscalationPath, defaultRoute.AskAgentOwner); err != nil {
+		return nil, invalidPipelineDocument("default route is invalid", err)
+	}
 	if _, err := service.compiled.registry.compileDefinitions(definitions); err != nil {
 		return nil, err
 	}
@@ -269,7 +286,7 @@ func (service *ManagementService) prepareDocument(ctx context.Context, organizat
 	if err := service.requireBlockDependencies(ctx, organizationID, all); err != nil {
 		return nil, err
 	}
-	if err := service.requireEscalationPaths(ctx, organizationID, all, defaultEscalationPath); err != nil {
+	if err := service.requireEscalationPaths(ctx, organizationID, all, defaultRoute.EscalationPath); err != nil {
 		return nil, err
 	}
 	if err := service.requireDelegateTargets(ctx, organizationID, pipelineKey, all); err != nil {
@@ -328,7 +345,7 @@ func (service *ManagementService) Archive(ctx context.Context, principal domain.
 // without persisting anything. Delegate blocks expand to their targets'
 // current active revisions, so the preview walks what a request would; a
 // skipped delegate calls nothing.
-func (service *ManagementService) Preview(ctx context.Context, principal domain.Principal, pipelineKey string, definitions []approvalblock.Definition, defaultEscalationPath string, sample PreviewSample) (PreviewResult, error) {
+func (service *ManagementService) Preview(ctx context.Context, principal domain.Principal, pipelineKey string, definitions []approvalblock.Definition, defaultRoute Route, sample PreviewSample) (PreviewResult, error) {
 	if err := authorizePipelineManagement(principal, domain.PermissionPipelineWrite, pipelineKey); err != nil {
 		return PreviewResult{}, err
 	}
@@ -342,11 +359,11 @@ func (service *ManagementService) Preview(ctx context.Context, principal domain.
 	if err := service.requireBlockDependencies(ctx, principal.OrganizationID, flattenDefinitions(definitions)); err != nil {
 		return PreviewResult{}, err
 	}
-	if err := validOptionalEscalationPath(defaultEscalationPath); err != nil {
-		return PreviewResult{}, err
+	if err := approvalblock.ValidateRoute(defaultRoute.EscalationPath, defaultRoute.AskAgentOwner); err != nil {
+		return PreviewResult{}, invalidPipelineDocument("default route is invalid", err)
 	}
 	root := &compiledPipeline{
-		Revision:  domain.RequestApprovalPipelineRevision{OrganizationID: principal.OrganizationID, PipelineKey: pipelineKey, DefaultEscalationPath: defaultEscalationPath},
+		Revision:  domain.RequestApprovalPipelineRevision{OrganizationID: principal.OrganizationID, PipelineKey: pipelineKey, DefaultEscalationPath: defaultRoute.EscalationPath, DefaultAskAgentOwner: defaultRoute.AskAgentOwner},
 		Blocks:    compiled,
 		Snapshots: previewSnapshots(definitions),
 		Delegates: delegateKeys(compiled),
@@ -373,7 +390,7 @@ func (service *ManagementService) Preview(ctx context.Context, principal domain.
 	}
 	input := RequestApprovalBlockInput{OrganizationID: principal.OrganizationID, Preview: true, Request: sample.Request, Agent: sample.Agent, PreviousMetadata: previous, Budget: &BlockExecutionBudget{}}
 	var terminal terminalBlock
-	escalationPath, routeFrom := "", 0
+	route, routeFrom := Route{}, 0
 	cursor := newBranchCursor(effective.Blocks, 0)
 walk:
 	for {
@@ -393,7 +410,7 @@ walk:
 			if block.Delegate {
 				routeFrom = effective.target(index)
 			} else {
-				escalationPath, routeFrom = block.EscalationPath, effective.Owner[index]
+				route, routeFrom = block.route(), effective.Owner[index]
 			}
 			break
 		}
@@ -435,15 +452,15 @@ walk:
 		if !block.container() {
 			// A branch or delegate whose condition failed keeps the
 			// default: a branch's own path is for its end only.
-			escalationPath = block.EscalationPath
+			route = block.route()
 		}
 		break walk
 	}
 	if result.Outcome != BlockHuman {
 		return result, nil
 	}
-	route, section := routeSection(effective, terminal, escalationPath, routeFrom)
-	result.EscalationPath, result.EscalationPathReason = route.PathKey, route.Reason
+	resolved, section := routeSection(effective, terminal, route, routeFrom)
+	result.EscalationPath, result.EscalationPathReason, result.AskAgentOwner = resolved.PathKey, resolved.Reason, resolved.AskAgentOwner
 	if section >= 0 {
 		result.EscalationPathPipelineKey = effective.Sections[section].Key
 	}

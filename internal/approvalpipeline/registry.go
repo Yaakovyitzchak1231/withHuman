@@ -220,7 +220,8 @@ func (registry *BlockRegistry) compileDefinitions(definitions []approvalblock.De
 		}
 		compiled[index] = compiledBlock{
 			Key: definition.ID, Executor: block, Asynchronous: runtime.Asynchronous,
-			EscalationPath: definition.EscalationPath(), Parent: node.Parent, End: node.End,
+			EscalationPath: definition.EscalationPath(), AskAgentOwner: definition.AskAgentOwner(),
+			Parent: node.Parent, End: node.End,
 		}
 		switch definition.Type {
 		case approvalblock.TypeBranch:

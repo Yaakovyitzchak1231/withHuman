@@ -24,7 +24,7 @@ func TestExecutionRunsTheEntryPipelineStopsAtFirstTerminalAndCachesRevision(t *t
 	management := NewManagementService(pipelines, NewCompiledPipelineState(pipelines, NewBlockRegistry()), fixedPipelineClock{now: now})
 	release, err := management.CreateRevision(context.Background(), pipelineManagerPrincipal("organization-1"), "release", pipelineName("release"), []approvalblock.Definition{
 		pipelineDefinition("approve", approvalblock.Approve, approvalblock.Field("/request/tool").Equals("deploy")),
-	}, "")
+	}, Route{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -267,7 +267,7 @@ func activeExecutionPipeline(t *testing.T, now time.Time, pipelineKey string, de
 	t.Helper()
 	repository := newMemoryPipelineRepository()
 	management := NewManagementService(repository, NewCompiledPipelineState(repository, NewBlockRegistry()), fixedPipelineClock{now: now})
-	created, err := management.CreateRevision(context.Background(), pipelineManagerPrincipal("organization-1"), pipelineKey, pipelineName(pipelineKey), definitions, "")
+	created, err := management.CreateRevision(context.Background(), pipelineManagerPrincipal("organization-1"), pipelineKey, pipelineName(pipelineKey), definitions, Route{})
 	if err != nil {
 		t.Fatal(err)
 	}

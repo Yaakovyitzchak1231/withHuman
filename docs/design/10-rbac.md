@@ -1,6 +1,6 @@
 # Roles, permissions, and scoped grants
 
-Status: implemented (branch claude/rbac-architecture-planning-2730ff) · Last updated: 2026-09-18
+Status: implemented (branch claude/rbac-architecture-planning-2730ff) · Last updated: 2026-09-29
 
 > **Prototype.** Same caveat as
 > [00-general-design.md](00-general-design.md): everything here can change
@@ -532,7 +532,7 @@ flowchart LR
   retrofits usually get wrong, so it is a first-class output, not a
   per-handler afterthought.
 - **Decision transaction.** The kernels take the RBAC verdict as input and
-  keep their own rules (self-approval, freshness, MFA, routed targets). The
+  keep their own rules (freshness, MFA, routed targets). The
   recheck loads grants inside the serializable transaction.
 - **Clients.** `/api/v1/me` returns grants using registry keys. The web app
   gates navigation on "holds anywhere" and actions on `can(permission,

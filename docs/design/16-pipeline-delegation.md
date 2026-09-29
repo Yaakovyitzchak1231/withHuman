@@ -60,7 +60,13 @@ payments (Payments team)
 - **Routing default chain**: a human outcome without a path, and the end
   of a delegated pipeline, route to the innermost delegated pipeline's
   `default_escalation_path`, else the enclosing pipelines' defaults walking
-  outward, else the default queue. This generalises the old agent-then-
+  outward, else the default queue. The agent-owner route
+  (`ask_agent_owner` beside a block's path, `default_ask_agent_owner`
+  beside a revision's default, see
+  [06-routing-and-escalation.md](06-routing-and-escalation.md#agent-owner-route))
+  travels with the path it sits beside: a block's own route is taken
+  whole, and a default is inherited whole from whichever pipeline in the
+  chain supplies it. This generalises the old agent-then-
   organization order. A delegate whose condition fails routes from the
   pipeline that owns the block, never the target.
 - **Effective pipeline**: resolved at run start from the `entry` active

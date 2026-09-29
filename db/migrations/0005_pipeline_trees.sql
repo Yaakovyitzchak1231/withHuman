@@ -105,6 +105,7 @@ BEGIN
        OR NEW.revision IS DISTINCT FROM OLD.revision
        OR NEW.block_ids IS DISTINCT FROM OLD.block_ids
        OR NEW.default_escalation_path IS DISTINCT FROM OLD.default_escalation_path
+       OR NEW.default_ask_agent_owner IS DISTINCT FROM OLD.default_ask_agent_owner
        OR NEW.created_by_actor_id IS DISTINCT FROM OLD.created_by_actor_id
        OR NEW.created_at IS DISTINCT FROM OLD.created_at THEN
         RAISE EXCEPTION 'request approval pipeline revision content is immutable';

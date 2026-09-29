@@ -224,12 +224,12 @@ func TestManagementRefusesWhatAnEditionKindCannotRun(t *testing.T) {
 	}
 	var missing *blockruntime.Unconfigured
 	service := NewManagementService(repository, NewCompiledPipelineState(repository, NewBlockRegistry(WithRuntimes(unconfigured))), clock)
-	if _, err := service.CreateRevision(ctx, principal, "billing", pipelineName("billing"), definitions, ""); !errors.As(err, &missing) || missing.Code != "scripted_unconfigured" {
+	if _, err := service.CreateRevision(ctx, principal, "billing", pipelineName("billing"), definitions, Route{}); !errors.As(err, &missing) || missing.Code != "scripted_unconfigured" {
 		t.Fatalf("creation returned %v, want unconfigured", err)
 	}
 
 	full := NewManagementService(repository, NewCompiledPipelineState(repository, NewBlockRegistry(withScripted(newScripted()))), clock)
-	created, err := full.CreateRevision(ctx, principal, "billing", pipelineName("billing"), definitions, "")
+	created, err := full.CreateRevision(ctx, principal, "billing", pipelineName("billing"), definitions, Route{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -241,11 +241,11 @@ func TestManagementRefusesWhatAnEditionKindCannotRun(t *testing.T) {
 	}
 	reduced := NewManagementService(repository, NewCompiledPipelineState(repository, NewBlockRegistry(WithRuntimes(refusing))), clock)
 	var refused *blockruntime.Refused
-	if _, err := reduced.CreateRevision(ctx, principal, "billing", pipelineName("billing"), definitions, ""); !errors.As(err, &refused) || refused.Code != "scripted_model_unavailable" {
+	if _, err := reduced.CreateRevision(ctx, principal, "billing", pipelineName("billing"), definitions, Route{}); !errors.As(err, &refused) || refused.Code != "scripted_model_unavailable" {
 		t.Fatalf("creation returned %v, want the kind's refusal", err)
 	}
 	sample := PreviewSample{Request: BlockRequest{Tool: "stripe.refund", Arguments: json.RawMessage(`{}`)}, Agent: BlockAgent{Slug: "billing", Name: "billing-agent"}}
-	if _, err := reduced.Preview(ctx, principal, "billing", definitions, "", sample); !errors.As(err, &refused) {
+	if _, err := reduced.Preview(ctx, principal, "billing", definitions, Route{}, sample); !errors.As(err, &refused) {
 		t.Fatalf("preview returned %v, want the kind's refusal", err)
 	}
 	if _, err := reduced.Activate(ctx, principal, "billing", created.Revision.Revision, 1); !errors.As(err, &refused) {

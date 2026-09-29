@@ -16,7 +16,7 @@ import (
 )
 
 const requestApprovalPipelineSelect = `SELECT id::text, organization_id::text, pipeline_key, name, revision,
-	is_active, block_ids::text[], COALESCE(default_escalation_path, ''),
+	is_active, block_ids::text[], COALESCE(default_escalation_path, ''), default_ask_agent_owner,
 	created_by_actor_id::text, created_at, archived_at
 	FROM request_approval_pipelines `
 
@@ -131,14 +131,14 @@ func (s *Store) insertRequestApprovalPipelineRevision(ctx context.Context, tx pg
 	revision := domain.RequestApprovalPipelineRevision{
 		ID: input.ID, OrganizationID: input.OrganizationID, PipelineKey: input.PipelineKey, Name: input.Name,
 		Revision: revisionNumber, IsActive: active, BlockIDs: blockIDs, DefaultEscalationPath: input.DefaultEscalationPath,
-		CreatedByActorID: input.CreatedByActorID, CreatedAt: input.Now,
+		DefaultAskAgentOwner: input.DefaultAskAgentOwner, CreatedByActorID: input.CreatedByActorID, CreatedAt: input.Now,
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO request_approval_pipelines
 		(id, organization_id, pipeline_key, name, revision, is_active, block_ids, default_escalation_path,
-		 created_by_actor_id, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, NULLIF($8, ''), $9, $10)`, revision.ID, revision.OrganizationID,
+		 default_ask_agent_owner, created_by_actor_id, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, NULLIF($8, ''), $9, $10, $11)`, revision.ID, revision.OrganizationID,
 		revision.PipelineKey, revision.Name, revision.Revision, active, idStrings(revision.BlockIDs), revision.DefaultEscalationPath,
-		revision.CreatedByActorID, revision.CreatedAt); err != nil {
+		revision.DefaultAskAgentOwner, revision.CreatedByActorID, revision.CreatedAt); err != nil {
 		return domain.RequestApprovalPipelineRevision{}, err
 	}
 	created, _ := json.Marshal(map[string]any{
@@ -868,7 +868,7 @@ func scanRequestApprovalPipelineRevision(row rowScanner) (domain.RequestApproval
 	var id, organizationID, membershipID string
 	var blockIDs []string
 	err := row.Scan(&id, &organizationID, &revision.PipelineKey, &revision.Name, &revision.Revision, &revision.IsActive,
-		&blockIDs, &revision.DefaultEscalationPath, &membershipID, &revision.CreatedAt, &revision.ArchivedAt)
+		&blockIDs, &revision.DefaultEscalationPath, &revision.DefaultAskAgentOwner, &membershipID, &revision.CreatedAt, &revision.ArchivedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.RequestApprovalPipelineRevision{}, domain.ErrNotFound
 	}

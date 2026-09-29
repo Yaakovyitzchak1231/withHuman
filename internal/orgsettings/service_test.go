@@ -32,7 +32,7 @@ func (s *identityStub) UpdateOrganizationPolicy(_ context.Context, input applica
 	s.updated = &input
 	return domain.OrganizationPolicy{
 		OrganizationID: input.OrganizationID, AdmissionMode: s.policy.AdmissionMode, SessionMaxAge: s.policy.SessionMaxAge,
-		AllowSelfApproval: input.AllowSelfApproval, MFAMode: input.MFAMode,
+		MFAMode:              input.MFAMode,
 		ApprovalReauthWindow: input.ApprovalReauthWindow, ClaimRetriggerWindow: input.ClaimRetriggerWindow,
 		UnroutedRequests: input.UnroutedRequests, RequestVisibility: input.RequestVisibility,
 	}, nil
@@ -40,7 +40,7 @@ func (s *identityStub) UpdateOrganizationPolicy(_ context.Context, input applica
 
 func storedPolicy() domain.OrganizationPolicy {
 	return domain.OrganizationPolicy{
-		AdmissionMode: domain.AdmissionInviteOnly, MFAMode: domain.MFAOptional, AllowSelfApproval: false,
+		AdmissionMode: domain.AdmissionInviteOnly, MFAMode: domain.MFAOptional,
 		ApprovalReauthWindow: 24 * time.Hour, SessionMaxAge: 12 * time.Hour, ClaimRetriggerWindow: 15 * time.Minute,
 		UnroutedRequests: domain.UnroutedAnyReviewer, RequestVisibility: domain.VisibilityAllReaders,
 	}
@@ -91,7 +91,7 @@ func TestUpdatePolicyAppliesOnlyTheSetFields(t *testing.T) {
 	if input.RequestVisibility != domain.VisibilityRoutedOnly || input.ClaimRetriggerWindow != 30*time.Minute {
 		t.Fatalf("set fields were not applied: %#v", input)
 	}
-	if input.AllowSelfApproval || input.MFAMode != domain.MFAOptional || input.ApprovalReauthWindow != 24*time.Hour || input.UnroutedRequests != domain.UnroutedAnyReviewer {
+	if input.MFAMode != domain.MFAOptional || input.ApprovalReauthWindow != 24*time.Hour || input.UnroutedRequests != domain.UnroutedAnyReviewer {
 		t.Fatalf("unset fields did not keep their stored values: %#v", input)
 	}
 	if updated.RequestVisibility != domain.VisibilityRoutedOnly || updated.SessionMaxAge != 12*time.Hour {
@@ -111,9 +111,9 @@ func TestUpdatePolicyAppliesOnlyTheSetFields(t *testing.T) {
 func TestUpdatePolicyRequiresSettingsWrite(t *testing.T) {
 	identities := &identityStub{policy: storedPolicy()}
 	service := NewService(identities, clockStub{time.Unix(60_000, 0).UTC()}, nil)
-	allow := true
+	mode := domain.MFAReviewersRequired
 
-	if _, err := service.UpdatePolicy(context.Background(), principalWith(domain.PermissionOrganizationRead), PolicyPatch{AllowSelfApproval: &allow}); !errors.Is(err, domain.ErrForbidden) {
+	if _, err := service.UpdatePolicy(context.Background(), principalWith(domain.PermissionOrganizationRead), PolicyPatch{MFAMode: &mode}); !errors.Is(err, domain.ErrForbidden) {
 		t.Fatalf("with organization.read only: %v, want forbidden", err)
 	}
 	if identities.updated != nil {

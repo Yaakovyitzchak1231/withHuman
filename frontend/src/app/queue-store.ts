@@ -1,4 +1,4 @@
-import { useCallback, useSyncExternalStore } from "react";
+import { useCallback, useMemo, useSyncExternalStore } from "react";
 import { api, APP_API_BASE } from "../api";
 import type { ApprovalRequest, ApprovalReview } from "../types";
 import { DEFAULT_QUEUE_SCOPE, type QueueScope } from "./queue-search";
@@ -132,6 +132,17 @@ export function useQueue(scope: QueueScope = DEFAULT_QUEUE_SCOPE): QueueState {
   );
   const snapshot = useCallback(() => layer(scope).state, [scope]);
   return useSyncExternalStore(subscribeLayer, snapshot, snapshot);
+}
+
+/* The number of requests sent to this person that still wait on them:
+ * the pending part of the notified layer. The shell shows it beside
+ * the queue entry, so the layer stays live while the app is open. */
+export function useNotifiedPendingCount(): number {
+  const { requests } = useQueue("notified");
+  return useMemo(
+    () => requests.filter((request) => request.status === "pending").length,
+    [requests],
+  );
 }
 
 /* Review context a route loader fetched ahead of the detail panel, so

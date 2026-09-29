@@ -563,7 +563,7 @@ func (turn *assistantTurn) previewRules(ctx context.Context, slug string, raw js
 			server = tool.Server
 		}
 	}
-	preview, err := turn.service.pipelines.Preview(ctx, turn.principal, EntryPipelineKey, document, current.defaultPath, approvalpipeline.PreviewSample{
+	preview, err := turn.service.pipelines.Preview(ctx, turn.principal, EntryPipelineKey, document, current.route(), approvalpipeline.PreviewSample{
 		Request: approvalpipeline.BlockRequest{Tool: input.Sample.Tool, Server: server, Arguments: arguments, AgentReasoning: input.Sample.AgentReasoning},
 		Agent:   approvalpipeline.BlockAgent{Slug: slug, Name: turn.agentName(slug)},
 	})
@@ -604,21 +604,21 @@ func withPathOnHumanExits(blocks []approvalblock.Definition, pathKey string) []a
 		switch {
 		case block.Always != nil && block.Always.Outcome == approvalblock.Human && block.Always.EscalationPath == "":
 			always := *block.Always
-			always.EscalationPath = pathKey
+			always.EscalationPath, always.AskAgentOwner = pathKey, true
 			block.Always = &always
 		case block.CEL != nil && block.CEL.OnMatch == approvalblock.Human && block.CEL.EscalationPath == "":
 			cel := *block.CEL
-			cel.EscalationPath = pathKey
+			cel.EscalationPath, cel.AskAgentOwner = pathKey, true
 			block.CEL = &cel
 		case block.Webhook != nil && block.Webhook.EscalationPath == "":
 			webhook := *block.Webhook
-			webhook.EscalationPath = pathKey
+			webhook.EscalationPath, webhook.AskAgentOwner = pathKey, true
 			block.Webhook = &webhook
 		case block.Branch != nil:
 			branch := *block.Branch
 			branch.Blocks = withPathOnHumanExits(branch.Blocks, pathKey)
 			if branch.EscalationPath == "" {
-				branch.EscalationPath = pathKey
+				branch.EscalationPath, branch.AskAgentOwner = pathKey, true
 			}
 			block.Branch = &branch
 		}
@@ -741,7 +741,7 @@ func (turn *assistantTurn) setTestPrompt(ctx context.Context, raw json.RawMessag
 	if err != nil {
 		return refuse(setTestPromptTool, input.AgentSlug, "The active rules could not be read: "+err.Error())
 	}
-	preview, err := turn.service.pipelines.Preview(ctx, turn.principal, EntryPipelineKey, current.blocks, current.defaultPath, approvalpipeline.PreviewSample{
+	preview, err := turn.service.pipelines.Preview(ctx, turn.principal, EntryPipelineKey, current.blocks, current.route(), approvalpipeline.PreviewSample{
 		Request: approvalpipeline.BlockRequest{Tool: tool.Name, Server: tool.Server, Arguments: arguments},
 		Agent:   approvalpipeline.BlockAgent{Slug: input.AgentSlug, Name: agent},
 	})

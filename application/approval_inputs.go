@@ -224,15 +224,31 @@ func validateApprovalInitializationRouting(request domain.ApprovalRequest, routi
 	if routing.RequestID != request.ID || routing.OrganizationID != request.OrganizationID {
 		return invalidField("approval routing", "must belong to the approval request")
 	}
-	if routing.Outcome != domain.RoutingEscalated && routing.Outcome != domain.RoutingDefaultQueue {
-		return invalidField("approval routing outcome", "must be escalated or default_queue")
-	}
 	if routing.Urgency != "standard" && routing.Urgency != "interrupt" {
 		return invalidField("approval routing urgency", "must be standard or interrupt")
 	}
-	escalated := routing.Outcome == domain.RoutingEscalated
-	if escalated != (routing.EscalationPathKey != "") || escalated != (routing.EscalationPathRevisionID != "") {
-		return invalidField("approval routing", "escalated outcomes carry a path key and revision; fallbacks carry neither")
+	switch routing.Outcome {
+	case domain.RoutingEscalated, domain.RoutingDefaultQueue:
+		escalated := routing.Outcome == domain.RoutingEscalated
+		if escalated != (routing.EscalationPathKey != "") || escalated != (routing.EscalationPathRevisionID != "") {
+			return invalidField("approval routing", "escalated outcomes carry a path key and revision; fallbacks carry neither")
+		}
+		if routing.AgentOwnerMembershipID != "" {
+			return invalidField("approval routing", "only an agent_owner outcome names the agent's owner")
+		}
+	case domain.RoutingAgentOwner:
+		// The fallback path's key is always pinned beside the owner; its
+		// revision only when the path had an active one.
+		if routing.AgentOwnerMembershipID == "" || routing.EscalationPathKey == "" || routing.AgentOwnerFallback != "" {
+			return invalidField("approval routing", "an agent_owner outcome names the owner and its fallback path key, and no fallback reason")
+		}
+	default:
+		return invalidField("approval routing outcome", "must be agent_owner, escalated or default_queue")
+	}
+	switch routing.AgentOwnerFallback {
+	case "", domain.AgentOwnerFallbackNoOwner, domain.AgentOwnerFallbackInactive, domain.AgentOwnerFallbackCannotDecide:
+	default:
+		return invalidField("approval routing", "agent owner fallback reason is not known")
 	}
 	if err := validOptionalEscalationPathKey(routing.EscalationPathKey); err != nil {
 		return err
@@ -832,4 +848,47 @@ type ReviewerCandidate struct {
 	MembershipID domain.ID
 	DisplayName  string
 	Email        string
+}
+
+// AgentOwnerHandoffSignal is one handoff whose workflow signal is due: the
+// request moved from its agent's deactivated owner to the pinned fallback.
+type AgentOwnerHandoffSignal struct {
+	OrganizationID domain.ID
+	RequestID      domain.ID
+}
+
+type ListAgentOwnerHandoffSignalsInput struct {
+	Limit int
+}
+
+func (input ListAgentOwnerHandoffSignalsInput) Validate() error {
+	return nonNegative("limit", int64(input.Limit))
+}
+
+type MarkAgentOwnerHandoffSignaledInput struct {
+	OrganizationID domain.ID
+	RequestID      domain.ID
+	SignaledAt     time.Time
+}
+
+func (input MarkAgentOwnerHandoffSignaledInput) Validate() error {
+	return firstError([]error{
+		requiredID("organization ID", input.OrganizationID),
+		requiredID("approval request ID", input.RequestID),
+		requiredTime("handoff signaled time", input.SignaledAt),
+	})
+}
+
+// SubmitAgentOwnerHandoffInput tells a request's workflow that its agent's
+// owner was deactivated and the pinned fallback takes over.
+type SubmitAgentOwnerHandoffInput struct {
+	OrganizationID domain.ID
+	RequestID      domain.ID
+}
+
+func (input SubmitAgentOwnerHandoffInput) Validate() error {
+	return firstError([]error{
+		requiredID("organization ID", input.OrganizationID),
+		requiredID("approval request ID", input.RequestID),
+	})
 }

@@ -30,7 +30,7 @@ import {
   PipelineTerminusCard,
 } from "@/ds/components/policy-block";
 import { ReferenceChip } from "./reference-chip";
-import { TargetBadge, type ReviewerTarget } from "@/ds/components/reviewer-target";
+import { TargetBadge, agentOwnerLabel, type ReviewerTarget } from "@/ds/components/reviewer-target";
 import type { WebhookEndpointOption } from "@/ds/components/webhook-block";
 import { SaveBar } from "@/ds/components/save-bar";
 import { TextArea } from "@/ds/components/text-area";
@@ -64,8 +64,8 @@ import {
   draftsFromBlocks,
   knownBlockTypes,
   loadPathDirectory,
-  pathKeyOf,
   pathTarget,
+  routeKeyOf,
   suggestPaths,
   takeTestSample,
   validateDrafts,
@@ -239,7 +239,7 @@ export function delegateTarget(revision: RequestApprovalPipelineRevision, roster
   return {
     name: revision.name,
     blocks: draftsFromBlocks(revision.blocks, roster),
-    defaultTarget: pathTarget(revision.default_escalation_path, roster),
+    defaultTarget: pathTarget(revision.default_escalation_path, roster, revision.default_ask_agent_owner),
   };
 }
 
@@ -422,7 +422,7 @@ export function PipelineViewScreen({
   const [baseline, setBaseline] = useState<BlockDraft[]>(draft);
   /* The pipeline default under edit, against its baseline. */
   const [draftDefault, setDraftDefault] = useState<ReviewerTarget | null>(() =>
-    editing ? pathTarget((latest ?? displayed)?.default_escalation_path, roster) : null,
+    editing ? pathTarget((latest ?? displayed)?.default_escalation_path, roster, (latest ?? displayed)?.default_ask_agent_owner) : null,
   );
   const [baselineDefault, setBaselineDefault] = useState<ReviewerTarget | null>(draftDefault);
   /* The pipeline's name under edit: renaming is a revision too. */
@@ -463,14 +463,14 @@ export function PipelineViewScreen({
     [displayed, directory],
   );
   const viewDefault = useMemo(
-    () => pathTarget(displayed?.default_escalation_path, directory),
+    () => pathTarget(displayed?.default_escalation_path, directory, displayed?.default_ask_agent_owner),
     [displayed, directory],
   );
   const jsonDraft = useMemo(() => {
     if (!editing || mode !== "json") return null;
     try {
       const document = parseDocument(jsonText);
-      return { blocks: draftsFromBlocks(document.blocks, directory), target: pathTarget(document.default_escalation_path, directory) };
+      return { blocks: draftsFromBlocks(document.blocks, directory), target: pathTarget(document.default_escalation_path, directory, document.default_ask_agent_owner) };
     } catch {
       return null;
     }
@@ -481,7 +481,11 @@ export function PipelineViewScreen({
    * the delegating pipeline's own default for any other. */
   const inheritedLabel = entry ? "Any authorized reviewer" : "The delegating pipeline's default";
   const describeTargetRoute = (target: ReviewerTarget | null) =>
-    target ? "" : `Uses pipeline default: ${currentDefault?.name ?? inheritedLabel}.`;
+    target?.type === "agent_owner"
+      ? `Asks the person who owns the agent instance that made the request, and only they can decide it. If the agent has no owner, it goes to ${target.name}.`
+      : target
+        ? ""
+        : `Uses pipeline default: ${currentDefault?.type === "agent_owner" ? agentOwnerLabel(currentDefault.name) : (currentDefault?.name ?? inheritedLabel)}.`;
   const defaultRoute = editing && currentDefault ? (
     <div className="flex flex-wrap items-center gap-1 text-micro text-ink-muted">
       <TargetBadge target={currentDefault} />
@@ -560,7 +564,7 @@ export function PipelineViewScreen({
   const dirtyCount = useMemo(() => {
     if (!editing) return 0;
     let count = changedBlockCount(baseline, draft);
-    if (count === 0 && (pathKeyOf(draftDefault) ?? "") !== (pathKeyOf(baselineDefault) ?? "")) {
+    if (count === 0 && routeKeyOf(draftDefault) !== routeKeyOf(baselineDefault)) {
       count = 1;
     }
     if (count === 0 && draftName.trim() !== baselineName.trim()) count = 1;
@@ -581,11 +585,11 @@ export function PipelineViewScreen({
   function startEdit(from?: RequestApprovalPipelineRevision) {
     const revision = latest ?? displayed;
     const baselineDrafts = draftsFromBlocks(revision?.blocks ?? [], directory);
-    const baselineTarget = pathTarget(revision?.default_escalation_path, directory);
+    const baselineTarget = pathTarget(revision?.default_escalation_path, directory, revision?.default_ask_agent_owner);
     const origin = from ?? revision;
     setDraft(from ? draftsFromBlocks(origin?.blocks ?? [], directory) : baselineDrafts);
     setBaseline(baselineDrafts);
-    setDraftDefault(from ? pathTarget(origin?.default_escalation_path, directory) : baselineTarget);
+    setDraftDefault(from ? pathTarget(origin?.default_escalation_path, directory, origin?.default_ask_agent_owner) : baselineTarget);
     setBaselineDefault(baselineTarget);
     setDraftName(revision?.name ?? pipelineName);
     setBaselineName(revision?.name ?? pipelineName);
@@ -638,7 +642,7 @@ export function PipelineViewScreen({
       try {
         const document = parseDocument(jsonText);
         next = draftsFromBlocks(document.blocks, directory);
-        nextDefault = pathTarget(document.default_escalation_path, directory);
+        nextDefault = pathTarget(document.default_escalation_path, directory, document.default_ask_agent_owner);
       } catch (reason) {
         setJsonError(reason instanceof Error ? reason.message : "The document is not valid JSON.");
         return;
@@ -722,7 +726,7 @@ export function PipelineViewScreen({
     try {
       const document = parseDocument(jsonText);
       setDraft(draftsFromBlocks(document.blocks, directory));
-      setDraftDefault(pathTarget(document.default_escalation_path, directory));
+      setDraftDefault(pathTarget(document.default_escalation_path, directory, document.default_ask_agent_owner));
       setJsonError("");
       setMode("blocks");
     } catch (reason) {
@@ -1341,8 +1345,9 @@ function describeReferrers(blockKeys: string[], isDefault: boolean): string {
 export function parseDocument(text: string): {
   blocks: RequestApprovalBlockDefinition[];
   default_escalation_path?: string;
+  default_ask_agent_owner?: boolean;
 } {
-  const parsed = JSON.parse(text) as { blocks?: unknown; default_escalation_path?: unknown };
+  const parsed = JSON.parse(text) as { blocks?: unknown; default_escalation_path?: unknown; default_ask_agent_owner?: unknown };
   if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.blocks)) {
     throw new Error("The pipeline document must be an object with a blocks array.");
   }
@@ -1351,7 +1356,18 @@ export function parseDocument(text: string): {
   if (defaultPath !== undefined && typeof defaultPath !== "string") {
     throw new Error("default_escalation_path must be an escalation path key.");
   }
-  return { blocks: parsed.blocks as RequestApprovalBlockDefinition[], default_escalation_path: defaultPath };
+  const askOwner = parsed.default_ask_agent_owner;
+  if (askOwner !== undefined && typeof askOwner !== "boolean") {
+    throw new Error("default_ask_agent_owner must be true or false.");
+  }
+  if (askOwner && !defaultPath) {
+    throw new Error("default_ask_agent_owner needs default_escalation_path as the fallback for agents without an owner.");
+  }
+  return {
+    blocks: parsed.blocks as RequestApprovalBlockDefinition[],
+    default_escalation_path: defaultPath,
+    ...(askOwner ? { default_ask_agent_owner: true } : {}),
+  };
 }
 
 /* Checks one rail of a JSON document, and every branch's rail inside it.

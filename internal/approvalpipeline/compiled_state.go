@@ -247,7 +247,10 @@ type compiledBlock struct {
 	// empty to inherit the pipeline default. A branch's path is for its
 	// own end only.
 	EscalationPath string
-	Branch         bool
+	// AskAgentOwner sends the human outcome to the agent's owner, with
+	// EscalationPath as the fallback.
+	AskAgentOwner bool
+	Branch        bool
 	// Reason is a branch's reason, recorded when nothing inside decides.
 	Reason string
 	// Delegate marks a delegate block; PipelineKey is the pipeline it
@@ -355,4 +358,9 @@ func loadCompiledPipeline(loader func() (*compiledPipeline, error)) (pipeline *c
 		}
 	}()
 	return loader()
+}
+
+// route is the block's own route for its human outcome.
+func (block compiledBlock) route() Route {
+	return Route{EscalationPath: block.EscalationPath, AskAgentOwner: block.AskAgentOwner}
 }

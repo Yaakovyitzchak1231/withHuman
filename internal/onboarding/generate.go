@@ -132,6 +132,7 @@ func StartingBlocks(runtime string, selected []string, pathKey string) []approva
 		approvalblock.Reason("This tool was suggested for human approval during the guided setup."),
 	)
 	gate.CEL.EscalationPath = pathKey
+	gate.CEL.AskAgentOwner = true
 	return []approvalblock.Definition{*gate, *rest}
 }
 
@@ -147,6 +148,7 @@ func RuntimeBranch(runtime string, body []approvalblock.Definition, pathKey stri
 		approvalblock.Reason("No rule for "+name+" decided this request, so it waits for a person."),
 	)
 	branch.Branch.EscalationPath = pathKey
+	branch.Branch.AskAgentOwner = true
 	return *branch
 }
 

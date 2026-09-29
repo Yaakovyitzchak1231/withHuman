@@ -27,9 +27,11 @@ import {
   defaultSample,
   definitionsFromStored,
   handOffTestSample,
+  asksAgentOwner,
   loadPathDirectory,
   pathKeyOf,
   pathTarget,
+  routeKeyOf,
 } from "./pipeline-blocks";
 import { pipelineLink } from "./pipeline-link";
 import { TestRequestDialog } from "./test-request-dialog";
@@ -83,7 +85,7 @@ export async function loadPipelinesPage(): Promise<PipelinesPage> {
       pipelines,
       entryRevision,
       directory,
-      defaultReviewers: pathTarget(entryRevision?.default_escalation_path, directory),
+      defaultReviewers: pathTarget(entryRevision?.default_escalation_path, directory, entryRevision?.default_ask_agent_owner),
       error: "",
     };
   } catch (reason) {
@@ -160,7 +162,10 @@ export function PipelinesScreen({ page }: { page: PipelinesPage }) {
   }
   async function saveDefault() {
     if (!entryRevision) return;
-    if ((pathKeyOf(draftDefault) ?? "") === (entryRevision.default_escalation_path ?? "")) {
+    if (
+      routeKeyOf(draftDefault) ===
+      routeKeyOf(pathTarget(entryRevision.default_escalation_path, [], entryRevision.default_ask_agent_owner))
+    ) {
       setEditingDefault(false);
       return;
     }
@@ -171,6 +176,7 @@ export function PipelinesScreen({ page }: { page: PipelinesPage }) {
       const revision = await api.createRequestApprovalPipelineRevision(ENTRY_PIPELINE_KEY, {
         blocks: definitionsFromStored(entryRevision.blocks),
         ...(key ? { default_escalation_path: key } : {}),
+        ...(key && asksAgentOwner(draftDefault) ? { default_ask_agent_owner: true } : {}),
       });
       await revisionActivation.offer({
         revision: revision.revision,

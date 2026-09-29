@@ -1,6 +1,6 @@
 # Personal API keys
 
-Status: implemented (branch claude/public-api-org-keys-design-0aab34, MET-1123) · Last updated: 2026-09-10
+Status: implemented (branch claude/public-api-org-keys-design-0aab34, MET-1123) · Last updated: 2026-09-29
 
 > **Prototype.** Same caveat as
 > [00-general-design.md](00-general-design.md): everything here can change
@@ -265,8 +265,8 @@ returns 403 because `membership.read` is not on the key even though Priya
 holds it; `POST /api/v1/me/api_keys` returns 403 `api_key_not_allowed`
 because issuing keys is browser-only. Under `slack-approver`, a decision
 succeeds only if Priya could decide that request herself: the routing
-snapshot must reach her, self-approval policy still applies, and the kernel
-sees the key's stored assurance for the MFA rule.
+snapshot must reach her, and the kernel sees the key's stored assurance for
+the MFA rule.
 
 Six months later Priya is moved from admin to reviewer. `terraform` now
 narrows to nothing and every call under it returns 403, with no key edit

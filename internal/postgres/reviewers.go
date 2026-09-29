@@ -119,13 +119,13 @@ func (s *Store) addApprovalReviewer(ctx context.Context, input application.AddAp
 	if err != nil {
 		return domain.ApprovalReviewer{}, err
 	}
-	if !escalated {
+	if !escalated && pinned.agentOwnerID == "" {
 		return domain.ApprovalReviewer{}, fmt.Errorf("request is not routed: %w", domain.ErrConflict)
 	}
 	// A path that reaches nobody for this request still scopes it: only a
 	// break-glass holder passes the check below, and pulling someone in
 	// is exactly what they need to do.
-	userIDs, teamIDs, err := reachableDocumentTargets(pinned.document, pinned.facts)
+	userIDs, teamIDs, err := pinnedTargets(pinned)
 	if err != nil {
 		return domain.ApprovalReviewer{}, err
 	}
@@ -216,10 +216,10 @@ func (s *Store) GetApprovalRoutingState(ctx context.Context, input application.G
 	}
 	state := application.ApprovalRoutingState{AddedReviewers: reviewers}
 	pinned, escalated, err := readPinnedRouting(ctx, s.pool, input.OrganizationID, input.RequestID)
-	if err != nil || !escalated {
+	if err != nil || (!escalated && pinned.agentOwnerID == "") {
 		return state, err
 	}
-	userIDs, teamIDs, err := reachableDocumentTargets(pinned.document, pinned.facts)
+	userIDs, teamIDs, err := pinnedTargets(pinned)
 	if err != nil {
 		return application.ApprovalRoutingState{}, err
 	}
@@ -261,23 +261,30 @@ func (s *Store) visibleApprovals(ctx context.Context, organizationID, membership
 		organizationID, membershipID).Scan(&addedTo); err != nil {
 		return nil, err
 	}
-	rows, err := s.pool.Query(ctx, `SELECT arr.request_id::text, ep.document, arr.facts
+	rows, err := s.pool.Query(ctx, `SELECT arr.request_id::text, arr.outcome, COALESCE(ep.document, 'null'::jsonb), arr.facts,
+        COALESCE(arr.agent_owner_membership_id::text, ''), h.request_id IS NOT NULL
         FROM approval_request_routing arr
-        JOIN escalation_paths ep ON ep.id = arr.escalation_path_revision_id AND ep.organization_id = arr.organization_id
-        WHERE arr.organization_id = $1 AND arr.outcome = $2 AND arr.request_id = ANY($3::uuid[])`,
-		organizationID, string(domain.RoutingEscalated), idStrings(approvalIDsOf(candidates)))
+        LEFT JOIN escalation_paths ep ON ep.id = arr.escalation_path_revision_id AND ep.organization_id = arr.organization_id
+        LEFT JOIN approval_request_agent_owner_handoffs h ON h.request_id = arr.request_id AND h.organization_id = arr.organization_id
+        WHERE arr.organization_id = $1 AND arr.request_id = ANY($2::uuid[])`,
+		organizationID, idStrings(approvalIDsOf(candidates)))
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	type snapshot struct{ document, facts []byte }
-	snapshots := make(map[domain.ID]snapshot)
+	snapshots := make(map[domain.ID]pinnedRouting)
 	for rows.Next() {
-		var requestID string
-		var pinned snapshot
-		if err := rows.Scan(&requestID, &pinned.document, &pinned.facts); err != nil {
+		var requestID, outcome, ownerID string
+		var handedOff bool
+		var pinned pinnedRouting
+		if err := rows.Scan(&requestID, &outcome, &pinned.document, &pinned.facts, &ownerID, &handedOff); err != nil {
 			return nil, err
 		}
+		owner, escalated := effectiveRouting(outcome, ownerID, handedOff, pinned.document)
+		if !escalated && owner == "" {
+			continue
+		}
+		pinned.agentOwnerID = owner
 		snapshots[domain.ID(requestID)] = pinned
 	}
 	if err := rows.Err(); err != nil {
@@ -293,7 +300,7 @@ func (s *Store) visibleApprovals(ctx context.Context, organizationID, membership
 		if !routed {
 			continue
 		}
-		userIDs, teamIDs, err := reachableDocumentTargets(pinned.document, pinned.facts)
+		userIDs, teamIDs, err := pinnedTargets(pinned)
 		if err != nil {
 			return nil, err
 		}

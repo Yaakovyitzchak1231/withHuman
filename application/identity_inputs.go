@@ -355,7 +355,6 @@ func (input GetOrganizationPolicyInput) Validate() error {
 // audits the change as organization.policy_updated.
 type UpdateOrganizationPolicyInput struct {
 	OrganizationID             domain.ID
-	AllowSelfApproval          bool
 	MFAMode                    domain.MFAMode
 	ApprovalReauthWindow       time.Duration
 	ClaimRetriggerWindow       time.Duration

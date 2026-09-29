@@ -22,15 +22,16 @@ import {
  * card.
  */
 
-/* A pipeline's human exit names an escalation path; a path's levels name
- * people and teams; a team escalation policy's levels name members or
- * everyone on the team (broadcast). One chip and one picker serve all
- * four. */
-export type ReviewerTargetType = "user" | "team" | "escalation_path" | "broadcast";
+/* A pipeline's human exit names an escalation path, or the agent's owner
+ * with a path as the fallback; a path's levels name people and teams; a
+ * team escalation policy's levels name members or everyone on the team
+ * (broadcast). One chip and one picker serve all five. */
+export type ReviewerTargetType = "user" | "team" | "escalation_path" | "agent_owner" | "broadcast";
 
 export interface ReviewerTarget {
   type: ReviewerTargetType;
-  /* A membership or team id, or an escalation path key. A broadcast
+  /* A membership or team id, or an escalation path key. An agent_owner
+   * target carries its fallback path's key and name. A broadcast
    * carries the id of the team it notifies, so option keys stay unique
    * beside the team's members. */
   id: string;
@@ -40,8 +41,20 @@ export interface ReviewerTarget {
   detail?: string;
 }
 
-/* The picker also offers "no explicit target". */
-type TargetOption = ReviewerTarget | { type: "default"; id: "default"; name: string };
+/* The picker also offers "no explicit target", and wherever it offers
+ * paths, the agent's owner. */
+type TargetOption =
+  | ReviewerTarget
+  | { type: "default"; id: "default"; name: string }
+  | { type: "owner"; id: "owner"; name: string };
+
+const OWNER_OPTION = { type: "owner" as const, id: "owner" as const, name: "The agent's owner" };
+
+/* An agent-owner route with the fallback it names, as the chip and the
+ * hover card say it. */
+export function agentOwnerLabel(fallbackName: string): string {
+  return `Agent owner, else ${fallbackName}`;
+}
 
 function optionKey(option: TargetOption): string {
   return `${option.type}:${option.id}`;
@@ -57,6 +70,7 @@ function referenceOf(target: ReviewerTarget): Reference {
     case "broadcast":
       return { kind: "team", id: target.id, name: target.name };
     case "escalation_path":
+    case "agent_owner":
       return { kind: "escalation_path", key: target.id, name: target.name };
   }
 }
@@ -103,6 +117,18 @@ export function TargetBadge({
     />
   );
   if (!target && fallbackLabel && !["Pipeline default", "Any authorized reviewer"].includes(fallbackLabel)) return chip;
+  if (target?.type === "agent_owner") return (
+    <HoverCard content={<>
+      <HoverCardTitle>The agent's owner</HoverCardTitle>
+      <HoverCardBody>
+        The person who owns the agent instance that made the request is asked, and only they
+        can decide it. If the agent has no owner, such as a service agent, the request goes to{" "}
+        {target.name} instead.
+      </HoverCardBody>
+    </>}>
+      {chip}
+    </HoverCard>
+  );
   if (!target) return (
     <HoverCard content={<>
       <HoverCardTitle>{fallbackLabel ?? "Pipeline default"}</HoverCardTitle>
@@ -184,6 +210,14 @@ function TargetChip({
       </Badge>
     );
   }
+  if (target.type === "agent_owner") {
+    return (
+      <Badge className={led} icon={<PersonIcon width={13} height={13} />} {...shared}>
+        {agentOwnerLabel(target.name)}
+        {chevron}
+      </Badge>
+    );
+  }
   if (target.type === "broadcast") {
     return (
       <Badge className={led} icon={<BroadcastIcon width={13} height={13} />} {...shared}>
@@ -232,18 +266,24 @@ export function TargetSelect({
   const broadcasts = directory.filter((entry) => entry.type === "broadcast");
   const teams = directory.filter((entry) => entry.type === "team");
   const people = directory.filter((entry) => entry.type === "user");
+  /* A picker that chooses a path (a pipeline exit or default) may
+   * instead ask the agent's owner, keeping a path as the fallback. */
   const items: TargetOption[] = [
     ...(fallbackLabel ? [{ type: "default" as const, id: "default" as const, name: fallbackLabel }] : []),
+    ...(paths.length > 0 ? [OWNER_OPTION] : []),
     ...paths,
     ...broadcasts,
     ...teams,
     ...people,
   ];
-  const selected: TargetOption | null = value
-    ? (items.find((item) => optionKey(item) === optionKey(value)) ?? value)
-    : (items.find((item) => item.type === "default") ?? null);
+  const selected: TargetOption | null =
+    value?.type === "agent_owner"
+      ? OWNER_OPTION
+      : value
+        ? (items.find((item) => optionKey(item) === optionKey(value)) ?? value)
+        : (items.find((item) => item.type === "default") ?? null);
 
-  return (
+  const picker = (
     <Select
       items={items}
       itemToStringLabel={(item) => (item as TargetOption).name}
@@ -252,10 +292,14 @@ export function TargetSelect({
       onValueChange={(next) => {
         const option = next as TargetOption | null;
         if (!option || option.type === "default") onChange(null);
-        else onChange(option);
+        else if (option.type === "owner") {
+          /* Keep the path already chosen as the fallback, else the first. */
+          const fallback = value?.type === "escalation_path" || value?.type === "agent_owner" ? value : paths[0];
+          if (fallback) onChange({ type: "agent_owner", id: fallback.id, name: fallback.name });
+        } else onChange(option);
       }}
     >
-      {value ? (
+      {value && value.type !== "agent_owner" ? (
         <Referenced reference={referenceOf(value)} focusable={false}
           open={cardOpen && !pickerOpen} onOpenChange={setCardOpen}>
           <SelectTrigger aria-label={ariaLabel} className={cn("w-60", className)} placeholder="Choose" />
@@ -275,15 +319,19 @@ export function TargetSelect({
                 <ProgressIcon width={13} height={13} className="text-ink-muted" />
               ) : item.type === "broadcast" ? (
                 <BroadcastIcon width={13} height={13} className="text-ink-muted" />
+              ) : item.type === "owner" ? (
+                <PersonIcon width={13} height={13} className="text-ink-muted" />
               ) : (
                 <InboxIcon width={13} height={13} className="text-ink-muted" />
               )}
               {item.type === "default" ? (
                 <span className="text-ink-muted">{item.name}</span>
+              ) : item.type === "owner" ? (
+                <span>{item.name}</span>
               ) : (
                 <Referenced reference={referenceOf(item)} focusable={false} inline>{item.name}</Referenced>
               )}
-              {item.type !== "default" && item.detail ? (
+              {item.type !== "default" && item.type !== "owner" && item.detail ? (
                 <span className="text-micro font-normal text-ink-faint">{item.detail}</span>
               ) : null}
             </span>
@@ -291,5 +339,35 @@ export function TargetSelect({
         )}
       </SelectContent>
     </Select>
+  );
+  if (value?.type !== "agent_owner") return picker;
+  /* Asking the owner names the path a request without one goes to. */
+  return (
+    <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
+      {picker}
+      <span className="text-micro text-ink-muted">If the agent has no owner</span>
+      <Select
+        items={paths}
+        itemToStringLabel={(item) => (item as ReviewerTarget).name}
+        value={paths.find((path) => path.id === value.id) ?? { ...value, type: "escalation_path" }}
+        onValueChange={(next) => {
+          const path = next as ReviewerTarget | null;
+          if (path) onChange({ type: "agent_owner", id: path.id, name: path.name });
+        }}
+      >
+        <SelectTrigger aria-label={`${ariaLabel} fallback`} className={cn("w-60", className)} placeholder="Choose" />
+        <SelectContent<ReviewerTarget> filterPlaceholder="Filter">
+          {(item) => (
+            <SelectItem key={optionKey(item)} value={item}>
+              <span className="flex items-center gap-2">
+                <ProgressIcon width={13} height={13} className="text-ink-muted" />
+                <Referenced reference={referenceOf(item)} focusable={false} inline>{item.name}</Referenced>
+                {item.detail ? <span className="text-micro font-normal text-ink-faint">{item.detail}</span> : null}
+              </span>
+            </SelectItem>
+          )}
+        </SelectContent>
+      </Select>
+    </span>
   );
 }

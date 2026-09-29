@@ -50,6 +50,7 @@ type RequestApprovalPipelineRevision struct {
 	// then the blocks it holds, each its own snapshot.
 	BlockIDs              []ID       `json:"block_ids"`
 	DefaultEscalationPath string     `json:"default_escalation_path,omitempty"`
+	DefaultAskAgentOwner  bool       `json:"default_ask_agent_owner,omitempty"`
 	CreatedByActorID      ID         `json:"created_by_actor_id"`
 	CreatedAt             time.Time  `json:"created_at"`
 	ArchivedAt            *time.Time `json:"archived_at,omitempty"`

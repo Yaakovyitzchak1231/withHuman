@@ -304,7 +304,7 @@ type pipelinesStub struct {
 	activateErr error
 }
 
-func (p *pipelinesStub) Preview(_ context.Context, _ domain.Principal, _ string, definitions []approvalblock.Definition, _ string, sample approvalpipeline.PreviewSample) (approvalpipeline.PreviewResult, error) {
+func (p *pipelinesStub) Preview(_ context.Context, _ domain.Principal, _ string, definitions []approvalblock.Definition, _ approvalpipeline.Route, sample approvalpipeline.PreviewSample) (approvalpipeline.PreviewResult, error) {
 	p.previews = append(p.previews, sample)
 	p.previewed = definitions
 	outcome := p.previewOutcome
@@ -324,7 +324,7 @@ func (p *pipelinesStub) GetActive(_ context.Context, _ domain.Principal, pipelin
 	return approvalpipeline.PipelineRevision{Revision: domain.RequestApprovalPipelineRevision{PipelineKey: pipelineKey, Name: "Entry pipeline", Revision: 1, IsActive: true}}, nil
 }
 
-func (p *pipelinesStub) CreateRevision(_ context.Context, _ domain.Principal, pipelineKey, name string, definitions []approvalblock.Definition, defaultPath string) (approvalpipeline.PipelineRevision, error) {
+func (p *pipelinesStub) CreateRevision(_ context.Context, _ domain.Principal, pipelineKey, name string, definitions []approvalblock.Definition, defaultRoute approvalpipeline.Route) (approvalpipeline.PipelineRevision, error) {
 	if pipelineKey == p.failOn {
 		return approvalpipeline.PipelineRevision{}, fmt.Errorf("boom: %w", domain.ErrInvalid)
 	}
@@ -336,7 +336,7 @@ func (p *pipelinesStub) CreateRevision(_ context.Context, _ domain.Principal, pi
 	if active, ok := p.active[pipelineKey]; ok {
 		next = active.Revision.Revision + 1
 	}
-	p.pending = &approvalpipeline.PipelineRevision{Revision: domain.RequestApprovalPipelineRevision{PipelineKey: pipelineKey, Name: name, Revision: next, DefaultEscalationPath: defaultPath}}
+	p.pending = &approvalpipeline.PipelineRevision{Revision: domain.RequestApprovalPipelineRevision{PipelineKey: pipelineKey, Name: name, Revision: next, DefaultEscalationPath: defaultRoute.EscalationPath, DefaultAskAgentOwner: defaultRoute.AskAgentOwner}}
 	for _, definition := range definitions {
 		p.pending.Blocks = append(p.pending.Blocks, approvalpipeline.PipelineBlock{Definition: definition})
 	}
@@ -630,7 +630,13 @@ func TestGuidedSetupHappyPath(t *testing.T) {
 	if len(entry) != 2 || entry[0].ID != "claude-code" || entry[1].ID != "codex" || entry[1].Branch == nil || entry[1].Branch.EscalationPath != "notify-chris-battarbee" {
 		t.Fatalf("entry blocks: %+v", entry)
 	}
+	if !entry[1].Branch.AskAgentOwner {
+		t.Fatalf("the runtime's branch must ask the agent's owner with the setup path as the fallback: %+v", entry[1].Branch)
+	}
 	codex := entry[1].Branch.Blocks
+	if !codex[0].CEL.AskAgentOwner {
+		t.Fatalf("the gate must ask the agent's owner: %+v", codex[0].CEL)
+	}
 	if codex[0].CEL.EscalationPath != "notify-chris-battarbee" || codex[1].Always == nil || codex[1].Always.Outcome != approvalblock.Approve {
 		t.Fatalf("codex branch blocks: %+v", codex)
 	}

@@ -69,7 +69,6 @@ var (
 	ErrEffectivePipelineTooLarge = errors.New("effective pipeline is too large")
 	ErrAuthenticationStale       = errors.New("authentication is too old")
 	ErrAuthenticationWeak        = errors.New("authentication assurance is insufficient")
-	ErrSelfApproval              = errors.New("self-approval is disabled")
 	ErrEmailMismatch             = errors.New("authenticated email does not match the invitation")
 	// ErrUserExists refuses an unauthenticated admission that would attach
 	// an existing global account by email alone: the person must sign in

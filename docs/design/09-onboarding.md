@@ -1,6 +1,6 @@
 # Guided onboarding: from first sign-in to a decided request
 
-Status: draft · Last updated: 2026-09-24
+Status: draft · Last updated: 2026-09-29 (starting pipelines ask the agent's owner)
 
 > **Prototype.** Same caveat as [00-general-design.md](00-general-design.md):
 > everything here can change without migration paths.
@@ -243,8 +243,9 @@ resolved principal, so every write is authorized, validated, and audited
 as theirs: `get_agent_rules {agent_slug}` (the agent's branch of the
 entry pipeline, the setup's path, the entry revision),
 `update_agent_rules {agent_slug, blocks}` (strict decode, the setup's
-`escalation_path` injected on every core block that can hand to a human
-and names none, wrapped in the runtime's branch and written as one entry
+owner route, `ask_agent_owner` with the setup's `escalation_path` as
+the fallback, injected on every core block that can hand to a human
+and names no path, wrapped in the runtime's branch and written as one entry
 revision; a concurrent entry change is a tool error asking the model to
 re-read and retry), `preview_agent_rules {agent_slug, blocks, sample}`
 (previews the whole entry document with the proposed branch, reporting
@@ -287,10 +288,14 @@ abandoned.
   second time), inserted before the first top-level `always` block, else
   appended, every other block untouched. The branch body is
   `<runtime>-gate-selected-tools`, named "Review tools chosen in setup"
-  (`/request/tool in [suggested...]` → human, the escalation path above,
-  omitted when the list is empty) then `<runtime>-approve-the-rest`,
-  named "Approve every other tool" (always → approve); the branch's own
-  end names the path too. The entry default is set to the path only when
+  (`/request/tool in [suggested...]` → human, asking the agent's owner
+  with the escalation path above as the fallback, omitted when the list
+  is empty) then `<runtime>-approve-the-rest`, named "Approve every other
+  tool" (always → approve); the branch's own end takes the same owner
+  route. The runtime agents are personal, so each member's requests go
+  to that member; the path is used only if a request ever arrives
+  without an owner (see
+  [06-routing-and-escalation.md](06-routing-and-escalation.md#agent-owner-route)). The entry default is set to the path only when
   it was empty. Names are verb-first like every other block because the
   product quotes them inside sentences. A second machine unions the
   gated list with the branch's; onboarding never removes a tool, and

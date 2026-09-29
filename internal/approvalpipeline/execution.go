@@ -160,7 +160,7 @@ func (service *ExecutionService) Evaluate(ctx context.Context, request domain.Ap
 	}
 	result := initializationInput(request, decision, events)
 	if decision == nil {
-		result.HumanReview = humanReviewRoute(run.effective, run.terminal, run.escalationPath, run.routeFrom)
+		result.HumanReview = humanReviewRoute(run.effective, run.terminal, run.route, run.routeFrom)
 	}
 	return result, nil
 }
@@ -205,7 +205,7 @@ func (service *ExecutionService) Resume(ctx context.Context, request domain.Appr
 		Decision: decision, AuditEvents: events, Now: service.clock.Now(),
 	}
 	if decision == nil {
-		result.HumanReview = humanReviewRoute(run.effective, run.terminal, run.escalationPath, run.routeFrom)
+		result.HumanReview = humanReviewRoute(run.effective, run.terminal, run.route, run.routeFrom)
 	}
 	return result, nil
 }
@@ -354,11 +354,11 @@ type pipelineRun struct {
 	startedAt    time.Time
 	input        RequestApprovalBlockInput
 
-	events         []domain.AuditEvent
-	outcome        BlockOutcome
-	reasonCode     string
-	terminal       terminalBlock
-	escalationPath string
+	events     []domain.AuditEvent
+	outcome    BlockOutcome
+	reasonCode string
+	terminal   terminalBlock
+	route      Route
 	// routeFrom indexes the section whose default, then the defaults of
 	// the pipelines that delegated into it, a human outcome without a
 	// path of its own inherits.
@@ -416,7 +416,7 @@ func (service *ExecutionService) runBlocks(ctx context.Context, run *pipelineRun
 				// to a person on the default of the pipeline holding the
 				// block: a branch's own path is for its end only, and a
 				// delegate's target is never entered.
-				run.finish(snapshot, index, evaluated, "")
+				run.finish(snapshot, index, evaluated, Route{})
 				return nil, nil
 			}
 			continue
@@ -439,7 +439,7 @@ func (service *ExecutionService) runBlocks(ctx context.Context, run *pipelineRun
 			cursor.advance()
 			continue
 		}
-		run.finish(snapshot, index, evaluated, block.EscalationPath)
+		run.finish(snapshot, index, evaluated, block.route())
 		return nil, nil
 	}
 }
@@ -470,7 +470,7 @@ func (service *ExecutionService) endBranch(run *pipelineRun, snapshot domain.Req
 	run.outcome = BlockHuman
 	run.reasonCode = "end_of_branch"
 	run.terminal = run.effective.terminalAt(snapshot, position)
-	run.escalationPath = block.EscalationPath
+	run.route = block.route()
 	run.routeFrom = run.effective.Owner[position]
 	return nil
 }
@@ -489,17 +489,17 @@ func (service *ExecutionService) endDelegate(run *pipelineRun, snapshot domain.R
 	run.outcome = BlockHuman
 	run.reasonCode = "end_of_branch"
 	run.terminal = run.effective.terminalAt(snapshot, position)
-	run.escalationPath = ""
+	run.route = Route{}
 	run.routeFrom = run.effective.target(position)
 	return nil
 }
 
 // finish records the block whose outcome ended the run.
-func (run *pipelineRun) finish(snapshot domain.RequestApprovalBlock, position int, evaluated RequestApprovalBlockResult, escalationPath string) {
+func (run *pipelineRun) finish(snapshot domain.RequestApprovalBlock, position int, evaluated RequestApprovalBlockResult, route Route) {
 	run.outcome = evaluated.Outcome
 	run.reasonCode = completionReason(evaluated)
 	run.terminal = run.effective.terminalAt(snapshot, position)
-	run.escalationPath = escalationPath
+	run.route = route
 	run.routeFrom = run.effective.Owner[position]
 }
 
@@ -550,18 +550,19 @@ func initializationInput(request domain.ApprovalRequest, decision *domain.Decisi
 // pipeline the request was in when it needed a human, then the defaults
 // of the pipelines that delegated into it, nearest first, else none, which
 // leaves the request to any authorized reviewer.
-func humanReviewRoute(effective *effectivePipeline, terminal terminalBlock, escalationPath string, routeFrom int) *application.HumanReviewRoute {
-	route, _ := routeSection(effective, terminal, escalationPath, routeFrom)
-	return route
+func humanReviewRoute(effective *effectivePipeline, terminal terminalBlock, route Route, routeFrom int) *application.HumanReviewRoute {
+	resolved, _ := routeSection(effective, terminal, route, routeFrom)
+	return resolved
 }
 
 // routeSection is humanReviewRoute plus the index of the section that
 // supplied the path, -1 for none.
-func routeSection(effective *effectivePipeline, terminal terminalBlock, escalationPath string, routeFrom int) (*application.HumanReviewRoute, int) {
-	if escalationPath != "" {
+func routeSection(effective *effectivePipeline, terminal terminalBlock, route Route, routeFrom int) (*application.HumanReviewRoute, int) {
+	if route.EscalationPath != "" {
 		owner := effective.Owner[terminal.Position]
 		return &application.HumanReviewRoute{
-			PathKey:            escalationPath,
+			PathKey:            route.EscalationPath,
+			AskAgentOwner:      route.AskAgentOwner,
 			Reason:             domain.RoutingReasonBlockEscalation,
 			PipelineRevisionID: effective.Sections[owner].Revision.ID,
 			BlockID:            terminal.ID,
@@ -573,7 +574,8 @@ func routeSection(effective *effectivePipeline, terminal terminalBlock, escalati
 			continue
 		}
 		return &application.HumanReviewRoute{
-			PathKey: path, Reason: domain.RoutingReasonPipelineDefault,
+			PathKey: path, AskAgentOwner: effective.Sections[index].Revision.DefaultAskAgentOwner,
+			Reason:             domain.RoutingReasonPipelineDefault,
 			PipelineRevisionID: effective.Sections[index].Revision.ID,
 		}, index
 	}
@@ -588,7 +590,8 @@ func entryDefaultRoute(entry domain.RequestApprovalPipelineRevision) *applicatio
 		return &application.HumanReviewRoute{Reason: domain.RoutingReasonNoEscalation}
 	}
 	return &application.HumanReviewRoute{
-		PathKey: entry.DefaultEscalationPath, Reason: domain.RoutingReasonPipelineDefault,
+		PathKey: entry.DefaultEscalationPath, AskAgentOwner: entry.DefaultAskAgentOwner,
+		Reason:             domain.RoutingReasonPipelineDefault,
 		PipelineRevisionID: entry.ID,
 	}
 }

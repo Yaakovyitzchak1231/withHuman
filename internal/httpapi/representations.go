@@ -65,6 +65,7 @@ type requestApprovalPipelineRevisionSummaryResponse struct {
 	IsActive              bool       `json:"is_active"`
 	BlockCount            int        `json:"block_count"`
 	DefaultEscalationPath string     `json:"default_escalation_path,omitempty"`
+	DefaultAskAgentOwner  bool       `json:"default_ask_agent_owner,omitempty"`
 	CreatedByActorID      domain.ID  `json:"created_by_actor_id"`
 	CreatedAt             time.Time  `json:"created_at"`
 	ArchivedAt            *time.Time `json:"archived_at,omitempty"`
@@ -98,14 +99,15 @@ type storedBranchConfigResponse struct {
 	Blocks         []requestApprovalPipelineBlockResponse `json:"blocks"`
 	Reason         string                                 `json:"reason"`
 	EscalationPath string                                 `json:"escalation_path,omitempty"`
+	AskAgentOwner  bool                                   `json:"ask_agent_owner,omitempty"`
 }
 
 func newRequestApprovalPipelineRevisionSummaryResponse(revision domain.RequestApprovalPipelineRevision) requestApprovalPipelineRevisionSummaryResponse {
 	return requestApprovalPipelineRevisionSummaryResponse{
 		ID: revision.ID, PipelineKey: revision.PipelineKey, Name: revision.Name,
 		Revision: revision.Revision, IsActive: revision.IsActive, BlockCount: len(revision.BlockIDs),
-		DefaultEscalationPath: revision.DefaultEscalationPath,
-		CreatedByActorID:      revision.CreatedByActorID, CreatedAt: revision.CreatedAt,
+		DefaultEscalationPath: revision.DefaultEscalationPath, DefaultAskAgentOwner: revision.DefaultAskAgentOwner,
+		CreatedByActorID: revision.CreatedByActorID, CreatedAt: revision.CreatedAt,
 		ArchivedAt: revision.ArchivedAt,
 	}
 }
@@ -240,6 +242,7 @@ func newRequestApprovalPipelineBlockResponses(blocks []approvalpipeline.Pipeline
 			config = storedBranchConfigResponse{
 				When: definition.Branch.When, Blocks: newRequestApprovalPipelineBlockResponses(block.Blocks),
 				Reason: definition.Branch.Reason, EscalationPath: definition.Branch.EscalationPath,
+				AskAgentOwner: definition.Branch.AskAgentOwner,
 			}
 		} else {
 			// The definition was decoded from a validated snapshot, so its
@@ -264,6 +267,7 @@ type requestApprovalPipelinePreviewResponse struct {
 	EscalationPath            string                               `json:"escalation_path,omitempty"`
 	EscalationPathReason      string                               `json:"escalation_path_reason,omitempty"`
 	EscalationPathPipelineKey string                               `json:"escalation_path_pipeline_key,omitempty"`
+	AskAgentOwner             bool                                 `json:"ask_agent_owner,omitempty"`
 }
 
 type requestApprovalPipelineBlockResult struct {
@@ -297,6 +301,7 @@ func newRequestApprovalPipelinePreviewResponse(result approvalpipeline.PreviewRe
 		TerminalBlockKey: result.TerminalBlockKey, Blocks: blocks,
 		EscalationPath: result.EscalationPath, EscalationPathReason: result.EscalationPathReason,
 		EscalationPathPipelineKey: result.EscalationPathPipelineKey,
+		AskAgentOwner:             result.AskAgentOwner,
 	}
 }
 

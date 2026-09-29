@@ -338,3 +338,30 @@ describe("JSON documents with branches", () => {
     expect(parseDocument(text([refunds])).blocks).toEqual([refunds]);
   });
 });
+
+describe("the agent-owner route", () => {
+  const payments = { type: "escalation_path" as const, id: "payments", name: "Payments" };
+  const ownerRoute = { type: "agent_owner" as const, id: "payments", name: "Payments" };
+
+  it("writes ask_agent_owner beside its fallback path and reads it back", () => {
+    const block = { ...always(), kind: "always" as const, when: undefined, outcome: "human" as const, target: ownerRoute };
+    const document = documentFromDrafts([block], ownerRoute);
+    expect(document.blocks[0].config).toMatchObject({ escalation_path: "payments", ask_agent_owner: true });
+    expect(document).toMatchObject({ default_escalation_path: "payments", default_ask_agent_owner: true });
+    const restored = draftsFromBlocks(document.blocks, [payments])[0];
+    expect(restored.kind === "always" ? restored.target : undefined).toEqual(ownerRoute);
+    const parsed = parseDocument(JSON.stringify(document));
+    expect(parsed.default_ask_agent_owner).toBe(true);
+    expect(documentFromDrafts(draftsFromBlocks(parsed.blocks, [payments]), ownerRoute)).toEqual(document);
+  });
+
+  it("leaves a plain path without the flag", () => {
+    const document = documentFromDrafts([{ ...always(), kind: "always" as const, when: undefined, outcome: "human" as const, target: payments }], payments);
+    expect(document.blocks[0].config).not.toHaveProperty("ask_agent_owner");
+    expect(document).not.toHaveProperty("default_ask_agent_owner");
+  });
+
+  it("refuses a JSON default that asks the owner without a fallback", () => {
+    expect(() => parseDocument(JSON.stringify({ blocks: [], default_ask_agent_owner: true }))).toThrow("default_escalation_path");
+  });
+});

@@ -22,6 +22,13 @@ type RoutedConfig interface {
 	EscalationPath() string
 }
 
+// OwnerRoutedConfig is a routed configuration that can also send its human
+// outcome to the agent's owner, with its escalation path as the fallback.
+type OwnerRoutedConfig interface {
+	RoutedConfig
+	AskAgentOwner() bool
+}
+
 // ReasonedConfig is a configuration carrying the static reason a block's
 // decisions record, so the DSL's Reason option reaches it.
 type ReasonedConfig interface {

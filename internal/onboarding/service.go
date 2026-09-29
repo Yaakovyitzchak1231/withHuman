@@ -55,9 +55,9 @@ type AgentMinter interface {
 // writes the entry pipeline alone.
 type PipelineManager interface {
 	GetActive(ctx context.Context, principal domain.Principal, pipelineKey string) (approvalpipeline.PipelineRevision, error)
-	CreateRevision(ctx context.Context, principal domain.Principal, pipelineKey, name string, definitions []approvalblock.Definition, defaultEscalationPath string) (approvalpipeline.PipelineRevision, error)
+	CreateRevision(ctx context.Context, principal domain.Principal, pipelineKey, name string, definitions []approvalblock.Definition, defaultRoute approvalpipeline.Route) (approvalpipeline.PipelineRevision, error)
 	Activate(ctx context.Context, principal domain.Principal, pipelineKey string, revision int64, expectedActiveRevision int64) (approvalpipeline.PipelineRevision, error)
-	Preview(ctx context.Context, principal domain.Principal, pipelineKey string, definitions []approvalblock.Definition, defaultEscalationPath string, sample approvalpipeline.PreviewSample) (approvalpipeline.PreviewResult, error)
+	Preview(ctx context.Context, principal domain.Principal, pipelineKey string, definitions []approvalblock.Definition, defaultRoute approvalpipeline.Route, sample approvalpipeline.PreviewSample) (approvalpipeline.PreviewResult, error)
 }
 
 // ErrEntryPipelineChanged means the entry pipeline changed between the
@@ -413,7 +413,13 @@ type entryRevision struct {
 	revision    int64
 	name        string
 	defaultPath string
+	askOwner    bool
 	blocks      []approvalblock.Definition
+}
+
+// route is the entry pipeline's default as a route.
+func (current entryRevision) route() approvalpipeline.Route {
+	return approvalpipeline.Route{EscalationPath: current.defaultPath, AskAgentOwner: current.askOwner}
 }
 
 func (s *Service) readEntry(ctx context.Context, principal domain.Principal) (entryRevision, error) {
@@ -425,7 +431,10 @@ func (s *Service) readEntry(ctx context.Context, principal domain.Principal) (en
 	for index, block := range active.Blocks {
 		blocks[index] = block.Definition
 	}
-	return entryRevision{revision: active.Revision.Revision, name: active.Revision.Name, defaultPath: active.Revision.DefaultEscalationPath, blocks: blocks}, nil
+	return entryRevision{
+		revision: active.Revision.Revision, name: active.Revision.Name,
+		defaultPath: active.Revision.DefaultEscalationPath, askOwner: active.Revision.DefaultAskAgentOwner, blocks: blocks,
+	}, nil
 }
 
 // writeEntry creates and activates an entry revision holding blocks,
@@ -436,10 +445,10 @@ func (s *Service) writeEntry(ctx context.Context, principal domain.Principal, cu
 	if err != nil {
 		return 0, err
 	}
-	if active.Revision.DefaultEscalationPath == current.defaultPath && SameDocument(current.blocks, blocks) && active.Revision.Revision == current.revision {
+	if active.Revision.DefaultEscalationPath == current.defaultPath && active.Revision.DefaultAskAgentOwner == current.askOwner && SameDocument(current.blocks, blocks) && active.Revision.Revision == current.revision {
 		return current.revision, nil
 	}
-	created, err := s.pipelines.CreateRevision(ctx, principal, EntryPipelineKey, current.name, blocks, current.defaultPath)
+	created, err := s.pipelines.CreateRevision(ctx, principal, EntryPipelineKey, current.name, blocks, current.route())
 	if err != nil {
 		return 0, err
 	}

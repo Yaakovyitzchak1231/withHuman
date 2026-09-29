@@ -640,7 +640,7 @@ function PipelineRail({
       ? paths.value.map((path) => ({ type: "escalation_path", id: path.path_key, name: path.name }))
       : [];
   const blocks = draftsFromBlocks(revision.blocks, directory);
-  const fallback = pathTarget(revision.default_escalation_path, directory);
+  const fallback = pathTarget(revision.default_escalation_path, directory, revision.default_ask_agent_owner);
   return (
     <PipelineRailTimeline
       blocks={blocks}
@@ -1043,7 +1043,10 @@ function FactChip({ reference }: { reference: Reference }) {
 function sentTo(request: ApprovalRequest, routing: Loaded<ApprovalRouting>): ReactNode {
   switch (routing.status) {
     case "ready":
-      if (routing.value.outcome === "escalated" && routing.value.escalation_path_key) {
+      if (routing.value.outcome === "agent_owner" && routing.value.agent_owner && !routing.value.agent_owner_handed_off_at) {
+        return <FactChip reference={{ kind: "person", id: routing.value.agent_owner.id, name: routing.value.agent_owner.name }} />;
+      }
+      if (routing.value.outcome !== "default_queue" && routing.value.escalation_path_key) {
         return (
           <FactChip
             reference={{
