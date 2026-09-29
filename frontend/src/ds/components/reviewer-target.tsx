@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { cn } from "@/ds/lib/cn";
 import { Avatar } from "./avatar";
 import { Badge } from "./badge";
@@ -41,14 +41,16 @@ export interface ReviewerTarget {
   detail?: string;
 }
 
-/* The picker also offers "no explicit target", and wherever it offers
- * paths, the agent's owner. */
+/* The picker also offers "no explicit target", and in a route picker the
+ * agent's owner, which needs a path to fall back to: without one it is
+ * listed but disabled, saying why, so it never silently disappears. */
 type TargetOption =
   | ReviewerTarget
   | { type: "default"; id: "default"; name: string }
-  | { type: "owner"; id: "owner"; name: string };
+  | { type: "owner"; id: "owner"; name: string; disabled?: boolean };
 
 const OWNER_OPTION = { type: "owner" as const, id: "owner" as const, name: "The agent's owner" };
+const OWNER_NEEDS_PATH = "Create an escalation path first, for agents without an owner";
 
 /* An agent-owner route with the fallback it names, as the chip and the
  * hover card say it. */
@@ -266,11 +268,14 @@ export function TargetSelect({
   const broadcasts = directory.filter((entry) => entry.type === "broadcast");
   const teams = directory.filter((entry) => entry.type === "team");
   const people = directory.filter((entry) => entry.type === "user");
-  /* A picker that chooses a path (a pipeline exit or default) may
-   * instead ask the agent's owner, keeping a path as the fallback. */
+  /* A route picker (a pipeline exit or default) lists paths only, or
+   * nothing yet; it may instead ask the agent's owner, keeping a path as
+   * the fallback. */
+  const routePicker = paths.length === directory.length;
+  const owner = useMemo(() => ({ ...OWNER_OPTION, disabled: paths.length === 0 }), [paths.length]);
   const items: TargetOption[] = [
     ...(fallbackLabel ? [{ type: "default" as const, id: "default" as const, name: fallbackLabel }] : []),
-    ...(paths.length > 0 ? [OWNER_OPTION] : []),
+    ...(routePicker ? [owner] : []),
     ...paths,
     ...broadcasts,
     ...teams,
@@ -278,7 +283,7 @@ export function TargetSelect({
   ];
   const selected: TargetOption | null =
     value?.type === "agent_owner"
-      ? OWNER_OPTION
+      ? owner
       : value
         ? (items.find((item) => optionKey(item) === optionKey(value)) ?? value)
         : (items.find((item) => item.type === "default") ?? null);
@@ -309,7 +314,7 @@ export function TargetSelect({
       )}
       <SelectContent<TargetOption> filterPlaceholder="Filter">
         {(item) => (
-          <SelectItem key={optionKey(item)} value={item}>
+          <SelectItem key={optionKey(item)} value={item} disabled={item.type === "owner" && item.disabled}>
             <span className="flex items-center gap-2">
               {item.type === "team" ? (
                 <PeopleIcon width={13} height={13} className="text-ink-muted" />
@@ -333,6 +338,9 @@ export function TargetSelect({
               )}
               {item.type !== "default" && item.type !== "owner" && item.detail ? (
                 <span className="text-micro font-normal text-ink-faint">{item.detail}</span>
+              ) : null}
+              {item.type === "owner" && item.disabled ? (
+                <span className="truncate text-micro font-normal text-ink-faint">{OWNER_NEEDS_PATH}</span>
               ) : null}
             </span>
           </SelectItem>
