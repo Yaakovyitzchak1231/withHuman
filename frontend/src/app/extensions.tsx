@@ -280,13 +280,24 @@ export interface ToolMention {
 }
 
 /* A server the edition registers centrally, by the alias a request
- * carries as `server`: its display name, and the tool source it belongs
- * to (one the edition registered in toolSources, so the editors can
- * label it). */
+ * carries as `server`: its display name, the tool source it belongs to
+ * (one the edition registered in toolSources, so the editors can label
+ * it), and the arguments every request through it carries whichever tool
+ * it calls, which the condition editors offer as fields before any call
+ * or tool discovery has shown them. */
 export interface ServerDirectoryEntry {
   server: string;
   name: string;
   source: string;
+  arguments?: ServerArgument[];
+}
+
+/* An argument every request through a server carries: its name under
+ * `/request/arguments`, what it means, and the values it can take. */
+export interface ServerArgument {
+  name: string;
+  description: string;
+  values: string[];
 }
 
 /* What a contact kind's add flow renders with: the person's channels,
