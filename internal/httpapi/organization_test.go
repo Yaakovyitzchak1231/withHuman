@@ -32,7 +32,7 @@ func (s *organizationHTTPIdentities) GetOrganizationPolicy(_ context.Context, in
 func (s *organizationHTTPIdentities) UpdateOrganizationPolicy(_ context.Context, input application.UpdateOrganizationPolicyInput) (domain.OrganizationPolicy, error) {
 	s.updated = &input
 	return domain.OrganizationPolicy{
-		OrganizationID: input.OrganizationID, AllowSelfApproval: input.AllowSelfApproval, MFAMode: input.MFAMode,
+		OrganizationID: input.OrganizationID, MFAMode: input.MFAMode,
 		ApprovalReauthWindow: input.ApprovalReauthWindow, ClaimRetriggerWindow: input.ClaimRetriggerWindow,
 		UnroutedRequests: input.UnroutedRequests, RequestVisibility: input.RequestVisibility,
 	}, nil
@@ -88,7 +88,7 @@ func TestOrganizationPolicyReadShape(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string]any{
-		"allow_self_approval": false, "mfa_mode": "optional", "approval_reauth_window": "24h0m0s",
+		"mfa_mode": "optional", "approval_reauth_window": "24h0m0s",
 		"claim_retrigger_window": "15m0s", "unrouted_requests": "any_reviewer", "request_visibility": "all_readers",
 		"organization_api_keys_allowed": false,
 		"personal_api_keys_allowed":     false,
@@ -103,7 +103,7 @@ func TestOrganizationPolicyReadShape(t *testing.T) {
 	}
 
 	response = httptest.NewRecorder()
-	router.ServeHTTP(response, httptest.NewRequest(http.MethodPatch, "/api/v1/organization/policy", strings.NewReader(`{"allow_self_approval":true}`)))
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPatch, "/api/v1/organization/policy", strings.NewReader(`{"mfa_mode":"reviewers_required"}`)))
 	if response.Code != http.StatusForbidden {
 		t.Fatalf("patch with organization.read only = %d, want 403", response.Code)
 	}

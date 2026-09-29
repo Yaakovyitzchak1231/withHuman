@@ -15,17 +15,20 @@ import (
 )
 
 // escalationPathReader is what pinning reads: the path's active revision
-// and, for the teams that revision targets, their active policies.
+// and, for the teams that revision targets, their active policies, and
+// for an agent-owner route whether the owner can take the request.
 type escalationPathReader interface {
 	GetActiveEscalationPathRevision(context.Context, application.GetActiveEscalationPathRevisionInput) (domain.EscalationPathRevision, error)
 	GetActiveTeamEscalationPolicies(context.Context, application.GetActiveTeamEscalationPoliciesInput) ([]domain.TeamEscalationPolicyRevision, error)
+	application.AgentOwnerResolver
 }
 
 // EvaluationService pins which escalation path a request that needs a
-// human goes to. The pipeline has already resolved the path key (the
+// human goes to. The pipeline has already resolved the route (the
 // terminal block's, else the pipeline default); this service pins the
 // path's active revision so later edits never re-route an in-flight
-// request. Every internal failure falls back to the default queue:
+// request, and for an agent-owner route decides whether the owner takes
+// it or the path does. Every internal failure falls back to the default queue:
 // routing can delay attention but must never fail or block an approval
 // request.
 type EvaluationService struct {
@@ -86,9 +89,11 @@ func (service *EvaluationService) Evaluate(ctx context.Context, request domain.A
 // request values, so the detail map is safe for the audit trail.
 func (service *EvaluationService) evaluate(ctx context.Context, request domain.ApprovalRequest, route *application.HumanReviewRoute) (domain.ApprovalRequestRouting, map[string]any) {
 	detail := map[string]any{}
+	ownerID, ownerFallback := domain.ID(""), ""
 	fallback := func(reason string) domain.ApprovalRequestRouting {
 		return domain.ApprovalRequestRouting{
 			Outcome: domain.RoutingDefaultQueue, Reason: reason, Urgency: string(routing.UrgencyStandard),
+			AgentOwnerFallback: ownerFallback,
 		}
 	}
 	if route != nil && route.PipelineRevisionID != "" {
@@ -106,16 +111,46 @@ func (service *EvaluationService) evaluate(ctx context.Context, request domain.A
 	if route.BlockID != "" {
 		detail["block_id"] = route.BlockID
 	}
+	if route.AskAgentOwner {
+		ownerID, ownerFallback = service.agentOwner(ctx, request)
+		if ownerID != "" {
+			detail["agent_owner_membership_id"] = ownerID
+		} else if ownerFallback != "" {
+			detail["agent_owner_fallback"] = ownerFallback
+		}
+	}
+	// ownerRoute hands the request to the owner, pinning the fallback path
+	// beside it as far as it could be read: its key always, its revision
+	// and facts when the path had an active revision.
+	ownerRoute := func(snapshot domain.ApprovalRequestRouting) domain.ApprovalRequestRouting {
+		snapshot.Outcome, snapshot.AgentOwnerMembershipID = domain.RoutingAgentOwner, ownerID
+		snapshot.Reason, snapshot.EscalationPathKey = route.Reason, route.PathKey
+		snapshot.PipelineRevisionID, snapshot.Urgency = route.PipelineRevisionID, string(routing.UrgencyStandard)
+		if route.Reason == domain.RoutingReasonBlockEscalation {
+			snapshot.BlockID = route.BlockID
+		}
+		return snapshot
+	}
 	path, err := service.paths.GetActiveEscalationPathRevision(ctx, application.GetActiveEscalationPathRevisionInput{
 		OrganizationID: request.OrganizationID,
 		PathKey:        route.PathKey,
 	})
 	if errors.Is(err, domain.ErrNotFound) {
+		if ownerID != "" {
+			service.logger.WarnContext(ctx, "fallback escalation path has no active revision; the agent's owner takes the request without one",
+				"approval_request_id", request.ID, "escalation_path_key", route.PathKey)
+			return ownerRoute(domain.ApprovalRequestRouting{}), detail
+		}
 		service.logger.WarnContext(ctx, "escalation path has no active revision; request falls to the default queue",
 			"approval_request_id", request.ID, "escalation_path_key", route.PathKey)
 		return fallback(domain.RoutingReasonPathInactive), detail
 	}
 	if err != nil {
+		if ownerID != "" {
+			service.logger.WarnContext(ctx, "fallback escalation path unavailable; the agent's owner takes the request without one",
+				"approval_request_id", request.ID, "escalation_path_key", route.PathKey, "error", err)
+			return ownerRoute(domain.ApprovalRequestRouting{}), detail
+		}
 		service.logger.WarnContext(ctx, "escalation path unavailable; request falls to the default queue",
 			"approval_request_id", request.ID, "escalation_path_key", route.PathKey, "error", err)
 		return fallback(domain.RoutingReasonEvaluationError), detail
@@ -126,10 +161,13 @@ func (service *EvaluationService) evaluate(ctx context.Context, request domain.A
 		Outcome: domain.RoutingEscalated, Reason: route.Reason,
 		EscalationPathKey: route.PathKey, EscalationPathRevisionID: path.ID,
 		PipelineRevisionID: route.PipelineRevisionID, Urgency: string(routing.UrgencyStandard),
-		Facts: map[string]bool{},
+		Facts: map[string]bool{}, AgentOwnerFallback: ownerFallback,
 	}
 	if route.Reason == domain.RoutingReasonBlockEscalation {
 		snapshot.BlockID = route.BlockID
+	}
+	if ownerID != "" {
+		snapshot = ownerRoute(snapshot)
 	}
 	// The request conditions are evaluated exactly once, here, and pinned
 	// with the snapshot: who may decide and the executor both read the
@@ -161,6 +199,32 @@ func (service *EvaluationService) evaluate(ctx context.Context, request domain.A
 	}
 	detail["team_policies"] = teamPolicies
 	return snapshot, detail
+}
+
+// agentOwner decides whether an agent-owner route reaches the owner: the
+// owner of the personal instance that raised the request, while their
+// membership is active and they hold request.decide for it. Otherwise it
+// names why the fallback takes the request. A lookup failure is logged and
+// sends the request to the fallback with no reason, because routing never
+// fails a request and never waits on an owner it could not confirm.
+func (service *EvaluationService) agentOwner(ctx context.Context, request domain.ApprovalRequest) (domain.ID, string) {
+	if request.RequesterMembershipID == "" {
+		return "", domain.AgentOwnerFallbackNoOwner
+	}
+	standing, err := service.paths.GetAgentOwnerStanding(ctx, application.GetAgentOwnerStandingInput{
+		OrganizationID: request.OrganizationID, MembershipID: request.RequesterMembershipID, RequestID: request.ID,
+	})
+	switch {
+	case err != nil:
+		service.logger.WarnContext(ctx, "agent owner unavailable; request goes to the fallback path",
+			"approval_request_id", request.ID, "error", err)
+		return "", ""
+	case !standing.Active:
+		return "", domain.AgentOwnerFallbackInactive
+	case !standing.CanDecide:
+		return "", domain.AgentOwnerFallbackCannotDecide
+	}
+	return request.RequesterMembershipID, ""
 }
 
 // evaluateFacts evaluates request conditions against the request and

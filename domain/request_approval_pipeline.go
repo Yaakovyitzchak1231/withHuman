@@ -34,7 +34,9 @@ func ValidPipelineScope(agentSlug AgentSlug) bool {
 // the escalation path key a request goes to when it falls through the
 // pipeline or exits through a human outcome that names no path; empty
 // leaves it to any authorized reviewer. The agent section's default
-// takes precedence over the organization section's.
+// takes precedence over the organization section's. DefaultAskAgentOwner
+// sends that request to the agent's owner instead, with the default path
+// as the fallback for a request without one.
 type RequestApprovalPipelineRevision struct {
 	ID             ID        `json:"id"`
 	OrganizationID ID        `json:"organization_id"`
@@ -45,6 +47,7 @@ type RequestApprovalPipelineRevision struct {
 	// then the blocks it holds, each its own snapshot.
 	BlockIDs              []ID       `json:"block_ids"`
 	DefaultEscalationPath string     `json:"default_escalation_path,omitempty"`
+	DefaultAskAgentOwner  bool       `json:"default_ask_agent_owner,omitempty"`
 	CreatedByActorID      ID         `json:"created_by_actor_id"`
 	CreatedAt             time.Time  `json:"created_at"`
 	ArchivedAt            *time.Time `json:"archived_at,omitempty"`

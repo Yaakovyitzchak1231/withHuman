@@ -103,13 +103,14 @@ type decisionRoutingState struct {
 // escalated snapshot stays unscoped; an escalated one admits the targets
 // its pinned path reaches under the pinned facts plus the added
 // reviewers. An escalated snapshot that reaches nobody still scopes the
-// request, so only a break-glass holder may decide it.
+// request, so only a break-glass holder may decide it. An agent_owner
+// snapshot admits its owner alone until a handoff.
 func decisionRoutingTargets(ctx context.Context, tx pgx.Tx, organizationID, requestID, reviewerMembershipID domain.ID) (decisionRoutingState, error) {
 	pinned, escalated, err := readPinnedRouting(ctx, tx, organizationID, requestID)
-	if err != nil || !escalated {
+	if err != nil || (!escalated && pinned.agentOwnerID == "") {
 		return decisionRoutingState{}, err
 	}
-	userIDs, teamIDs, err := reachableDocumentTargets(pinned.document, pinned.facts)
+	userIDs, teamIDs, err := pinnedTargets(pinned)
 	if err != nil {
 		return decisionRoutingState{}, err
 	}
@@ -192,14 +193,13 @@ func (s *Store) ApplyDecision(ctx context.Context, input application.ApplyDecisi
 			return domain.DecisionOperation{}, err
 		}
 	}
-	var allowSelfApproval bool
 	var reauthSeconds int64
 	var mfaMode, unroutedRequests string
 	var verdict authorization.Verdict
 	if rejectionCode == "" {
-		if err := tx.QueryRow(ctx, `SELECT allow_self_approval,approval_reauth_window_seconds,mfa_mode,unrouted_requests
+		if err := tx.QueryRow(ctx, `SELECT approval_reauth_window_seconds,mfa_mode,unrouted_requests
             FROM organization_policies WHERE organization_id=$1`, command.OrganizationID).Scan(
-			&allowSelfApproval, &reauthSeconds, &mfaMode, &unroutedRequests); err != nil {
+			&reauthSeconds, &mfaMode, &unroutedRequests); err != nil {
 			return domain.DecisionOperation{}, err
 		}
 		routingTargets, err := decisionRoutingTargets(ctx, tx, command.OrganizationID, command.RequestID, command.Principal.MembershipID)
@@ -214,23 +214,21 @@ func (s *Store) ApplyDecision(ctx context.Context, input application.ApplyDecisi
 		}
 		var rejection *authorization.Rejection
 		verdict, rejection = authorization.EvaluateDecision(authorization.DecisionInput{
-			MembershipStatus:      domain.MembershipStatus(membershipStatus),
-			Grants:                grants,
-			RequestID:             command.RequestID,
-			RequesterMembershipID: "",
-			ReviewerMembershipID:  command.Principal.MembershipID,
-			AllowSelfApproval:     allowSelfApproval,
-			HasRoutingTargets:     routingTargets.hasTargets,
-			RoutedUserIDs:         routingTargets.userIDs,
-			RoutedTeamIDs:         routingTargets.teamIDs,
-			AddedReviewerIDs:      routingTargets.addedReviewerIDs,
-			ReviewerTeamIDs:       routingTargets.reviewerTeamIDs,
-			UnroutedRequests:      domain.UnroutedRequestsPolicy(unroutedRequests),
-			OutsideRouting:        command.OutsideRouting,
-			Authentication:        command.Principal.Auth,
-			ApprovalReauthWindow:  time.Duration(reauthSeconds) * time.Second,
-			MFAMode:               domain.MFAMode(mfaMode),
-			Now:                   now,
+			MembershipStatus:     domain.MembershipStatus(membershipStatus),
+			Grants:               grants,
+			RequestID:            command.RequestID,
+			ReviewerMembershipID: command.Principal.MembershipID,
+			HasRoutingTargets:    routingTargets.hasTargets,
+			RoutedUserIDs:        routingTargets.userIDs,
+			RoutedTeamIDs:        routingTargets.teamIDs,
+			AddedReviewerIDs:     routingTargets.addedReviewerIDs,
+			ReviewerTeamIDs:      routingTargets.reviewerTeamIDs,
+			UnroutedRequests:     domain.UnroutedRequestsPolicy(unroutedRequests),
+			OutsideRouting:       command.OutsideRouting,
+			Authentication:       command.Principal.Auth,
+			ApprovalReauthWindow: time.Duration(reauthSeconds) * time.Second,
+			MFAMode:              domain.MFAMode(mfaMode),
+			Now:                  now,
 		})
 		if rejection != nil {
 			rejectionCode, rejectionMessage = rejection.Code, rejection.Err.Error()

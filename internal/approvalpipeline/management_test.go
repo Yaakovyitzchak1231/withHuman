@@ -24,7 +24,7 @@ func TestManagementPreviewCompilesExecutesAndDoesNotPersist(t *testing.T) {
 		pipelineDefinition("deny-later", approvalblock.Deny, approvalblock.Field("/request/tool").Equals("stripe.refund")),
 	}
 
-	result, err := service.Preview(context.Background(), principal, "billing", definitions, "", PreviewSample{
+	result, err := service.Preview(context.Background(), principal, "billing", definitions, Route{}, PreviewSample{
 		Request: BlockRequest{Tool: "stripe.refund", Arguments: json.RawMessage(`{"amount_cents":900}`)},
 		Agent:   BlockAgent{Slug: "billing", Name: "billing-agent"},
 	})
@@ -43,7 +43,7 @@ func TestManagementPreviewCompilesExecutesAndDoesNotPersist(t *testing.T) {
 
 	invalid := definitions[:1]
 	invalid[0].CEL.When.Field = "/request/context"
-	if _, err := service.Preview(context.Background(), principal, "billing", invalid, "", PreviewSample{
+	if _, err := service.Preview(context.Background(), principal, "billing", invalid, Route{}, PreviewSample{
 		Request: BlockRequest{Tool: "stripe.refund", Arguments: json.RawMessage(`{}`)},
 		Agent:   BlockAgent{Slug: "billing", Name: "billing-agent"},
 	}); !errors.Is(err, domain.ErrInvalid) {
@@ -69,27 +69,27 @@ func TestManagementPreviewValidatesTheSampleAgentSlug(t *testing.T) {
 		}
 	}
 
-	if _, err := service.Preview(context.Background(), principal, "billing", definitions, "", sample("support")); !errors.Is(err, domain.ErrInvalid) {
+	if _, err := service.Preview(context.Background(), principal, "billing", definitions, Route{}, sample("support")); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("agent scope preview with another agent's slug returned %v, want invalid", err)
 	}
-	if _, err := service.Preview(context.Background(), principal, "", definitions, "", sample("Billing Team")); !errors.Is(err, domain.ErrInvalid) {
+	if _, err := service.Preview(context.Background(), principal, "", definitions, Route{}, sample("Billing Team")); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("organization preview with a malformed slug returned %v, want invalid", err)
 	}
-	if _, err := service.Preview(context.Background(), principal, "billing", definitions, "", PreviewSample{
+	if _, err := service.Preview(context.Background(), principal, "billing", definitions, Route{}, PreviewSample{
 		Request: BlockRequest{Tool: "stripe.refund", Arguments: json.RawMessage(`{}`)},
 		Agent:   BlockAgent{Slug: "billing"},
 	}); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("preview without an agent name returned %v, want invalid", err)
 	}
 
-	result, err := service.Preview(context.Background(), principal, "billing", definitions, "", sample("billing"))
+	result, err := service.Preview(context.Background(), principal, "billing", definitions, Route{}, sample("billing"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if result.Outcome != BlockDeny || result.TerminalBlockKey != "deny-billing" {
 		t.Fatalf("condition on agent.slug did not match the sample: %+v", result)
 	}
-	result, err = service.Preview(context.Background(), principal, "", definitions, "", sample("support"))
+	result, err = service.Preview(context.Background(), principal, "", definitions, Route{}, sample("support"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +108,7 @@ func TestManagementCreatesInactiveRevisionAndValidatesBeforeWriting(t *testing.T
 		pipelineDefinition("second", approvalblock.Human, approvalblock.Field("/request/tool").NotEquals("deploy")),
 	}
 
-	created, err := service.CreateRevision(context.Background(), principal, "release", definitions, "")
+	created, err := service.CreateRevision(context.Background(), principal, "release", definitions, Route{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +123,7 @@ func TestManagementCreatesInactiveRevisionAndValidatesBeforeWriting(t *testing.T
 	}
 
 	definitions[0].Enabled = false
-	if _, err := service.CreateRevision(context.Background(), principal, "release", definitions, ""); !errors.Is(err, domain.ErrInvalid) {
+	if _, err := service.CreateRevision(context.Background(), principal, "release", definitions, Route{}); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("disabled stored block returned %v, want invalid", err)
 	}
 	if repository.createCalls != 1 {
@@ -137,7 +137,7 @@ func TestManagementActivationCompilesThenUsesExpectedActiveRevision(t *testing.T
 	principal := pipelineManagerPrincipal("organization-1")
 	created, err := service.CreateRevision(context.Background(), principal, "billing", []approvalblock.Definition{
 		pipelineDefinition("small-refund", approvalblock.Approve, approvalblock.Field("/request/arguments/amount").LessThan(1000)),
-	}, "")
+	}, Route{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +152,7 @@ func TestManagementActivationCompilesThenUsesExpectedActiveRevision(t *testing.T
 
 	corruptTarget, err := service.CreateRevision(context.Background(), principal, "billing", []approvalblock.Definition{
 		pipelineDefinition("large-refund", approvalblock.Human, approvalblock.Field("/request/arguments/amount").GreaterThanOrEqual(1000)),
-	}, "")
+	}, Route{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -219,8 +219,8 @@ func (repository *memoryPipelineRepository) CreateRequestApprovalPipelineRevisio
 	revision := domain.RequestApprovalPipelineRevision{
 		ID: input.ID, OrganizationID: input.OrganizationID, AgentSlug: input.AgentSlug,
 		Revision: int64(len(repository.revisions[input.AgentSlug]) + 1), BlockIDs: make([]domain.ID, len(input.Blocks)),
-		DefaultEscalationPath: input.DefaultEscalationPath,
-		CreatedByActorID:      input.CreatedByActorID, CreatedAt: input.Now,
+		DefaultEscalationPath: input.DefaultEscalationPath, DefaultAskAgentOwner: input.DefaultAskAgentOwner,
+		CreatedByActorID: input.CreatedByActorID, CreatedAt: input.Now,
 	}
 	for index, inputBlock := range input.Blocks {
 		revision.BlockIDs[index] = inputBlock.ID
@@ -410,7 +410,7 @@ func TestManagementReferencesReportEachDependencyState(t *testing.T) {
 	// Creation only requires the paths to exist, so the missing default
 	// must be introduced after the revision is stored.
 	resolver.resolved = application.ResolvedEscalationPaths{}
-	created, err := service.CreateRevision(context.Background(), principal, "billing", []approvalblock.Definition{review, second, fine}, "gone")
+	created, err := service.CreateRevision(context.Background(), principal, "billing", []approvalblock.Definition{review, second, fine}, Route{EscalationPath: "gone"})
 	if err != nil {
 		t.Fatal(err)
 	}

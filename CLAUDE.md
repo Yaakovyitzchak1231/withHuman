@@ -188,8 +188,9 @@ recorded in this file with both the reason and the replacement rule.
   Temporal boundaries, and credentials, request payloads, and other sensitive
   values must never be placed in MDC.
 - Decision authorization is atomic against current membership, permissions,
-  scope, self-approval policy, reauthentication or MFA requirements, and the
-  request's terminal state. Requests, decisions, and audit records are
+  scope, routing, reauthentication or MFA requirements, and the request's
+  terminal state. There is no self-approval rule: a person may decide a
+  request their own agent raised wherever routing reaches them. Requests, decisions, and audit records are
   append-only after reaching a terminal state. The four terminal states
   are `approved`, `denied`, `expired`, and `cancelled`; the last is the
   requesting instance withdrawing its own pending request through
@@ -254,11 +255,9 @@ recorded in this file with both the reason and the replacement rule.
   member disables their instances and revokes their credentials in the
   same transaction as their personal API keys
   (`disableMembershipAgentInstances`, audited `agent_instance.disabled`
-  with reason `membership_deprovisioned`). The requester is recorded but
-  not yet fed into the decision's self-approval check
-  (`RequesterMembershipID` stays empty in `decisions.go`), because
-  `allow_self_approval` defaults to false and a person's own coding agent
-  must stay approvable by them until routing decides otherwise.
+  with reason `membership_deprovisioned`). The request also carries the
+  owner from the principal before the pipeline runs, so routing can ask
+  them (the agent-owner route below).
 - Raw session and agent credentials are displayed once. Persist
   only their hashes. Opaque token payloads use URL-safe base64 and can contain
   underscores, so parsers must split only the two structural separators.
@@ -482,7 +481,25 @@ recorded in this file with both the reason and the replacement rule.
   and `reviewrouting` pins it as the snapshot (`approval_request_routing`:
   path key, the path's active revision, the pipeline revision and block
   that named it); a path without an active revision at routing time falls
-  to the default queue with reason `path_inactive`. The router evaluates every
+  to the default queue with reason `path_inactive`. The agent-owner route
+  (`ask_agent_owner` beside a block's `escalation_path`,
+  `default_ask_agent_owner` beside the revision default; the path is the
+  required fallback) pins an `agent_owner` snapshot naming the requester
+  when their membership is active and holds `request.decide` for the
+  request, and the fallback path beside it; otherwise the fallback takes
+  the request at routing time with `agent_owner_fallback`
+  (`no_agent_owner`, `agent_owner_inactive`, `agent_owner_cannot_decide`).
+  The owner is the only target, paged through their own ladder, with no
+  levels and no timer: the fallback never takes over because of time.
+  Suspending or deprovisioning the owner (`handOffAgentOwnerRequests`, in
+  the member and directory transactions) appends
+  `approval_request_agent_owner_handoffs` rows and outbox events
+  (`approval.agent_owner_handoff`) the worker's dispatcher turns into the
+  workflow's `agent_owner_deactivated` signal, which walks the pinned
+  fallback. Every reader of the snapshot goes through
+  `readPinnedRouting`/`effectiveRouting`, which read an unhanded
+  `agent_owner` row as its owner alone and a handed-off one as its
+  fallback. The router evaluates every
   `request` condition in the path and its pinned team policies exactly
   once at pin time and stores the results as facts on the snapshot
   (`approval_request_routing.facts`, keyed `<scope>/<condition id>`);
@@ -534,8 +551,8 @@ recorded in this file with both the reason and the replacement rule.
   review's `viewer` block tells the client whether the person may
   decide, must break glass, or cannot.
 - Reviewer claims ("I'm looking at it") are advisory product state on
-  pending requests: same eligibility as deciding (minus self-approval and
-  auth-freshness checks), no takeover, idempotent re-claim, and a
+  pending requests: same eligibility as deciding (minus the
+  auth-freshness check), no takeover, idempotent re-claim, and a
   retrigger timeout (`organization_policies.claim_retrigger_seconds`,
   default 900, capped at the request deadline) after which the claim
   lapses via a workflow timer, with a read-time-expiry and next-claim

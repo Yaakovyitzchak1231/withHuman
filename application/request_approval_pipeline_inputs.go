@@ -62,6 +62,7 @@ type CreateRequestApprovalPipelineRevisionInput struct {
 	AgentSlug             domain.AgentSlug
 	Blocks                []RequestApprovalBlockSnapshotInput
 	DefaultEscalationPath string
+	DefaultAskAgentOwner  bool
 	CreatedByActorID      domain.ID
 	Now                   time.Time
 }
@@ -72,6 +73,7 @@ func (input CreateRequestApprovalPipelineRevisionInput) Validate() error {
 		requiredID("organization ID", input.OrganizationID),
 		validPipelineScope(input.AgentSlug),
 		validOptionalEscalationPathKey(input.DefaultEscalationPath),
+		agentOwnerFallback(input.DefaultEscalationPath, input.DefaultAskAgentOwner),
 		requiredID("creating membership ID", input.CreatedByActorID),
 		requiredTime("current time", input.Now),
 	}); err != nil {

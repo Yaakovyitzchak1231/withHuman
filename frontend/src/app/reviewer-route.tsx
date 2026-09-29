@@ -194,7 +194,7 @@ export function EscalationRoute({
   teamPaths?: TeamPaths;
   fallback?: ReactNode;
 }) {
-  if (!target || target.type !== "escalation_path") {
+  if (!target || (target.type !== "escalation_path" && target.type !== "agent_owner")) {
     return fallback ? (
       <Well>
         <p className="text-micro font-normal text-ink-muted">{fallback}</p>
@@ -224,6 +224,11 @@ export function EscalationRoute({
   }
   return (
     <Well>
+      {target.type === "agent_owner" ? (
+        <p className="text-micro font-normal text-ink-muted">
+          The agent's owner decides. If the agent has no owner, this path takes the request:
+        </p>
+      ) : null}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="text-label text-ink-secondary">{tree.teamName}</span>
         <EditPathLink pathKey={target.id} label="Edit escalation path" />

@@ -130,8 +130,7 @@ pending-only workflow-start outbox item. Automatic decisions return without a
 Temporal call. Idempotent activities commit later human and system decisions.
 API reads, queue SSE, and long polls read PostgreSQL only. Decision activities
 atomically recheck active membership, application permissions, scope,
-self-approval policy, authentication strength and freshness, and terminal
-state.
+routing, authentication strength and freshness, and terminal state.
 
 The runnable authentication adapter is local email and password. Passwords are
 stored separately from canonical users as Argon2id hashes. Enterprise single

@@ -186,7 +186,6 @@ type OrganizationPolicy struct {
 	OrganizationID       ID            `json:"organization_id"`
 	AdmissionMode        AdmissionMode `json:"admission_mode"`
 	MFAMode              MFAMode       `json:"mfa_mode"`
-	AllowSelfApproval    bool          `json:"allow_self_approval"`
 	ApprovalReauthWindow time.Duration `json:"approval_reauth_window"`
 	SessionMaxAge        time.Duration `json:"session_max_age"`
 	// ClaimRetriggerWindow is how long a reviewer claim holds before it

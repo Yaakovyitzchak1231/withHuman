@@ -179,7 +179,7 @@ func TestAPIKeysAgainstRealPostgres(t *testing.T) {
 	// deleting any, and admits them again when turned back on.
 	policy.PersonalAPIKeysAllowed = false
 	update := application.UpdateOrganizationPolicyInput{
-		OrganizationID: orgID, AllowSelfApproval: policy.AllowSelfApproval, MFAMode: policy.MFAMode,
+		OrganizationID: orgID, MFAMode: policy.MFAMode,
 		ApprovalReauthWindow: policy.ApprovalReauthWindow, ClaimRetriggerWindow: policy.ClaimRetriggerWindow,
 		UnroutedRequests: policy.UnroutedRequests, RequestVisibility: policy.RequestVisibility,
 		PersonalAPIKeysAllowed: false, ActorMembershipID: ownerMembershipID, Now: now,

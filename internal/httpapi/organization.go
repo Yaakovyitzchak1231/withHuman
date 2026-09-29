@@ -18,7 +18,6 @@ func (a *API) installOrganizationRoutes(router *gin.RouterGroup) {
 // organizationPolicyResponse is the settable part of the organization
 // policy. Durations are Go duration strings, never unitless numbers.
 type organizationPolicyResponse struct {
-	AllowSelfApproval          bool                           `json:"allow_self_approval"`
 	MFAMode                    domain.MFAMode                 `json:"mfa_mode"`
 	ApprovalReauthWindow       string                         `json:"approval_reauth_window"`
 	ClaimRetriggerWindow       string                         `json:"claim_retrigger_window"`
@@ -30,7 +29,7 @@ type organizationPolicyResponse struct {
 
 func newOrganizationPolicyResponse(policy domain.OrganizationPolicy) organizationPolicyResponse {
 	return organizationPolicyResponse{
-		AllowSelfApproval: policy.AllowSelfApproval, MFAMode: policy.MFAMode,
+		MFAMode:              policy.MFAMode,
 		ApprovalReauthWindow: policy.ApprovalReauthWindow.String(),
 		ClaimRetriggerWindow: policy.ClaimRetriggerWindow.String(),
 		UnroutedRequests:     policy.UnroutedRequests, RequestVisibility: policy.RequestVisibility,
@@ -42,7 +41,6 @@ func newOrganizationPolicyResponse(policy domain.OrganizationPolicy) organizatio
 // organizationPolicyPatchRequest is any subset of the settable fields.
 // Durations arrive as strings and are parsed here, at the boundary.
 type organizationPolicyPatchRequest struct {
-	AllowSelfApproval          *bool                           `json:"allow_self_approval"`
 	MFAMode                    *domain.MFAMode                 `json:"mfa_mode"`
 	ApprovalReauthWindow       *string                         `json:"approval_reauth_window"`
 	ClaimRetriggerWindow       *string                         `json:"claim_retrigger_window"`
@@ -54,7 +52,7 @@ type organizationPolicyPatchRequest struct {
 
 func (request organizationPolicyPatchRequest) patch() (orgsettings.PolicyPatch, error) {
 	patch := orgsettings.PolicyPatch{
-		AllowSelfApproval: request.AllowSelfApproval, MFAMode: request.MFAMode,
+		MFAMode:          request.MFAMode,
 		UnroutedRequests: request.UnroutedRequests, RequestVisibility: request.RequestVisibility,
 		PersonalAPIKeysAllowed:     request.PersonalAPIKeysAllowed,
 		OrganizationAPIKeysAllowed: request.OrganizationAPIKeysAllowed,

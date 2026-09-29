@@ -12,11 +12,9 @@ type DecisionInput struct {
 	// Grants is the reviewer's grant set as reloaded inside the decision
 	// transaction; RequestID names the request the grants are checked
 	// against.
-	Grants                []domain.Grant
-	RequestID             domain.ID
-	RequesterMembershipID domain.ID
-	ReviewerMembershipID  domain.ID
-	AllowSelfApproval     bool
+	Grants               []domain.Grant
+	RequestID            domain.ID
+	ReviewerMembershipID domain.ID
 	// HasRoutingTargets is true when the request carries a matched routing
 	// snapshot: only the routed targets may then decide, unless the
 	// reviewer holds request.decide.unrouted (break glass) and says so.
@@ -67,9 +65,6 @@ func EvaluateDecision(input DecisionInput) (Verdict, *Rejection) {
 	resource := domain.RequestResource(input.RequestID)
 	if !holds(input.Grants, domain.PermissionRequestDecide, resource) {
 		return Verdict{}, &Rejection{Code: "forbidden", Err: domain.ErrForbidden}
-	}
-	if input.RequesterMembershipID != "" && input.RequesterMembershipID == input.ReviewerMembershipID && !input.AllowSelfApproval {
-		return Verdict{}, &Rejection{Code: "self_approval", Err: domain.ErrSelfApproval}
 	}
 	verdict, rejection := routingVerdict(routingInput{
 		Grants: input.Grants, Resource: resource, ReviewerMembershipID: input.ReviewerMembershipID,

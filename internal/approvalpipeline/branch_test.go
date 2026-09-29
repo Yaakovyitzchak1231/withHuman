@@ -42,6 +42,9 @@ type branchScope struct {
 	slug        domain.AgentSlug
 	definitions []approvalblock.Definition
 	defaultPath string
+	// askOwner makes the default ask the agent's owner, with defaultPath
+	// as the fallback.
+	askOwner bool
 }
 
 // branchFixture activates each scope's document and returns an execution
@@ -51,7 +54,7 @@ func branchFixture(t *testing.T, now time.Time, registry *BlockRegistry, scopes 
 	repository := newMemoryPipelineRepository()
 	management := NewManagementService(repository, NewCompiledPipelineState(repository, registry), fixedPipelineClock{now: now})
 	for _, scope := range scopes {
-		created, err := management.CreateRevision(context.Background(), pipelineManagerPrincipal("organization-1"), scope.slug, scope.definitions, scope.defaultPath)
+		created, err := management.CreateRevision(context.Background(), pipelineManagerPrincipal("organization-1"), scope.slug, scope.definitions, Route{EscalationPath: scope.defaultPath, AskAgentOwner: scope.askOwner})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -663,7 +666,7 @@ func TestPreviewReportsBranchSteps(t *testing.T) {
 	}
 	preview := func(definitions []approvalblock.Definition, tool, arguments string) PreviewResult {
 		t.Helper()
-		result, err := management.Preview(context.Background(), pipelineManagerPrincipal("organization-1"), "billing", definitions, "on-call", sample(tool, arguments))
+		result, err := management.Preview(context.Background(), pipelineManagerPrincipal("organization-1"), "billing", definitions, Route{EscalationPath: "on-call"}, sample(tool, arguments))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -710,7 +713,7 @@ func TestManagementStoresReadsAndChecksNestedBlocks(t *testing.T) {
 	inner := pipelineDefinition("ask", approvalblock.Human, approvalblock.Field("/request/arguments/amount").GreaterThan(1000))
 	inner.CEL.EscalationPath = "fraud-team"
 	document[0].Branch.Blocks = append(document[0].Branch.Blocks, inner)
-	created, err := management.CreateRevision(context.Background(), pipelineManagerPrincipal("organization-1"), "billing", document, "on-call")
+	created, err := management.CreateRevision(context.Background(), pipelineManagerPrincipal("organization-1"), "billing", document, Route{EscalationPath: "on-call"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -738,7 +741,7 @@ func TestManagementStoresReadsAndChecksNestedBlocks(t *testing.T) {
 	gated := NewManagementService(repository, NewCompiledPipelineState(repository, NewBlockRegistry(withScripted(newScripted()), WithEntitlements(&denyingEntitlements{}))), fixedPipelineClock{now: now})
 	_, err = gated.CreateRevision(context.Background(), pipelineManagerPrincipal("organization-1"), "billing", []approvalblock.Definition{
 		refundsBranch(scriptedDefinition()),
-	}, "")
+	}, Route{})
 	if !errors.Is(err, domain.ErrForbidden) {
 		t.Fatalf("a gated kind inside a branch must be gated on the plan: %v", err)
 	}

@@ -6180,15 +6180,12 @@ components:
       description: The settable part of the organization's approval policy. Durations are Go duration strings.
       type: object
       additionalProperties: false
-      required: [allow_self_approval, mfa_mode, approval_reauth_window, claim_retrigger_window, unrouted_requests, request_visibility, personal_api_keys_allowed, organization_api_keys_allowed]
+      required: [mfa_mode, approval_reauth_window, claim_retrigger_window, unrouted_requests, request_visibility, personal_api_keys_allowed, organization_api_keys_allowed]
       properties:
         organization_api_keys_allowed: { type: boolean, description: Independently controls creation and authentication of organization API keys. }
         personal_api_keys_allowed:
           type: boolean
           description: Whether members may mint personal API keys. Off refuses minting and every existing personal key without deleting any; on again brings them back.
-        allow_self_approval:
-          type: boolean
-          description: Whether a person may decide a request their own agent raised.
         mfa_mode:
           type: string
           enum: [optional, reviewers_required, everyone_required]
@@ -6222,7 +6219,6 @@ components:
       additionalProperties: false
       properties:
         organization_api_keys_allowed: { type: boolean, description: Independently controls creation and authentication of organization API keys. }
-        allow_self_approval: { type: boolean }
         mfa_mode: { type: string, enum: [optional, reviewers_required, everyone_required] }
         approval_reauth_window: { type: string, description: "A duration such as 12h or 24h", example: 24h }
         claim_retrigger_window: { type: string, description: "A duration such as 15m, at most 24h", example: 15m }
@@ -6381,6 +6377,9 @@ components:
           type: string
           pattern: '^[a-z0-9][a-z0-9._-]{0,62}$'
           description: The escalation path for requests that reach a person without a block naming a path.
+        default_ask_agent_owner:
+          type: boolean
+          description: "Send requests that reach a person without a block naming a path to the person who owns the agent instance that made them, instead of `default_escalation_path`. The path is then the fallback, used only for a request whose agent has no owner able to decide it."
         created_by_actor_id: { type: string, format: uuid, description: The membership or organization-key actor that created the revision. }
         created_at: { type: string, format: date-time }
         archived_at: { type: string, format: date-time, description: "Present when the revision was archived with its agent. An archived revision can be read but not activated until the agent is restored." }
@@ -6403,6 +6402,9 @@ components:
           type: string
           pattern: '^[a-z0-9][a-z0-9._-]{0,62}$'
           description: The escalation path for requests that reach a person without a block naming a path.
+        default_ask_agent_owner:
+          type: boolean
+          description: "Send requests that reach a person without a block naming a path to the person who owns the agent instance that made them, instead of `default_escalation_path`. The path is then the fallback, used only for a request whose agent has no owner able to decide it."
         created_by_actor_id: { type: string, format: uuid, description: The membership or organization-key actor that created the revision. }
         created_at: { type: string, format: date-time }
         blocks:
@@ -6425,6 +6427,9 @@ components:
           type: string
           pattern: '^[a-z0-9][a-z0-9._-]{0,62}$'
           description: "The escalation path for requests that reach a person without a block naming a path. That includes requests that reach the end of the pipeline. The agent's default wins over the organization's. With neither, any reviewer who can decide may take the request from the queue. The path must exist when the revision is created, and be active when it is activated."
+        default_ask_agent_owner:
+          type: boolean
+          description: "Send those requests to the person who owns the agent instance that made them instead. `default_escalation_path` is then the fallback, used only for a request whose agent has no owner able to decide it (a service agent, or an owner who was deactivated), and is required. The owner is the only reviewer: the request never moves to the path because the owner has not answered."
     RequestApprovalBlockDefinition:
       description: One block of a pipeline document. The type picks the kind of block and the shape of its config. These are the kinds every edition has; an edition may add kinds of its own with their own config shapes (the hosted edition adds `llm_judge`), and a document naming a kind this deployment lacks is refused as invalid.
       oneOf:
@@ -6635,6 +6640,9 @@ components:
           type: string
           pattern: '^[a-z0-9][a-z0-9._-]{0,62}$'
           description: "Where the request goes when none of the branch's blocks decides. Defaults to the pipeline's default path. Blocks inside the branch that name no path of their own use the pipeline's default, not this one."
+        ask_agent_owner:
+          type: boolean
+          description: "Send the request to the person who owns the agent instance that made it, instead of `escalation_path`. The path is then the fallback, used only when the request has no owner able to decide it, and is required."
     StoredBranchBlockConfig:
       type: object
       additionalProperties: false
@@ -6652,6 +6660,9 @@ components:
           type: string
           pattern: '^[a-z0-9][a-z0-9._-]{0,62}$'
           description: Where the request goes when none of the branch's blocks decides.
+        ask_agent_owner:
+          type: boolean
+          description: "Send the request to the person who owns the agent instance that made it, instead of `escalation_path`. The path is then the fallback, used only when the request has no owner able to decide it, and is required."
     WebhookBlockConfig:
       type: object
       additionalProperties: false
@@ -6685,6 +6696,9 @@ components:
           type: string
           pattern: '^[a-z0-9][a-z0-9._-]{0,62}$'
           description: "Where the request goes when the endpoint answers `human`, or when the call fails. Defaults to the pipeline's default path."
+        ask_agent_owner:
+          type: boolean
+          description: "Send the request to the person who owns the agent instance that made it, instead of `escalation_path`. The path is then the fallback, used only when the request has no owner able to decide it, and is required."
     AlwaysBlockConfig:
       type: object
       additionalProperties: false
@@ -6704,6 +6718,9 @@ components:
           type: string
           pattern: '^[a-z0-9][a-z0-9._-]{0,62}$'
           description: "Where the request goes for a `human` outcome. Allowed only when `outcome` is `human`. Defaults to the pipeline's default path."
+        ask_agent_owner:
+          type: boolean
+          description: "Send the request to the person who owns the agent instance that made it, instead of `escalation_path`. The path is then the fallback, used only when the request has no owner able to decide it, and is required."
     CELBlockConfig:
       type: object
       additionalProperties: false
@@ -6717,6 +6734,9 @@ components:
           type: string
           pattern: '^[a-z0-9][a-z0-9._-]{0,62}$'
           description: "Where the request goes on a `human` match. Allowed only when `on_match` is `human`. Defaults to the pipeline's default path."
+        ask_agent_owner:
+          type: boolean
+          description: "Send the request to the person who owns the agent instance that made it, instead of `escalation_path`. The path is then the fallback, used only when the request has no owner able to decide it, and is required."
     CELCondition:
       description: A condition tree. A leaf tests one field. all and any combine conditions. some and every test the items of a list field.
       oneOf:
@@ -6801,6 +6821,7 @@ components:
           type: string
           pattern: '^[a-z0-9][a-z0-9._-]{0,62}$'
           description: "The default escalation path, as in a document. Reported in the result when the outcome is `human`."
+        default_ask_agent_owner: { type: boolean, description: "Whether the default asks the agent's owner first, as in a document." }
         sample:
           type: object
           additionalProperties: false
@@ -6854,6 +6875,7 @@ components:
           pattern: '^[a-z0-9][a-z0-9._-]{0,62}$'
           description: "The path a `human` outcome goes to, within this scope alone: the ending block's path, or the document's default. Absent when the outcome is automatic or no path applies."
         escalation_path_reason: { type: string, enum: [block_escalation, pipeline_default, no_escalation], description: "Where the path came from. `block_escalation`: the ending block named it. `pipeline_default`: the document's default. `no_escalation`: no path applies." }
+        ask_agent_owner: { type: boolean, description: "Present when the route asks the agent's owner, with `escalation_path` as the fallback. A preview has no real agent instance, so it names the route, never a person." }
     RequestApprovalPipelinePreviewBlock:
       type: object
       additionalProperties: false
@@ -8178,30 +8200,41 @@ components:
     ApprovalRouting:
       type: object
       additionalProperties: false
-      description: Who was asked to review a request when it entered human review. escalated pins an escalation path revision and the people it reaches for this request; default_queue means any authorized reviewer.
+      description: Who was asked to review a request when it entered human review. agent_owner sends it to the person who owns the agent instance that made it; escalated pins an escalation path revision and the people it reaches for this request; default_queue means any authorized reviewer.
       required: [outcome, reason, urgency, targets, added_reviewers, team_policies, escalation, created_at]
       properties:
-        outcome: { type: string, enum: [escalated, default_queue], example: escalated, description: "`escalated` when an escalation path took the request. `default_queue` when no path applied and every reviewer who can decide was asked." }
+        outcome: { type: string, enum: [agent_owner, escalated, default_queue], example: escalated, description: "`agent_owner` when the agent's owner took the request; the path fields then describe the fallback pinned beside it. `escalated` when an escalation path took the request. `default_queue` when no path applied and every reviewer who can decide was asked." }
         reason:
           type: string
           enum: [block_escalation, pipeline_default, no_escalation, path_inactive, evaluation_error]
           example: block_escalation
-          description: "How the outcome came about. `block_escalation`: the pipeline block that asked for a person named the path. `pipeline_default`: the pipeline's default path took it. `no_escalation`: the pipeline named no path. `path_inactive`: the named path had no active revision. `evaluation_error`: the path could not be resolved. The last three mean no path applied."
+          description: "How the outcome came about. `block_escalation`: the pipeline block that asked for a person named the route. `pipeline_default`: the pipeline's default route took it. `no_escalation`: the pipeline named no path. `path_inactive`: the named path had no active revision. `evaluation_error`: the path could not be resolved. The last three mean no path applied."
         urgency: { type: string, enum: [standard, interrupt], example: standard, description: "The urgency the request was routed with. Always `standard` today." }
-        escalation_path_key: { type: string, pattern: '^[a-z0-9][a-z0-9._-]{0,62}$', example: oncall, description: "The path that took the request. Present for `escalated` only." }
+        escalation_path_key: { type: string, pattern: '^[a-z0-9][a-z0-9._-]{0,62}$', example: oncall, description: "The path that took the request, or for `agent_owner` the fallback pinned beside the owner. Absent for `default_queue`." }
         escalation_path_name:
           type: string
           example: On-call engineers
-          description: "The name of the path revision that took the request. Present for `escalated` only."
-        escalation_path_revision_id: { type: string, format: uuid, description: "The path revision that was active at the time. Present for `escalated` only." }
-        pipeline_revision_id: { type: string, format: uuid, description: "The pipeline revision that routed the request. Present for `escalated` only." }
+          description: "The name of the path revision that took the request, or the fallback revision for `agent_owner`. Absent for `default_queue`."
+        escalation_path_revision_id: { type: string, format: uuid, description: "The path revision that was active at the time. Absent for `default_queue`, and for `agent_owner` when the fallback path had no active revision." }
+        pipeline_revision_id: { type: string, format: uuid, description: "The pipeline revision that routed the request. Absent for `default_queue`." }
         block_id:
           type: string
           format: uuid
           description: "The pipeline block that named the path. Present for `block_escalation` only."
+        agent_owner:
+          $ref: "#/components/schemas/ApprovalRoutingTarget"
+          description: "The person the request was sent to as the owner of the agent instance that made it. Present for `agent_owner` only."
+        agent_owner_fallback:
+          type: string
+          enum: [no_agent_owner, agent_owner_inactive, agent_owner_cannot_decide]
+          description: "Why a route that asks the agent's owner went to its fallback path when the request arrived. `no_agent_owner`: a service agent made it. `agent_owner_inactive`: the owner was suspended or removed. `agent_owner_cannot_decide`: the owner may not decide requests."
+        agent_owner_handed_off_at:
+          type: string
+          format: date-time
+          description: "When the agent's owner was suspended or removed and the fallback path took over the request. Present for `agent_owner` only."
         targets:
           type: array
-          description: "The people and teams the pinned path reaches for this request, in path order: the levels whose request conditions hold for it, plus both branches of any working-hours or urgency test, at every level regardless of timing. Only these people, and `added_reviewers`, may claim or decide. Empty for `default_queue`. Empty for `escalated` means the path reaches nobody for this request and only a break-glass reviewer may decide it."
+          description: "Who may claim or decide the request. For `agent_owner`, the owner alone until a handoff. Otherwise the people and teams the pinned path reaches for this request, in path order: the levels whose request conditions hold for it, plus both branches of any working-hours or urgency test, at every level regardless of timing. Only these people, and `added_reviewers`, may claim or decide. Empty for `default_queue`. Empty for `escalated` means the path reaches nobody for this request and only a break-glass reviewer may decide it."
           items: { $ref: "#/components/schemas/ApprovalRoutingTarget" }
         added_reviewers:
           type: array

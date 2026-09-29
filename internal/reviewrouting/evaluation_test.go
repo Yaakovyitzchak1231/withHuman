@@ -23,6 +23,17 @@ type pathReaderStub struct {
 	policyErr error
 	// askedTeams records which teams the service asked about.
 	askedTeams *[]domain.ID
+	// owners are the agent owners' standings keyed by membership;
+	// ownerErr fails the lookup instead.
+	owners   map[domain.ID]application.AgentOwnerStanding
+	ownerErr error
+}
+
+func (stub pathReaderStub) GetAgentOwnerStanding(_ context.Context, input application.GetAgentOwnerStandingInput) (application.AgentOwnerStanding, error) {
+	if stub.ownerErr != nil {
+		return application.AgentOwnerStanding{}, stub.ownerErr
+	}
+	return stub.owners[input.MembershipID], nil
 }
 
 func (stub pathReaderStub) GetActiveTeamEscalationPolicies(_ context.Context, input application.GetActiveTeamEscalationPoliciesInput) ([]domain.TeamEscalationPolicyRevision, error) {
@@ -427,5 +438,105 @@ func TestDecorateReadsABrokenConditionAsFalse(t *testing.T) {
 	reachable, _ := auditData(t, decorated)["reachable_targets"].([]any)
 	if len(reachable) != 1 || reachable[0] != "user:"+elseUser {
 		t.Fatalf("audit reachable_targets = %v, want the else branch", reachable)
+	}
+}
+
+func ownerInitialization(ownerID domain.ID) application.InitializeApprovalInput {
+	initialization := pendingInitialization(&application.HumanReviewRoute{
+		PathKey: "platform", AskAgentOwner: true, Reason: domain.RoutingReasonPipelineDefault,
+		PipelineRevisionID: domain.ID(uuid.NewString()),
+	})
+	initialization.Request.RequesterMembershipID = ownerID
+	return initialization
+}
+
+func TestDecorateSendsAnOwnerRouteToTheOwnerWithTheFallbackPinned(t *testing.T) {
+	ownerID := domain.ID(uuid.NewString())
+	pathRevision := domain.EscalationPathRevision{
+		ID: domain.ID(uuid.NewString()), OrganizationID: "organization-1", PathKey: "platform", Revision: 2, IsActive: true,
+	}
+	service := evaluationService(pathReaderStub{
+		revisions: map[string]domain.EscalationPathRevision{"platform": pathRevision},
+		owners:    map[domain.ID]application.AgentOwnerStanding{ownerID: {Active: true, CanDecide: true}},
+	})
+	decorated := service.Decorate(context.Background(), ownerInitialization(ownerID))
+	snapshot := decorated.Routing
+	if snapshot == nil || snapshot.Outcome != domain.RoutingAgentOwner || snapshot.AgentOwnerMembershipID != ownerID ||
+		snapshot.AgentOwnerFallback != "" || snapshot.Reason != domain.RoutingReasonPipelineDefault ||
+		snapshot.EscalationPathKey != "platform" || snapshot.EscalationPathRevisionID != pathRevision.ID {
+		t.Fatalf("snapshot = %+v", snapshot)
+	}
+	if data := auditData(t, decorated); data["outcome"] != "agent_owner" || data["agent_owner_membership_id"] != string(ownerID) {
+		t.Fatalf("audit data = %v", data)
+	}
+}
+
+func TestDecorateSendsAnOwnerRouteToItsFallbackWhenTheOwnerCannotTakeIt(t *testing.T) {
+	ownerID := domain.ID(uuid.NewString())
+	pathRevision := domain.EscalationPathRevision{
+		ID: domain.ID(uuid.NewString()), OrganizationID: "organization-1", PathKey: "platform", Revision: 1, IsActive: true,
+	}
+	for name, test := range map[string]struct {
+		owner    domain.ID
+		standing application.AgentOwnerStanding
+		err      error
+		reason   string
+	}{
+		"a service agent has no owner": {owner: "", reason: domain.AgentOwnerFallbackNoOwner},
+		"a suspended owner":            {owner: ownerID, standing: application.AgentOwnerStanding{}, reason: domain.AgentOwnerFallbackInactive},
+		"an owner who may not decide":  {owner: ownerID, standing: application.AgentOwnerStanding{Active: true}, reason: domain.AgentOwnerFallbackCannotDecide},
+		"an owner lookup that failed":  {owner: ownerID, err: errors.New("database down"), reason: ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			service := evaluationService(pathReaderStub{
+				revisions: map[string]domain.EscalationPathRevision{"platform": pathRevision},
+				owners:    map[domain.ID]application.AgentOwnerStanding{ownerID: test.standing},
+				ownerErr:  test.err,
+			})
+			decorated := service.Decorate(context.Background(), ownerInitialization(test.owner))
+			snapshot := decorated.Routing
+			if snapshot == nil || snapshot.Outcome != domain.RoutingEscalated || snapshot.AgentOwnerMembershipID != "" ||
+				snapshot.AgentOwnerFallback != test.reason || snapshot.EscalationPathRevisionID != pathRevision.ID {
+				t.Fatalf("snapshot = %+v", snapshot)
+			}
+		})
+	}
+}
+
+func TestDecorateKeepsTheOwnerWhenTheFallbackPathIsInactive(t *testing.T) {
+	ownerID := domain.ID(uuid.NewString())
+	service := evaluationService(pathReaderStub{
+		owners: map[domain.ID]application.AgentOwnerStanding{ownerID: {Active: true, CanDecide: true}},
+	})
+	decorated := service.Decorate(context.Background(), ownerInitialization(ownerID))
+	snapshot := decorated.Routing
+	if snapshot == nil || snapshot.Outcome != domain.RoutingAgentOwner || snapshot.AgentOwnerMembershipID != ownerID ||
+		snapshot.EscalationPathKey != "platform" || snapshot.EscalationPathRevisionID != "" {
+		t.Fatalf("snapshot = %+v", snapshot)
+	}
+
+	// Without an owner, the inactive fallback leaves the default queue,
+	// still saying why the owner was not asked.
+	decorated = service.Decorate(context.Background(), ownerInitialization(""))
+	if snapshot := decorated.Routing; snapshot.Outcome != domain.RoutingDefaultQueue ||
+		snapshot.Reason != domain.RoutingReasonPathInactive || snapshot.AgentOwnerFallback != domain.AgentOwnerFallbackNoOwner {
+		t.Fatalf("snapshot = %+v", snapshot)
+	}
+}
+
+func TestDecorateIgnoresTheOwnerWithoutAnOwnerRoute(t *testing.T) {
+	ownerID := domain.ID(uuid.NewString())
+	pathRevision := domain.EscalationPathRevision{
+		ID: domain.ID(uuid.NewString()), OrganizationID: "organization-1", PathKey: "platform", Revision: 1, IsActive: true,
+	}
+	service := evaluationService(pathReaderStub{
+		revisions: map[string]domain.EscalationPathRevision{"platform": pathRevision},
+		owners:    map[domain.ID]application.AgentOwnerStanding{ownerID: {Active: true, CanDecide: true}},
+	})
+	initialization := ownerInitialization(ownerID)
+	initialization.HumanReview.AskAgentOwner = false
+	decorated := service.Decorate(context.Background(), initialization)
+	if snapshot := decorated.Routing; snapshot.Outcome != domain.RoutingEscalated || snapshot.AgentOwnerMembershipID != "" || snapshot.AgentOwnerFallback != "" {
+		t.Fatalf("snapshot = %+v", snapshot)
 	}
 }

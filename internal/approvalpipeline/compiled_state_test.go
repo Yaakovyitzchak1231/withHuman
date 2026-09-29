@@ -75,7 +75,7 @@ func TestExecutionRequestPathSharesBoundedCompilationMiss(t *testing.T) {
 	management := NewManagementService(repository, NewCompiledPipelineState(repository, NewBlockRegistry()), fixedPipelineClock{now: now})
 	created, err := management.CreateRevision(context.Background(), pipelineManagerPrincipal("organization-1"), "billing", []approvalblock.Definition{
 		pipelineDefinition("approve", approvalblock.Approve, approvalblock.Field("/request/tool").Equals("deploy")),
-	}, "")
+	}, Route{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,13 +181,13 @@ func TestManagementRefreshesActivationRollbackAndDeactivation(t *testing.T) {
 	principal := pipelineManagerPrincipal("organization-1")
 	first, err := management.CreateRevision(context.Background(), principal, "billing", []approvalblock.Definition{
 		pipelineDefinition("first", approvalblock.Approve, approvalblock.Field("/request/tool").Equals("deploy")),
-	}, "")
+	}, Route{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	second, err := management.CreateRevision(context.Background(), principal, "billing", []approvalblock.Definition{
 		pipelineDefinition("second", approvalblock.Human, approvalblock.Field("/request/tool").Equals("deploy")),
-	}, "")
+	}, Route{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -302,7 +302,7 @@ func createActivePipeline(t *testing.T, repository *memoryPipelineRepository, ag
 	management := NewManagementService(repository, NewCompiledPipelineState(repository, NewBlockRegistry()), fixedPipelineClock{now: time.Unix(9_000, 0).UTC()})
 	created, err := management.CreateRevision(context.Background(), pipelineManagerPrincipal("organization-1"), agentSlug, []approvalblock.Definition{
 		pipelineDefinition(blockKey, approvalblock.Approve, approvalblock.Field("/request/tool").Equals("deploy")),
-	}, "")
+	}, Route{})
 	if err != nil {
 		t.Fatal(err)
 	}

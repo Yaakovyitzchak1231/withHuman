@@ -21,6 +21,9 @@ const (
 	// ClaimReleasedSignal tells the workflow a claim ended early so
 	// escalation resumes without waiting for the retrigger timer.
 	ClaimReleasedSignal = "claim_released"
+	// AgentOwnerHandoffSignal tells the workflow of an agent_owner request
+	// that the owner was deactivated, so it starts the pinned fallback.
+	AgentOwnerHandoffSignal = "agent_owner_deactivated"
 )
 
 type Temporal struct {
@@ -153,6 +156,28 @@ func (t *Temporal) SubmitClaimRelease(ctx context.Context, input application.Sub
 	})
 	signal := claimReleasedSignal{ClaimID: input.ClaimID, MDC: loggermdc.Propagated(loggermdc.From(ctx))}
 	err := t.client.SignalWorkflow(ctx, workflowID, "", ClaimReleasedSignal, signal)
+	var notFound *serviceerror.NotFound
+	if errors.As(err, &notFound) {
+		return nil
+	}
+	return err
+}
+
+// SubmitAgentOwnerHandoff signals that the request's agent owner was
+// deactivated. The handoff committed first, so the workflow reads it from
+// the store; a workflow that already closed has nothing left to hand off.
+func (t *Temporal) SubmitAgentOwnerHandoff(ctx context.Context, input application.SubmitAgentOwnerHandoffInput) error {
+	if err := input.Validate(); err != nil {
+		return err
+	}
+	workflowID := WorkflowID(input.OrganizationID, input.RequestID)
+	ctx = loggermdc.With(ctx, loggermdc.Fields{
+		loggermdc.KeyOrganizationID:    string(input.OrganizationID),
+		loggermdc.KeyApprovalRequestID: string(input.RequestID),
+		loggermdc.KeyWorkflowID:        workflowID,
+	})
+	signal := agentOwnerHandoffSignal{MDC: loggermdc.Propagated(loggermdc.From(ctx))}
+	err := t.client.SignalWorkflow(ctx, workflowID, "", AgentOwnerHandoffSignal, signal)
 	var notFound *serviceerror.NotFound
 	if errors.As(err, &notFound) {
 		return nil

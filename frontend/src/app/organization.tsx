@@ -37,7 +37,6 @@ import { useTitle } from "./use-title";
  * through extensions.organizationPolicyRows: core serves the knob and
  * the edition ships the keys it governs. */
 export interface OrganizationPolicyDraft {
-  allowSelfApproval: boolean;
   mfaMode: MFAMode;
   reauthSeconds: number;
   claimSeconds: number;
@@ -56,7 +55,6 @@ function seconds(goDuration: string, fallback: number): number {
 
 function fromWire(policy: OrganizationPolicy): OrganizationPolicyDraft {
   return {
-    allowSelfApproval: policy.allow_self_approval,
     mfaMode: policy.mfa_mode,
     reauthSeconds: seconds(policy.approval_reauth_window, 24 * 3600),
     claimSeconds: seconds(policy.claim_retrigger_window, 15 * 60),
@@ -71,9 +69,6 @@ function fromWire(policy: OrganizationPolicy): OrganizationPolicyDraft {
  * different knobs at once do not overwrite each other. */
 function patchBetween(saved: OrganizationPolicyDraft, draft: OrganizationPolicyDraft): Partial<OrganizationPolicy> {
   const patch: Partial<OrganizationPolicy> = {};
-  if (draft.allowSelfApproval !== saved.allowSelfApproval) {
-    patch.allow_self_approval = draft.allowSelfApproval;
-  }
   if (draft.mfaMode !== saved.mfaMode) patch.mfa_mode = draft.mfaMode;
   if (draft.reauthSeconds !== saved.reauthSeconds) {
     patch.approval_reauth_window = formatGoDuration(draft.reauthSeconds);
@@ -195,17 +190,6 @@ export function OrganizationScreen({
                 : "Who may decide a request, and how fresh their sign-in has to be. Only people who can change organization settings can edit these."
             }
           >
-            <SettingRow
-              label="Let people approve their own agents' requests"
-              description="Whether the creator of an agent can approve its requests."
-            >
-              <Switch
-                aria-label="Let people approve their own agents' requests"
-                checked={draft.allowSelfApproval}
-                disabled={!canEdit}
-                onCheckedChange={(next) => update({ allowSelfApproval: next })}
-              />
-            </SettingRow>
             <SettingRow
               label="Multi-factor authentication"
               description="Whether deciding a request requires a strong sign-in."

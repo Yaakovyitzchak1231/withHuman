@@ -42,6 +42,13 @@ type claimReleasedSignal struct {
 	MDC     loggermdc.Fields `json:"mdc,omitempty"`
 }
 
+// agentOwnerHandoffSignal says the owner of an agent_owner request was
+// deactivated. The handoff committed before the signal, so the workflow
+// loads the fallback program from the store.
+type agentOwnerHandoffSignal struct {
+	MDC loggermdc.Fields `json:"mdc,omitempty"`
+}
+
 type ApprovalWorkflowInput struct {
 	OrganizationID domain.ID `json:"organization_id"`
 	RequestID      domain.ID `json:"request_id"`
@@ -113,6 +120,7 @@ func ApprovalWorkflow(ctx workflow.Context, input ApprovalWorkflowInput) error {
 	cancelChannel := workflow.GetSignalChannel(ctx, CancelSignal)
 	claimReleasedChannel := workflow.GetSignalChannel(ctx, ClaimReleasedSignal)
 	slackDisconnectedChannel := workflow.GetSignalChannel(ctx, SlackDisconnectedSignal)
+	agentOwnerHandoffChannel := workflow.GetSignalChannel(ctx, AgentOwnerHandoffSignal)
 	deadline := request.DeadlineAt.Sub(workflow.Now(ctx))
 	if deadline < 0 {
 		deadline = 0
@@ -142,11 +150,13 @@ func ApprovalWorkflow(ctx workflow.Context, input ApprovalWorkflowInput) error {
 		claimReleased := false
 		cancelReady := false
 		escalationDue := false
+		handedOff := false
 		var disconnectedInstallation domain.ID
 		var signal decisionSignal
 		var claim claimSignal
 		var released claimReleasedSignal
 		var cancellation cancelSignal
+		var handoff agentOwnerHandoffSignal
 		selector.AddReceive(decisionChannel, func(channel workflow.ReceiveChannel, more bool) {
 			channel.Receive(ctx, &signal)
 			decisionReady = true
@@ -164,6 +174,10 @@ func ApprovalWorkflow(ctx workflow.Context, input ApprovalWorkflowInput) error {
 			cancelReady = true
 		})
 		selector.AddReceive(slackDisconnectedChannel, func(channel workflow.ReceiveChannel, more bool) { channel.Receive(ctx, &disconnectedInstallation) })
+		selector.AddReceive(agentOwnerHandoffChannel, func(channel workflow.ReceiveChannel, more bool) {
+			channel.Receive(ctx, &handoff)
+			handedOff = true
+		})
 		if claimTimer != nil {
 			selector.AddFuture(claimTimer, func(workflow.Future) { claimLapsed = true })
 		}
@@ -257,6 +271,35 @@ func ApprovalWorkflow(ctx workflow.Context, input ApprovalWorkflowInput) error {
 		}
 		if escalationDue {
 			driver.tick()
+			continue
+		}
+		if handedOff {
+			// The agent's owner was deactivated: their pages stop and the
+			// pinned fallback starts from its first node, as though the
+			// request had just been routed there. A request already
+			// walking a path ignores a repeated signal.
+			if driver != nil {
+				continue
+			}
+			handoffContext := replaceWorkflowMDC(ctx, handoff.MDC)
+			var fallback EscalationProgramOutput
+			if err := workflow.ExecuteActivity(handoffContext, (*Activities).LoadEscalationProgram, request).Get(handoffContext, &fallback); err != nil {
+				workflow.GetLogger(ctx).Warn("fallback escalation program unavailable; notifying every reviewer the routing now admits", "error", err.Error())
+			}
+			steps.cancel()
+			if fallback.Escalated {
+				driver = &escalationDriver{ctx: ctx, request: request, machine: escalation.NewMachine(fallback.Program), steps: steps}
+				driver.apply(driver.machine.Start(workflow.Now(ctx)))
+				if claimTimer != nil {
+					driver.pause()
+				}
+				continue
+			}
+			var plan []application.NotificationStep
+			if err := workflow.ExecuteActivity(handoffContext, (*Activities).PlanNotifications, request).Get(handoffContext, &plan); err != nil {
+				workflow.GetLogger(ctx).Warn("approval notification planning failed after the handoff; request remains in the review queue", "error", err.Error())
+			}
+			steps.spawn(plan)
 			continue
 		}
 		if deadlineReady {

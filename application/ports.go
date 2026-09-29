@@ -184,6 +184,14 @@ type ApprovalWorkflowOutboxRepository interface {
 	MarkApprovalWorkflowStarted(ctx context.Context, input MarkApprovalWorkflowStartedInput) error
 }
 
+// AgentOwnerHandoffOutboxRepository carries agent-owner handoffs, written
+// when an owner is suspended or deprovisioned, to the request workflows
+// through the same durable outbox as workflow starts.
+type AgentOwnerHandoffOutboxRepository interface {
+	ListAgentOwnerHandoffSignals(ctx context.Context, input ListAgentOwnerHandoffSignalsInput) ([]AgentOwnerHandoffSignal, error)
+	MarkAgentOwnerHandoffSignaled(ctx context.Context, input MarkAgentOwnerHandoffSignaledInput) error
+}
+
 // RequestApprovalPipelineRepository owns immutable block snapshots and
 // monotonically revisioned pipelines. Every lookup and mutation is scoped by
 // organization. Active switches use the expected active revision as their
@@ -207,6 +215,13 @@ type RequestApprovalPipelineRepository interface {
 // becomes durable or active.
 type RoutingTargetResolver interface {
 	ResolveRoutingTargets(context.Context, ResolveRoutingTargetsInput) (ResolvedRoutingTargets, error)
+}
+
+// AgentOwnerResolver answers whether the owner of a personal agent
+// instance can take a request routed to them. Routing asks it when a human
+// outcome names the agent-owner route.
+type AgentOwnerResolver interface {
+	GetAgentOwnerStanding(context.Context, GetAgentOwnerStandingInput) (AgentOwnerStanding, error)
 }
 
 // EscalationPathResolver reports which escalation path keys exist and
@@ -288,6 +303,9 @@ type LifecycleOrchestrator interface {
 	// SubmitClaimRelease tells the workflow a claim was released early so
 	// escalation resumes now rather than at the claim's retrigger time.
 	SubmitClaimRelease(ctx context.Context, input SubmitClaimReleaseInput) error
+	// SubmitAgentOwnerHandoff tells the workflow its agent's owner was
+	// deactivated, so it starts walking the pinned fallback path.
+	SubmitAgentOwnerHandoff(ctx context.Context, input SubmitAgentOwnerHandoffInput) error
 	Health(ctx context.Context) error
 }
 

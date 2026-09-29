@@ -1,6 +1,6 @@
 # withHuman: branch blocks in approval pipelines
 
-Status: accepted · Last updated: 2026-09-23
+Status: accepted · Last updated: 2026-09-29 (a branch's end may ask the agent's owner)
 
 > **Prototype.** Same caveat as
 > [00-general-design.md](00-general-design.md): everything here can change
@@ -241,6 +241,7 @@ pipeline default.
 | `config.blocks` | The branch's blocks, in order | 1 to 999 (with the branch, the pipeline's 1,000); any type, including `branch` |
 | `config.reason` | Recorded when no block in the branch decides | Required |
 | `config.escalation_path` | Where a request that runs out of the branch goes | Optional; the pipeline default when absent |
+| `config.ask_agent_owner` | Ask the agent's owner first, with `escalation_path` as the fallback ([06](06-routing-and-escalation.md#agent-owner-route)) | Optional; requires `escalation_path` |
 
 `config_version` is `1`. There is no `on_match`: a match always enters the
 branch. The Go DSL adds `approvalblock.DefineBranch(id, blocks, options...)`,

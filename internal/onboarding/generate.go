@@ -10,6 +10,7 @@ import (
 	"github.com/withHumanAI/withHuman/agentruntime"
 	"github.com/withHumanAI/withHuman/approvalblock"
 	"github.com/withHumanAI/withHuman/domain"
+	"github.com/withHumanAI/withHuman/internal/approvalpipeline"
 	"github.com/withHumanAI/withHuman/routing"
 )
 
@@ -96,7 +97,8 @@ func PathTargetsMembership(document routing.PathDocument, membershipID domain.ID
 // product quotes them inside sentences: the pipeline card lists them, and
 // a request's review says `"<name>" asked for a human` or `"<name>"
 // approved it`. Reasons are the full sentences shown under "Why this
-// needs a human".
+// needs a human". The runtime agents are personal, so the gate asks the
+// agent's owner, with the setup's path as the fallback.
 func PipelineBlocks(selected []string, pathKey string) []approvalblock.Definition {
 	tools := append([]string(nil), selected...)
 	sort.Strings(tools)
@@ -107,6 +109,7 @@ func PipelineBlocks(selected []string, pathKey string) []approvalblock.Definitio
 		approvalblock.Reason("This tool was suggested for human approval during the guided setup."),
 	)
 	gate.CEL.EscalationPath = pathKey
+	gate.CEL.AskAgentOwner = true
 	rest := approvalblock.DefineAlways(approveBlockID, approvalblock.Approve,
 		approvalblock.Name(approveBlockName),
 		approvalblock.Reason("This tool was not suggested for human approval during the guided setup."),
@@ -232,4 +235,11 @@ func testCommand(runtime string, tools []domain.OnboardingTool) (domain.Onboardi
 		return domain.OnboardingTestCommand{}, false
 	}
 	return domain.OnboardingTestCommand{Tool: chosen.Name, Command: command.Shell, Note: command.Note}, true
+}
+
+// PipelineDefault is the route a starting pipeline hands everything else
+// that needs a person: the agent's owner, with the setup's path as the
+// fallback for a request that arrives without one.
+func PipelineDefault(pathKey string) approvalpipeline.Route {
+	return approvalpipeline.Route{EscalationPath: pathKey, AskAgentOwner: true}
 }

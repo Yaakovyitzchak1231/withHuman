@@ -18,6 +18,15 @@ func validOptionalEscalationPathKey(value string) error {
 	return validEscalationPathKey(value)
 }
 
+// agentOwnerFallback refuses asking the agent's owner without the path a
+// request that has no owner falls back to.
+func agentOwnerFallback(pathKey string, askAgentOwner bool) error {
+	if askAgentOwner && pathKey == "" {
+		return invalidField("default escalation path", "is required as the fallback when the agent's owner is asked")
+	}
+	return nil
+}
+
 func positiveDocumentVersion(version int) error {
 	if version <= 0 {
 		return invalidField("document version", "must be positive")
@@ -40,12 +49,15 @@ func validPathKeys(keys []string) error {
 }
 
 // HumanReviewRoute is what the pipeline resolved for a request that needs
-// a human: the escalation path its terminal block named, else the
-// effective pipeline default, else none. The router turns it into the
+// a human: the route its terminal block named, else the effective
+// pipeline default, else none. The router turns it into the
 // pinned routing snapshot. PipelineRevisionID and BlockID are evidence of
 // where the path came from.
 type HumanReviewRoute struct {
-	PathKey            string
+	PathKey string
+	// AskAgentOwner sends the request to the agent's owner first; PathKey
+	// is then the fallback for a request without an owner able to decide.
+	AskAgentOwner      bool
 	Reason             string
 	PipelineRevisionID domain.ID
 	BlockID            domain.ID
@@ -351,15 +363,46 @@ type ApprovalRoutingTarget struct {
 type ApprovalRoutingView struct {
 	domain.ApprovalRequestRouting
 	EscalationPathName string
-	// Targets is who the pinned path reaches for this request, in path
-	// order: only these people, plus the added reviewers, may claim or
-	// decide. Empty for a default queue snapshot; empty for an escalated
-	// one means the path reaches nobody and only a break-glass reviewer
-	// may decide.
+	// AgentOwnerName is the display name of an agent_owner snapshot's
+	// owner. AgentOwnerHandedOffAt is set once the owner was deactivated
+	// and the request moved to the pinned fallback.
+	AgentOwnerName        string
+	AgentOwnerHandedOffAt *time.Time
+	// Targets is who current routing admits, in path order: the owner of
+	// an agent_owner snapshot until a handoff, otherwise who the pinned
+	// path reaches. Only these people, plus the added reviewers, may claim
+	// or decide. Empty for a default queue snapshot; empty for an
+	// escalated one means the path reaches nobody and only a break-glass
+	// reviewer may decide.
 	Targets []ApprovalRoutingTarget
 	// PinnedTeamPolicies names the team policy revisions the request runs.
 	PinnedTeamPolicies []PinnedTeamPolicy
 	// Escalation is the executor's current position, nil before the first
 	// tick or for a default queue snapshot.
 	Escalation *EscalationProgress
+}
+
+// GetAgentOwnerStandingInput asks whether one membership, the owner of the
+// personal agent instance that raised RequestID, can take the request.
+type GetAgentOwnerStandingInput struct {
+	OrganizationID domain.ID
+	MembershipID   domain.ID
+	RequestID      domain.ID
+}
+
+func (input GetAgentOwnerStandingInput) Validate() error {
+	return firstError([]error{
+		requiredID("organization ID", input.OrganizationID),
+		requiredID("membership ID", input.MembershipID),
+		requiredID("request ID", input.RequestID),
+	})
+}
+
+// AgentOwnerStanding is what routing needs to know about an agent's owner:
+// whether their membership and account are active, and whether they hold
+// request.decide for the request. An owner who cannot decide is never
+// routed to, so a request never waits on someone who cannot act.
+type AgentOwnerStanding struct {
+	Active    bool
+	CanDecide bool
 }

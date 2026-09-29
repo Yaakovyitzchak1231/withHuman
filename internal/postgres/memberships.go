@@ -163,20 +163,27 @@ func (s *Store) SetMembershipStatus(ctx context.Context, input application.SetMe
 			return domain.Membership{}, err
 		}
 	}
-	// Removal takes the member's personal API keys with them: keys are
-	// part of "signed out everywhere". Suspension leaves them, because
-	// resolution refuses an inactive membership and reactivation brings
-	// them back.
-	if input.Status == domain.MembershipDeprovisioned {
+	if input.Status != domain.MembershipActive {
 		actorID, err := membershipActorID(ctx, tx, input.OrganizationID, input.ActorMembershipID)
 		if err != nil {
 			return domain.Membership{}, err
 		}
-		if err := s.revokeMembershipAPIKeys(ctx, tx, input.OrganizationID, input.MembershipID, domain.ActorHuman, actorID, input.Now); err != nil {
+		// A member who can no longer decide hands the requests routed to
+		// them as their agent's owner to each request's fallback path.
+		if err := s.handOffAgentOwnerRequests(ctx, tx, input.OrganizationID, input.MembershipID, domain.ActorHuman, actorID, input.Now); err != nil {
 			return domain.Membership{}, err
 		}
-		if err := s.disableMembershipAgentInstances(ctx, tx, input.OrganizationID, input.MembershipID, domain.ActorHuman, actorID, input.Now); err != nil {
-			return domain.Membership{}, err
+		// Removal takes the member's personal API keys with them: keys are
+		// part of "signed out everywhere". Suspension leaves them, because
+		// resolution refuses an inactive membership and reactivation brings
+		// them back.
+		if input.Status == domain.MembershipDeprovisioned {
+			if err := s.revokeMembershipAPIKeys(ctx, tx, input.OrganizationID, input.MembershipID, domain.ActorHuman, actorID, input.Now); err != nil {
+				return domain.Membership{}, err
+			}
+			if err := s.disableMembershipAgentInstances(ctx, tx, input.OrganizationID, input.MembershipID, domain.ActorHuman, actorID, input.Now); err != nil {
+				return domain.Membership{}, err
+			}
 		}
 	}
 	eventType := map[domain.MembershipStatus]string{

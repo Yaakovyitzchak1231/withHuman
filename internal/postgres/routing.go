@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/withHumanAI/withHuman/application"
+	"github.com/withHumanAI/withHuman/authz"
 	"github.com/withHumanAI/withHuman/domain"
 	"github.com/withHumanAI/withHuman/internal/escalation"
 	"github.com/withHumanAI/withHuman/routing"
@@ -407,17 +408,24 @@ func (s *Store) GetApprovalRouting(ctx context.Context, input application.GetApp
 	var view application.ApprovalRoutingView
 	var requestID, organizationID string
 	var pathKey, pathRevisionID, pipelineRevisionID, blockID *string
+	var ownerID, ownerFallback string
 	var document, facts []byte
 	err := s.pool.QueryRow(ctx, `SELECT arr.request_id::text, arr.organization_id::text, arr.outcome, arr.reason,
 		arr.escalation_path_key, arr.escalation_path_revision_id::text, arr.pipeline_revision_id::text,
 		arr.block_id::text, arr.urgency, arr.created_at, COALESCE(ep.name, ''),
-		COALESCE(ep.document, 'null'::jsonb), arr.facts
+		COALESCE(ep.document, 'null'::jsonb), arr.facts,
+		COALESCE(arr.agent_owner_membership_id::text, ''), COALESCE(arr.agent_owner_fallback, ''),
+		COALESCE(ou.display_name, ''), h.created_at
 		FROM approval_request_routing arr
 		LEFT JOIN escalation_paths ep ON ep.id = arr.escalation_path_revision_id AND ep.organization_id = arr.organization_id
+		LEFT JOIN memberships om ON om.id = arr.agent_owner_membership_id AND om.organization_id = arr.organization_id
+		LEFT JOIN users ou ON ou.id = om.user_id
+		LEFT JOIN approval_request_agent_owner_handoffs h ON h.request_id = arr.request_id AND h.organization_id = arr.organization_id
 		WHERE arr.organization_id = $1 AND arr.request_id = $2`,
 		input.OrganizationID, input.RequestID).Scan(&requestID, &organizationID, &view.Outcome,
 		&view.Reason, &pathKey, &pathRevisionID, &pipelineRevisionID, &blockID,
-		&view.Urgency, &view.CreatedAt, &view.EscalationPathName, &document, &facts)
+		&view.Urgency, &view.CreatedAt, &view.EscalationPathName, &document, &facts,
+		&ownerID, &ownerFallback, &view.AgentOwnerName, &view.AgentOwnerHandedOffAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return application.ApprovalRoutingView{}, domain.ErrNotFound
 	}
@@ -429,8 +437,15 @@ func (s *Store) GetApprovalRouting(ctx context.Context, input application.GetApp
 	if view.Facts, err = decodeRoutingFacts(facts); err != nil {
 		return application.ApprovalRoutingView{}, err
 	}
+	view.AgentOwnerMembershipID, view.AgentOwnerFallback = domain.ID(ownerID), ownerFallback
 	view.Targets = make([]application.ApprovalRoutingTarget, 0)
-	if view.Outcome == domain.RoutingEscalated && string(document) != "null" {
+	owner, escalated := effectiveRouting(string(view.Outcome), ownerID, view.AgentOwnerHandedOffAt != nil, document)
+	switch {
+	case owner != "":
+		view.Targets = append(view.Targets, application.ApprovalRoutingTarget{
+			Type: string(routing.TargetUser), ID: owner, Name: view.AgentOwnerName,
+		})
+	case escalated:
 		if view.Targets, err = resolveRoutingTargets(ctx, s.pool, input.OrganizationID, document, facts); err != nil {
 			return application.ApprovalRoutingView{}, err
 		}
@@ -503,11 +518,12 @@ func insertApprovalRouting(ctx context.Context, tx pgx.Tx, routing domain.Approv
 	}
 	_, err := tx.Exec(ctx, `INSERT INTO approval_request_routing
 		(request_id, organization_id, outcome, reason, escalation_path_key, escalation_path_revision_id,
-		 pipeline_revision_id, block_id, urgency, created_at, facts)
+		 pipeline_revision_id, block_id, urgency, created_at, facts, agent_owner_membership_id, agent_owner_fallback)
 		VALUES ($1, $2, $3, $4, NULLIF($5, ''), NULLIF($6::text, '')::uuid, NULLIF($7::text, '')::uuid,
-		        NULLIF($8::text, '')::uuid, $9, $10, $11)`,
+		        NULLIF($8::text, '')::uuid, $9, $10, $11, NULLIF($12::text, '')::uuid, NULLIF($13, ''))`,
 		routing.RequestID, routing.OrganizationID, routing.Outcome, routing.Reason, routing.EscalationPathKey,
-		routing.EscalationPathRevisionID, routing.PipelineRevisionID, routing.BlockID, routing.Urgency, routing.CreatedAt, facts)
+		routing.EscalationPathRevisionID, routing.PipelineRevisionID, routing.BlockID, routing.Urgency, routing.CreatedAt, facts,
+		routing.AgentOwnerMembershipID, routing.AgentOwnerFallback)
 	if err != nil {
 		return err
 	}
@@ -526,37 +542,63 @@ func insertApprovalRouting(ctx context.Context, tx pgx.Tx, routing domain.Approv
 
 // pinnedRouting is an escalated snapshot's pinned path document, the
 // grammar version it was written in, the request-condition facts pinned
-// with it, and the request's urgency.
+// with it, and the request's urgency. agentOwnerID is set instead of the
+// document while an agent_owner snapshot still reaches its owner.
 type pinnedRouting struct {
 	document        []byte
 	documentVersion int
 	facts           []byte
 	urgency         string
+	agentOwnerID    domain.ID
 }
 
-// readPinnedRouting reads the request's snapshot; escalated reports
-// whether a path is pinned. A missing row reads as the default queue.
+// readPinnedRouting reads the request's current routing; escalated
+// reports whether a path is walked. An agent_owner snapshot reports its
+// owner in agentOwnerID until a handoff, and afterwards reads as the
+// escalated snapshot of its pinned fallback. A missing row reads as the
+// default queue.
 func readPinnedRouting(ctx context.Context, q routingQuerier, organizationID, requestID domain.ID) (pinnedRouting, bool, error) {
-	var outcome, urgency string
+	var outcome, urgency, ownerID string
 	var document, facts []byte
 	var documentVersion int
+	var handedOff bool
 	err := q.QueryRow(ctx, `SELECT arr.outcome, arr.urgency, arr.facts, COALESCE(ep.document, 'null'::jsonb),
-		COALESCE(ep.document_version, 0)
+		COALESCE(ep.document_version, 0), COALESCE(arr.agent_owner_membership_id::text, ''), h.request_id IS NOT NULL
 		FROM approval_request_routing arr
 		LEFT JOIN escalation_paths ep
 		  ON ep.id = arr.escalation_path_revision_id AND ep.organization_id = arr.organization_id
+		LEFT JOIN approval_request_agent_owner_handoffs h
+		  ON h.request_id = arr.request_id AND h.organization_id = arr.organization_id
 		WHERE arr.organization_id = $1 AND arr.request_id = $2`,
-		organizationID, requestID).Scan(&outcome, &urgency, &facts, &document, &documentVersion)
+		organizationID, requestID).Scan(&outcome, &urgency, &facts, &document, &documentVersion, &ownerID, &handedOff)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return pinnedRouting{}, false, nil
 	}
 	if err != nil {
 		return pinnedRouting{}, false, err
 	}
-	if domain.RoutingOutcome(outcome) != domain.RoutingEscalated || string(document) == "null" {
-		return pinnedRouting{urgency: urgency}, false, nil
+	owner, escalated := effectiveRouting(outcome, ownerID, handedOff, document)
+	if !escalated {
+		return pinnedRouting{urgency: urgency, agentOwnerID: owner}, false, nil
 	}
 	return pinnedRouting{document: document, documentVersion: documentVersion, facts: facts, urgency: urgency}, true, nil
+}
+
+// effectiveRouting reads a snapshot row the way every reader must: an
+// agent_owner snapshot admits its owner until a handoff and then runs its
+// pinned fallback like an escalated snapshot, and a snapshot whose path
+// document is missing reads as the default queue.
+func effectiveRouting(outcome, ownerID string, handedOff bool, document []byte) (domain.ID, bool) {
+	switch domain.RoutingOutcome(outcome) {
+	case domain.RoutingAgentOwner:
+		if !handedOff {
+			return domain.ID(ownerID), false
+		}
+	case domain.RoutingEscalated:
+	default:
+		return "", false
+	}
+	return "", len(document) > 0 && string(document) != "null"
 }
 
 // decodeRoutingFacts reads a snapshot's facts column. An empty column
@@ -570,6 +612,15 @@ func decodeRoutingFacts(facts []byte) (map[string]bool, error) {
 		return nil, fmt.Errorf("pinned routing facts are unreadable: %w", err)
 	}
 	return decoded, nil
+}
+
+// pinnedTargets splits the targets current routing admits by type: the
+// owner of an agent_owner snapshot, or what the pinned path reaches.
+func pinnedTargets(pinned pinnedRouting) (userIDs, teamIDs []domain.ID, err error) {
+	if pinned.agentOwnerID != "" {
+		return []domain.ID{pinned.agentOwnerID}, make([]domain.ID, 0), nil
+	}
+	return reachableDocumentTargets(pinned.document, pinned.facts)
 }
 
 // reachableDocumentTargets parses a pinned escalation path document and
@@ -730,4 +781,32 @@ func lockEscalationPath(ctx context.Context, tx pgx.Tx, organizationID domain.ID
 	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('escalation_path:' || $1::text || ':' || $2::text, 0))`,
 		organizationID, pathKey)
 	return err
+}
+
+// GetAgentOwnerStanding reads whether a personal agent's owner can take a
+// request: an active membership on an active account, holding
+// request.decide for the request under their current grants. A membership
+// that does not exist reads as inactive.
+func (s *Store) GetAgentOwnerStanding(ctx context.Context, input application.GetAgentOwnerStandingInput) (application.AgentOwnerStanding, error) {
+	if err := input.Validate(); err != nil {
+		return application.AgentOwnerStanding{}, err
+	}
+	var active bool
+	err := s.pool.QueryRow(ctx, `SELECT m.status = 'active' AND u.status = 'active'
+		FROM memberships m JOIN users u ON u.id = m.user_id
+		WHERE m.organization_id = $1 AND m.id = $2`, input.OrganizationID, input.MembershipID).Scan(&active)
+	if errors.Is(err, pgx.ErrNoRows) || (err == nil && !active) {
+		return application.AgentOwnerStanding{}, nil
+	}
+	if err != nil {
+		return application.AgentOwnerStanding{}, err
+	}
+	grants, err := loadGrants(ctx, s.pool, input.OrganizationID, domain.PrincipalMembership, input.MembershipID)
+	if err != nil {
+		return application.AgentOwnerStanding{}, err
+	}
+	return application.AgentOwnerStanding{
+		Active:    true,
+		CanDecide: authz.Holds(grants, domain.PermissionRequestDecide, domain.RequestResource(input.RequestID)),
+	}, nil
 }

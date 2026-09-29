@@ -81,7 +81,7 @@ function targetName(type: ReviewerTarget["type"], id: string, directory: Reviewe
 }
 
 /* A level target on the wire. A broadcast carries no id; an escalation
- * path is never a level target and is dropped. */
+ * path or an agent-owner route is never a level target and is dropped. */
 export function targetToWire(target: ReviewerTarget): EscalationTargetWire | null {
   switch (target.type) {
     case "broadcast":
@@ -90,6 +90,7 @@ export function targetToWire(target: ReviewerTarget): EscalationTargetWire | nul
     case "team":
       return { type: target.type, id: target.id };
     case "escalation_path":
+    case "agent_owner":
       return null;
   }
 }

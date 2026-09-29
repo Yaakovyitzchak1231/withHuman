@@ -193,7 +193,7 @@ func TestApprovalPolicyKnobsAgainstRealPostgres(t *testing.T) {
 			t.Fatalf("GetOrganizationPolicy: %v", err)
 		}
 		updated, err := store.UpdateOrganizationPolicy(ctx, application.UpdateOrganizationPolicyInput{
-			OrganizationID: orgID, AllowSelfApproval: current.AllowSelfApproval, MFAMode: current.MFAMode,
+			OrganizationID: orgID, MFAMode: current.MFAMode,
 			ApprovalReauthWindow: current.ApprovalReauthWindow, ClaimRetriggerWindow: current.ClaimRetriggerWindow,
 			UnroutedRequests: unrouted, RequestVisibility: visibility,
 			ActorMembershipID: ownerMembershipID, Now: now,
@@ -213,7 +213,7 @@ func TestApprovalPolicyKnobsAgainstRealPostgres(t *testing.T) {
 			t.Fatalf("default knobs = %+v", defaults)
 		}
 		updated, err := store.UpdateOrganizationPolicy(ctx, application.UpdateOrganizationPolicyInput{
-			OrganizationID: orgID, AllowSelfApproval: true, MFAMode: domain.MFAReviewersRequired,
+			OrganizationID: orgID, MFAMode: domain.MFAReviewersRequired,
 			ApprovalReauthWindow: 30 * time.Minute, ClaimRetriggerWindow: 10 * time.Minute,
 			UnroutedRequests: domain.UnroutedBreakGlassOnly, RequestVisibility: domain.VisibilityRoutedOnly,
 			ActorMembershipID: ownerMembershipID, Now: now,
@@ -225,7 +225,7 @@ func TestApprovalPolicyKnobsAgainstRealPostgres(t *testing.T) {
 		if err != nil || read != updated {
 			t.Fatalf("read back = %+v, %v; updated = %+v", read, err, updated)
 		}
-		if !read.AllowSelfApproval || read.MFAMode != domain.MFAReviewersRequired || read.ApprovalReauthWindow != 30*time.Minute ||
+		if read.MFAMode != domain.MFAReviewersRequired || read.ApprovalReauthWindow != 30*time.Minute ||
 			read.ClaimRetriggerWindow != 10*time.Minute || read.UnroutedRequests != domain.UnroutedBreakGlassOnly ||
 			read.RequestVisibility != domain.VisibilityRoutedOnly || read.SessionMaxAge != defaults.SessionMaxAge ||
 			read.AdmissionMode != defaults.AdmissionMode {
@@ -241,7 +241,7 @@ func TestApprovalPolicyKnobsAgainstRealPostgres(t *testing.T) {
 		if before["unrouted_requests"] != "any_reviewer" || after["unrouted_requests"] != "break_glass_only" ||
 			before["request_visibility"] != "all_readers" || after["request_visibility"] != "routed_only" ||
 			before["mfa_mode"] != "optional" || after["mfa_mode"] != "reviewers_required" ||
-			before["allow_self_approval"] != false || after["allow_self_approval"] != true ||
+			before["allow_self_approval"] != nil || after["allow_self_approval"] != nil ||
 			after["approval_reauth_window"] != "30m0s" || after["claim_retrigger_window"] != "10m0s" {
 			t.Fatalf("audit data = %v", data)
 		}
@@ -255,7 +255,7 @@ func TestApprovalPolicyKnobsAgainstRealPostgres(t *testing.T) {
 		}
 		// Restore the defaults so the later subtests start from them.
 		if _, err := store.UpdateOrganizationPolicy(ctx, application.UpdateOrganizationPolicyInput{
-			OrganizationID: orgID, AllowSelfApproval: defaults.AllowSelfApproval, MFAMode: defaults.MFAMode,
+			OrganizationID: orgID, MFAMode: defaults.MFAMode,
 			ApprovalReauthWindow: defaults.ApprovalReauthWindow, ClaimRetriggerWindow: defaults.ClaimRetriggerWindow,
 			UnroutedRequests: defaults.UnroutedRequests, RequestVisibility: defaults.RequestVisibility,
 			ActorMembershipID: ownerMembershipID, Now: now,

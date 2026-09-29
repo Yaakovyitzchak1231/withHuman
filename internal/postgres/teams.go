@@ -571,9 +571,10 @@ func missingIDs(requested []domain.ID, found []string) []domain.ID {
 // all at once, with the contact details delivery needs. It is the plan
 // for requests the per-level executor does not walk.
 //
-// An escalated routing snapshot resolves to the targets the pinned path
-// reaches under the pinned facts plus the reviewers added to the request
-// since, with team membership resolved at call time; a path that reaches
+// An agent_owner snapshot resolves to the owner plus the added reviewers
+// until a handoff. An escalated routing snapshot resolves to the targets
+// the pinned path reaches under the pinned facts plus the reviewers added
+// to the request since, with team membership resolved at call time; a path that reaches
 // nobody resolves to the added reviewers alone. A request that fell to
 // the default queue, or that carries no snapshot at all, resolves to
 // every active member who may decide: the queue's promise is that the
@@ -596,7 +597,7 @@ func (s *Store) ResolveApprovalRecipients(ctx context.Context, input application
 		Urgency:    domain.NotificationUrgency(urgency),
 		Recipients: make([]application.NotificationRecipient, 0),
 	}
-	if !escalated {
+	if !escalated && pinned.agentOwnerID == "" {
 		fallback, err := s.eligibleApprovalRecipients(ctx, input.OrganizationID)
 		if err != nil {
 			return application.ApprovalRecipients{}, err
@@ -605,7 +606,10 @@ func (s *Store) ResolveApprovalRecipients(ctx context.Context, input application
 		return recipients, s.attachRecipientMethods(ctx, input.OrganizationID, recipients.Recipients)
 	}
 	recipients.Outcome = domain.RoutingEscalated
-	userIDs, teamIDs, err := reachableDocumentTargets(pinned.document, pinned.facts)
+	if pinned.agentOwnerID != "" {
+		recipients.Outcome = domain.RoutingAgentOwner
+	}
+	userIDs, teamIDs, err := pinnedTargets(pinned)
 	if err != nil {
 		return application.ApprovalRecipients{}, err
 	}

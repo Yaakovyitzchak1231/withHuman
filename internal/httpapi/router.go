@@ -1014,11 +1014,13 @@ func (a *API) installRequestApprovalPipelineRoutes(router *gin.RouterGroup) {
 type requestApprovalPipelineDocumentRequest struct {
 	Blocks                []approvalblock.Definition `json:"blocks"`
 	DefaultEscalationPath string                     `json:"default_escalation_path,omitempty"`
+	DefaultAskAgentOwner  bool                       `json:"default_ask_agent_owner,omitempty"`
 }
 
 type requestApprovalPipelinePreviewRequest struct {
 	Blocks                []approvalblock.Definition `json:"blocks"`
 	DefaultEscalationPath string                     `json:"default_escalation_path,omitempty"`
+	DefaultAskAgentOwner  bool                       `json:"default_ask_agent_owner,omitempty"`
 	Sample                struct {
 		Request struct {
 			Tool           string          `json:"tool" binding:"required"`
@@ -1067,7 +1069,9 @@ func (a *API) previewRequestApprovalPipeline(c *gin.Context) {
 		a.writeError(c, fmt.Errorf("blocks are required: %w", domain.ErrInvalid))
 		return
 	}
-	result, err := a.pipelines.Preview(c.Request.Context(), currentPrincipal(c), domain.AgentSlug(c.Param("agent_slug")), request.Blocks, request.DefaultEscalationPath, approvalpipeline.PreviewSample{
+	result, err := a.pipelines.Preview(c.Request.Context(), currentPrincipal(c), domain.AgentSlug(c.Param("agent_slug")), request.Blocks, approvalpipeline.Route{
+		EscalationPath: request.DefaultEscalationPath, AskAgentOwner: request.DefaultAskAgentOwner,
+	}, approvalpipeline.PreviewSample{
 		Request: approvalpipeline.BlockRequest{
 			Tool: request.Sample.Request.Tool, Server: request.Sample.Request.Server, Arguments: request.Sample.Request.Arguments,
 			AgentReasoning: request.Sample.Request.AgentReasoning, Context: request.Sample.Request.Context,
@@ -1103,7 +1107,9 @@ func (a *API) createRequestApprovalPipelineRevision(c *gin.Context) {
 		a.writeError(c, fmt.Errorf("blocks are required: %w", domain.ErrInvalid))
 		return
 	}
-	revision, err := a.pipelines.CreateRevision(c.Request.Context(), currentPrincipal(c), domain.AgentSlug(c.Param("agent_slug")), request.Blocks, request.DefaultEscalationPath)
+	revision, err := a.pipelines.CreateRevision(c.Request.Context(), currentPrincipal(c), domain.AgentSlug(c.Param("agent_slug")), request.Blocks, approvalpipeline.Route{
+		EscalationPath: request.DefaultEscalationPath, AskAgentOwner: request.DefaultAskAgentOwner,
+	})
 	if err != nil {
 		a.writeError(c, err)
 		return
@@ -1548,7 +1554,7 @@ func WriteError(c *gin.Context, logger *slog.Logger, err error) {
 		status, errorType, code = http.StatusForbidden, "authorization", "api_key_scoping_unavailable"
 	case errors.Is(err, domain.ErrAPIKeyNotAllowed):
 		status, errorType, code = http.StatusForbidden, "authorization", "api_key_not_allowed"
-	case errors.Is(err, domain.ErrForbidden), errors.Is(err, domain.ErrMembershipInactive), errors.Is(err, domain.ErrAgentInactive), errors.Is(err, domain.ErrAuthenticationStale), errors.Is(err, domain.ErrAuthenticationWeak), errors.Is(err, domain.ErrSelfApproval), errors.Is(err, domain.ErrNotTargeted):
+	case errors.Is(err, domain.ErrForbidden), errors.Is(err, domain.ErrMembershipInactive), errors.Is(err, domain.ErrAgentInactive), errors.Is(err, domain.ErrAuthenticationStale), errors.Is(err, domain.ErrAuthenticationWeak), errors.Is(err, domain.ErrNotTargeted):
 		status, errorType, code = http.StatusForbidden, "authorization", "forbidden"
 	case errors.Is(err, domain.ErrNotFound):
 		status, errorType, code = http.StatusNotFound, "not_found", "not_found"

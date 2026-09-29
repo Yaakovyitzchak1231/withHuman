@@ -34,7 +34,6 @@ function OrganizationKeysRow({ draft, update, canEdit }: OrganizationPolicyRowPr
 
 const policy: OrganizationPolicy = {
   organization_api_keys_allowed: false,
-  allow_self_approval: false,
   mfa_mode: "optional",
   approval_reauth_window: "24h0m0s",
   claim_retrigger_window: "15m0s",

@@ -56,7 +56,7 @@ func TestAlwaysExecutionAndPreview(t *testing.T) {
 				t.Fatalf("wrong decision: %+v", result)
 			}
 			management := NewManagementService(repository, NewCompiledPipelineState(repository, NewBlockRegistry()), fixedPipelineClock{now: now})
-			preview, err := management.Preview(context.Background(), pipelineManagerPrincipal("organization-1"), "billing", definitions, "", PreviewSample{Request: BlockRequest{Tool: "deploy", Arguments: json.RawMessage(`{}`)}, Agent: BlockAgent{Slug: "billing", Name: "Billing"}})
+			preview, err := management.Preview(context.Background(), pipelineManagerPrincipal("organization-1"), "billing", definitions, Route{}, PreviewSample{Request: BlockRequest{Tool: "deploy", Arguments: json.RawMessage(`{}`)}, Agent: BlockAgent{Slug: "billing", Name: "Billing"}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -75,7 +75,7 @@ func TestEarlierDecisionOrErrorStopsBeforeAlways(t *testing.T) {
 		t.Run(first.ID, func(t *testing.T) {
 			repository := newMemoryPipelineRepository()
 			service := NewManagementService(repository, NewCompiledPipelineState(repository, NewBlockRegistry()), fixedPipelineClock{now: time.Unix(1000, 0).UTC()})
-			result, err := service.Preview(context.Background(), pipelineManagerPrincipal("organization-1"), "billing", []approvalblock.Definition{first, alwaysDefinition("remaining", approvalblock.Approve)}, "", PreviewSample{Request: BlockRequest{Tool: "deploy", Arguments: json.RawMessage(`{"amount":"invalid"}`)}, Agent: BlockAgent{Slug: "billing", Name: "Billing"}})
+			result, err := service.Preview(context.Background(), pipelineManagerPrincipal("organization-1"), "billing", []approvalblock.Definition{first, alwaysDefinition("remaining", approvalblock.Approve)}, Route{}, PreviewSample{Request: BlockRequest{Tool: "deploy", Arguments: json.RawMessage(`{"amount":"invalid"}`)}, Agent: BlockAgent{Slug: "billing", Name: "Billing"}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -90,7 +90,7 @@ func TestAlwaysOrganizationPreemptsAgent(t *testing.T) {
 	now := time.Unix(1000, 0).UTC()
 	repository := activeExecutionPipeline(t, now, "", []approvalblock.Definition{alwaysDefinition("organization", approvalblock.Approve)})
 	management := NewManagementService(repository, NewCompiledPipelineState(repository, NewBlockRegistry()), fixedPipelineClock{now: now})
-	created, err := management.CreateRevision(context.Background(), pipelineManagerPrincipal("organization-1"), "billing", []approvalblock.Definition{alwaysDefinition("agent", approvalblock.Deny)}, "")
+	created, err := management.CreateRevision(context.Background(), pipelineManagerPrincipal("organization-1"), "billing", []approvalblock.Definition{alwaysDefinition("agent", approvalblock.Deny)}, Route{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +121,7 @@ func TestAlwaysAfterAsyncResume(t *testing.T) {
 	created, err := management.CreateRevision(context.Background(), pipelineManagerPrincipal("organization-1"), "billing", []approvalblock.Definition{
 		scriptedDefinition(),
 		alwaysDefinition("remaining", approvalblock.Deny), alwaysDefinition("unreachable", approvalblock.Approve),
-	}, "")
+	}, Route{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,11 +159,11 @@ func TestAlwaysReferencesAndUnreachableValidation(t *testing.T) {
 	block := alwaysDefinition("remaining", approvalblock.Human)
 	block.Always.EscalationPath = "payments"
 	principal := pipelineManagerPrincipal("organization-1")
-	if _, err := service.CreateRevision(context.Background(), principal, "billing", []approvalblock.Definition{block}, ""); err == nil {
+	if _, err := service.CreateRevision(context.Background(), principal, "billing", []approvalblock.Definition{block}, Route{}); err == nil {
 		t.Fatal("missing path accepted")
 	}
 	resolver.resolved = application.ResolvedEscalationPaths{}
-	created, err := service.CreateRevision(context.Background(), principal, "billing", []approvalblock.Definition{block}, "")
+	created, err := service.CreateRevision(context.Background(), principal, "billing", []approvalblock.Definition{block}, Route{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +176,7 @@ func TestAlwaysReferencesAndUnreachableValidation(t *testing.T) {
 		t.Fatalf("path dependency lost: %+v", refs)
 	}
 	invalid := alwaysDefinition("unreachable", approvalblock.Next)
-	if _, err := service.CreateRevision(context.Background(), principal, "billing", []approvalblock.Definition{block, invalid}, ""); err == nil {
+	if _, err := service.CreateRevision(context.Background(), principal, "billing", []approvalblock.Definition{block, invalid}, Route{}); err == nil {
 		t.Fatal("invalid unreachable block accepted")
 	}
 }

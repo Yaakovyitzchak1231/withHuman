@@ -54,9 +54,9 @@ type AgentMinter interface {
 // provisioning and the assistant's test check need.
 type PipelineManager interface {
 	GetActive(ctx context.Context, principal domain.Principal, agentSlug domain.AgentSlug) (approvalpipeline.PipelineRevision, error)
-	CreateRevision(ctx context.Context, principal domain.Principal, agentSlug domain.AgentSlug, definitions []approvalblock.Definition, defaultEscalationPath string) (approvalpipeline.PipelineRevision, error)
+	CreateRevision(ctx context.Context, principal domain.Principal, agentSlug domain.AgentSlug, definitions []approvalblock.Definition, defaultRoute approvalpipeline.Route) (approvalpipeline.PipelineRevision, error)
 	Activate(ctx context.Context, principal domain.Principal, agentSlug domain.AgentSlug, revision int64, expectedActiveRevision int64) (approvalpipeline.PipelineRevision, error)
-	Preview(ctx context.Context, principal domain.Principal, agentSlug domain.AgentSlug, definitions []approvalblock.Definition, defaultEscalationPath string, sample approvalpipeline.PreviewSample) (approvalpipeline.PreviewResult, error)
+	Preview(ctx context.Context, principal domain.Principal, agentSlug domain.AgentSlug, definitions []approvalblock.Definition, defaultRoute approvalpipeline.Route, sample approvalpipeline.PreviewSample) (approvalpipeline.PreviewResult, error)
 }
 
 // PathManager is the slice of the escalation path management service
@@ -429,7 +429,7 @@ func (s *Service) ensurePipeline(ctx context.Context, principal domain.Principal
 	for index, block := range active.Blocks {
 		definitions[index] = block.Definition
 	}
-	created, err := s.pipelines.CreateRevision(ctx, principal, agentSlug, PipelineBlocks(Union(GatedToolsOf(definitions), selected), pathKey), pathKey)
+	created, err := s.pipelines.CreateRevision(ctx, principal, agentSlug, PipelineBlocks(Union(GatedToolsOf(definitions), selected), pathKey), PipelineDefault(pathKey))
 	if err != nil {
 		return domain.OnboardingGeneratedPipeline{}, err
 	}
@@ -580,7 +580,7 @@ func (s *Service) SetGatedTools(ctx context.Context, principal domain.Principal,
 	if err != nil {
 		return domain.OnboardingSession{}, err
 	}
-	created, err := s.pipelines.CreateRevision(ctx, principal, agentSlug, PipelineBlocks(names, pathKey), pathKey)
+	created, err := s.pipelines.CreateRevision(ctx, principal, agentSlug, PipelineBlocks(names, pathKey), PipelineDefault(pathKey))
 	if err != nil {
 		return domain.OnboardingSession{}, err
 	}

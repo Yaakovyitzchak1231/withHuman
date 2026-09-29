@@ -82,6 +82,18 @@ type PreviewResult struct {
 	// other scope's default or the queue decides.
 	EscalationPath       string
 	EscalationPathReason string
+	// AskAgentOwner reports that the route asks the agent's owner, with
+	// EscalationPath as the fallback. A preview has no instance, so it
+	// names the route, never a person.
+	AskAgentOwner bool
+}
+
+// Route is where a human outcome goes: an escalation path, or the agent's
+// owner with that path as the fallback for a request without one. The
+// zero value names no path and inherits the pipeline default.
+type Route struct {
+	EscalationPath string
+	AskAgentOwner  bool
 }
 
 // PreviewBlockResult is one step of a preview, in execution order. A branch
@@ -171,7 +183,7 @@ func (service *ManagementService) GetRevision(ctx context.Context, principal dom
 	return service.loadRevisionBlocks(ctx, stored)
 }
 
-func (service *ManagementService) CreateRevision(ctx context.Context, principal domain.Principal, agentSlug domain.AgentSlug, definitions []approvalblock.Definition, defaultEscalationPath string) (PipelineRevision, error) {
+func (service *ManagementService) CreateRevision(ctx context.Context, principal domain.Principal, agentSlug domain.AgentSlug, definitions []approvalblock.Definition, defaultRoute Route) (PipelineRevision, error) {
 	if err := authorizePipelineManagement(principal, domain.PermissionPipelineWrite, domain.AgentResource(agentSlug)); err != nil {
 		return PipelineRevision{}, err
 	}
@@ -185,7 +197,10 @@ func (service *ManagementService) CreateRevision(ctx context.Context, principal 
 	if err := service.requireBlockDependencies(ctx, principal.OrganizationID, all); err != nil {
 		return PipelineRevision{}, err
 	}
-	if err := service.requireEscalationPaths(ctx, principal.OrganizationID, all, defaultEscalationPath); err != nil {
+	if err := approvalblock.ValidateRoute(defaultRoute.EscalationPath, defaultRoute.AskAgentOwner); err != nil {
+		return PipelineRevision{}, invalidPipelineDocument("default route is invalid", err)
+	}
+	if err := service.requireEscalationPaths(ctx, principal.OrganizationID, all, defaultRoute.EscalationPath); err != nil {
 		return PipelineRevision{}, err
 	}
 	blocks, err := service.compiled.registry.snapshotInputs(definitions)
@@ -197,7 +212,8 @@ func (service *ManagementService) CreateRevision(ctx context.Context, principal 
 		OrganizationID:        principal.OrganizationID,
 		AgentSlug:             agentSlug,
 		Blocks:                blocks,
-		DefaultEscalationPath: defaultEscalationPath,
+		DefaultEscalationPath: defaultRoute.EscalationPath,
+		DefaultAskAgentOwner:  defaultRoute.AskAgentOwner,
 		CreatedByActorID:      principal.ManagementActorID(),
 		Now:                   service.clock.Now(),
 	})
@@ -239,7 +255,7 @@ func (service *ManagementService) Activate(ctx context.Context, principal domain
 	return target, nil
 }
 
-func (service *ManagementService) Preview(ctx context.Context, principal domain.Principal, agentSlug domain.AgentSlug, definitions []approvalblock.Definition, defaultEscalationPath string, sample PreviewSample) (PreviewResult, error) {
+func (service *ManagementService) Preview(ctx context.Context, principal domain.Principal, agentSlug domain.AgentSlug, definitions []approvalblock.Definition, defaultRoute Route, sample PreviewSample) (PreviewResult, error) {
 	if err := authorizePipelineManagement(principal, domain.PermissionPipelineWrite, domain.AgentResource(agentSlug)); err != nil {
 		return PreviewResult{}, err
 	}
@@ -258,14 +274,15 @@ func (service *ManagementService) Preview(ctx context.Context, principal domain.
 	if err := service.requireBlockDependencies(ctx, principal.OrganizationID, flattenDefinitions(definitions)); err != nil {
 		return PreviewResult{}, err
 	}
-	if err := validOptionalEscalationPath(defaultEscalationPath); err != nil {
-		return PreviewResult{}, err
+	if err := approvalblock.ValidateRoute(defaultRoute.EscalationPath, defaultRoute.AskAgentOwner); err != nil {
+		return PreviewResult{}, invalidPipelineDocument("default route is invalid", err)
 	}
-	// The path a human outcome resolves to within this scope; the
+	// The route a human outcome resolves to within this scope; the
 	// terminal block overrides the default below.
 	result.EscalationPathReason = domain.RoutingReasonNoEscalation
-	if defaultEscalationPath != "" {
-		result.EscalationPath, result.EscalationPathReason = defaultEscalationPath, domain.RoutingReasonPipelineDefault
+	if defaultRoute.EscalationPath != "" {
+		result.EscalationPath, result.EscalationPathReason = defaultRoute.EscalationPath, domain.RoutingReasonPipelineDefault
+		result.AskAgentOwner = defaultRoute.AskAgentOwner
 	}
 	previous := make(map[string]json.RawMessage, len(sample.PreviousMetadata))
 	for key, value := range sample.PreviousMetadata {
@@ -291,6 +308,7 @@ func (service *ManagementService) Preview(ctx context.Context, principal domain.
 			result.Outcome, result.ReasonCode, result.TerminalBlockKey = BlockHuman, "end_of_branch", block.Key
 			if block.EscalationPath != "" {
 				result.EscalationPath, result.EscalationPathReason = block.EscalationPath, domain.RoutingReasonBlockEscalation
+				result.AskAgentOwner = block.AskAgentOwner
 			}
 			return result, nil
 		}
@@ -331,11 +349,12 @@ func (service *ManagementService) Preview(ctx context.Context, principal domain.
 		result.TerminalBlockKey = block.Key
 		switch {
 		case evaluated.Outcome != BlockHuman:
-			result.EscalationPath, result.EscalationPathReason = "", ""
+			result.EscalationPath, result.EscalationPathReason, result.AskAgentOwner = "", "", false
 		case block.EscalationPath != "" && !block.Branch:
 			// A branch whose condition failed keeps the default: its
-			// own path is for its end only.
+			// own route is for its end only.
 			result.EscalationPath, result.EscalationPathReason = block.EscalationPath, domain.RoutingReasonBlockEscalation
+			result.AskAgentOwner = block.AskAgentOwner
 		}
 		return result, nil
 	}
