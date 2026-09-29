@@ -44,6 +44,7 @@ import { docsForPath } from "./docs";
 import { ExtensionBanners, ExtensionNav, extensionLink, useExtensionCommands, useExtensionNav } from "./extensions";
 import { NavGroupLabel, NavItem } from "./nav-item";
 import { useAccess } from "./authorization";
+import { useNotifiedPendingCount } from "./queue-store";
 import { SettingsNav } from "./settings-nav";
 import { useRuntimeConfig } from "./use-runtime-config";
 
@@ -102,6 +103,10 @@ export function Shell({
    * need the secrets key, and without it the page would only refuse. */
   const { config: runtimeConfig } = useRuntimeConfig();
   const webhookEnabled = runtimeConfig?.webhook_enabled ?? false;
+  /* How many requests sent to this person still wait on them, live
+   * from the queue's notified layer, so the sidebar says it on every
+   * page. */
+  const notifiedPending = useNotifiedPendingCount();
   /* What the edition adds to the sidebar and the palette. */
   const extensionNav = {
     records: useExtensionNav("records"),
@@ -458,7 +463,12 @@ export function Shell({
                  * agents that open requests, then the policy that decides
                  * them in execution order. A group heading renders only
                  * when the role can see an entry under it. */}
-                <NavItem to="/queue" icon={<InboxIcon width={15} height={15} />}>
+                <NavItem
+                  to="/queue"
+                  icon={<InboxIcon width={15} height={15} />}
+                  count={notifiedPending}
+                  countLabel="pending requests sent to you"
+                >
                   Review queue
                 </NavItem>
                 <ExtensionNav entries={extensionNav.records} />
