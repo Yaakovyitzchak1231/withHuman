@@ -69,13 +69,13 @@ func TestAgentOwnerRouteEndToEnd(t *testing.T) {
 		Revision             int64 `json:"revision"`
 		DefaultAskAgentOwner bool  `json:"default_ask_agent_owner"`
 	}
-	api.postJSON("/api/v1/request-approval-pipelines/organization/revisions", map[string]any{
+	api.postJSON("/api/v1/request-approval-pipelines/entry/revisions", map[string]any{
 		"blocks": []any{}, "default_escalation_path": "on-call", "default_ask_agent_owner": true,
 	}, http.StatusCreated, &revision)
 	if !revision.DefaultAskAgentOwner {
 		t.Fatalf("revision = %+v", revision)
 	}
-	api.request("POST", fmt.Sprintf("/api/v1/request-approval-pipelines/organization/revisions/%d/activate", revision.Revision),
+	api.request("POST", fmt.Sprintf("/api/v1/request-approval-pipelines/entry/revisions/%d/activate", revision.Revision),
 		nil, http.StatusOK, nil, "If-Match", `"1"`)
 
 	register := func(kind, slug string) string {

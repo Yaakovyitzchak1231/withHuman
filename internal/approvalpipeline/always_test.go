@@ -3,6 +3,7 @@ package approvalpipeline
 import (
 	"context"
 	"encoding/json"
+	"github.com/google/uuid"
 	"testing"
 	"time"
 
@@ -10,6 +11,13 @@ import (
 	"github.com/withHumanAI/withHuman/approvalblock"
 	"github.com/withHumanAI/withHuman/domain"
 )
+
+// delegateDefinition is a delegate block to pipelineKey for the requests
+// condition matches.
+func delegateDefinition(id, pipelineKey string, condition approvalblock.Condition) approvalblock.Definition {
+	condition.ID = uuid.NewString()
+	return *approvalblock.DefineDelegate(id, pipelineKey, approvalblock.Name(id), approvalblock.When(condition))
+}
 
 func alwaysDefinition(id string, outcome approvalblock.Outcome) approvalblock.Definition {
 	return *approvalblock.DefineAlways(id, outcome, approvalblock.Name(id), approvalblock.Reason("Every remaining request."))
@@ -27,7 +35,7 @@ func TestAlwaysExecutionAndPreview(t *testing.T) {
 				pipelineDefinition("skip", approvalblock.Deny, approvalblock.Field("/request/tool").Equals("other")),
 				always, alwaysDefinition("unreachable", approvalblock.Deny),
 			}
-			repository := activeExecutionPipeline(t, now, "billing", definitions)
+			repository := activeExecutionPipeline(t, now, "entry", definitions)
 			service := initializedExecutionService(t, repository, executionAgentRepositoryStub{agent: domain.Agent{ID: "agent-1", OrganizationID: "organization-1", Name: "Billing", AgentSlug: "billing"}}, fixedPipelineClock{now: now})
 			result, err := service.Evaluate(context.Background(), executionRequest(now, "request-1", "key-1", "billing", json.RawMessage(`{}`)))
 			if err != nil {
@@ -86,15 +94,18 @@ func TestEarlierDecisionOrErrorStopsBeforeAlways(t *testing.T) {
 	}
 }
 
-func TestAlwaysOrganizationPreemptsAgent(t *testing.T) {
+func TestAlwaysInTheEntryPipelinePreemptsADelegate(t *testing.T) {
 	now := time.Unix(1000, 0).UTC()
-	repository := activeExecutionPipeline(t, now, "", []approvalblock.Definition{alwaysDefinition("organization", approvalblock.Approve)})
+	repository := activeExecutionPipeline(t, now, "billing", []approvalblock.Definition{alwaysDefinition("billing-denies", approvalblock.Deny)})
 	management := NewManagementService(repository, NewCompiledPipelineState(repository, NewBlockRegistry()), fixedPipelineClock{now: now})
-	created, err := management.CreateRevision(context.Background(), pipelineManagerPrincipal("organization-1"), "billing", []approvalblock.Definition{alwaysDefinition("agent", approvalblock.Deny)}, Route{})
+	created, err := management.CreateRevision(context.Background(), pipelineManagerPrincipal("organization-1"), "entry", pipelineName("entry"), []approvalblock.Definition{
+		alwaysDefinition("entry-approves", approvalblock.Approve),
+		delegateDefinition("to-billing", "billing", approvalblock.Field("/agent/slug").Equals("billing")),
+	}, Route{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := management.Activate(context.Background(), pipelineManagerPrincipal("organization-1"), "billing", created.Revision.Revision, 1); err != nil {
+	if _, err := management.Activate(context.Background(), pipelineManagerPrincipal("organization-1"), "entry", created.Revision.Revision, 1); err != nil {
 		t.Fatal(err)
 	}
 	service := initializedExecutionService(t, repository, executionAgentRepositoryStub{agent: domain.Agent{ID: "agent-1", OrganizationID: "organization-1", Name: "Billing", AgentSlug: "billing"}}, fixedPipelineClock{now: now})
@@ -103,11 +114,11 @@ func TestAlwaysOrganizationPreemptsAgent(t *testing.T) {
 		t.Fatal(err)
 	}
 	if result.Request.Status != domain.ApprovalApproved {
-		t.Fatalf("organization did not decide: %+v", result)
+		t.Fatalf("the entry pipeline did not decide: %+v", result)
 	}
 	for _, event := range result.AuditEvents {
-		if event.EventType == blockEvaluatedEvent && auditData(t, event)["block_key"] != "organization" {
-			t.Fatalf("agent block ran: %s", event.Data)
+		if event.EventType == blockEvaluatedEvent && auditData(t, event)["block_key"] != "entry-approves" {
+			t.Fatalf("a block after the always ran: %s", event.Data)
 		}
 	}
 }
@@ -118,14 +129,14 @@ func TestAlwaysAfterAsyncResume(t *testing.T) {
 	repository := newMemoryPipelineRepository()
 	registry := NewBlockRegistry(withScripted(check))
 	management := NewManagementService(repository, NewCompiledPipelineState(repository, registry), fixedPipelineClock{now: now})
-	created, err := management.CreateRevision(context.Background(), pipelineManagerPrincipal("organization-1"), "billing", []approvalblock.Definition{
+	created, err := management.CreateRevision(context.Background(), pipelineManagerPrincipal("organization-1"), "entry", pipelineName("entry"), []approvalblock.Definition{
 		scriptedDefinition(),
 		alwaysDefinition("remaining", approvalblock.Deny), alwaysDefinition("unreachable", approvalblock.Approve),
 	}, Route{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := management.Activate(context.Background(), pipelineManagerPrincipal("organization-1"), "billing", created.Revision.Revision, 1); err != nil {
+	if _, err := management.Activate(context.Background(), pipelineManagerPrincipal("organization-1"), "entry", created.Revision.Revision, 1); err != nil {
 		t.Fatal(err)
 	}
 	compiled := NewCompiledPipelineState(repository, registry)
@@ -159,11 +170,11 @@ func TestAlwaysReferencesAndUnreachableValidation(t *testing.T) {
 	block := alwaysDefinition("remaining", approvalblock.Human)
 	block.Always.EscalationPath = "payments"
 	principal := pipelineManagerPrincipal("organization-1")
-	if _, err := service.CreateRevision(context.Background(), principal, "billing", []approvalblock.Definition{block}, Route{}); err == nil {
+	if _, err := service.CreateRevision(context.Background(), principal, "billing", pipelineName("billing"), []approvalblock.Definition{block}, Route{}); err == nil {
 		t.Fatal("missing path accepted")
 	}
 	resolver.resolved = application.ResolvedEscalationPaths{}
-	created, err := service.CreateRevision(context.Background(), principal, "billing", []approvalblock.Definition{block}, Route{})
+	created, err := service.CreateRevision(context.Background(), principal, "billing", pipelineName("billing"), []approvalblock.Definition{block}, Route{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +187,7 @@ func TestAlwaysReferencesAndUnreachableValidation(t *testing.T) {
 		t.Fatalf("path dependency lost: %+v", refs)
 	}
 	invalid := alwaysDefinition("unreachable", approvalblock.Next)
-	if _, err := service.CreateRevision(context.Background(), principal, "billing", []approvalblock.Definition{block, invalid}, Route{}); err == nil {
+	if _, err := service.CreateRevision(context.Background(), principal, "billing", pipelineName("billing"), []approvalblock.Definition{block, invalid}, Route{}); err == nil {
 		t.Fatal("invalid unreachable block accepted")
 	}
 }

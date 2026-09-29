@@ -57,48 +57,10 @@ func answer(text string) application.ToolUseOutput {
 	return application.ToolUseOutput{StopReason: application.ToolUseStopEndTurn, Blocks: []application.ToolUseBlock{{Type: application.ToolUseText, Text: text}}}
 }
 
-// catalogStub stands in for the management tool catalog: it offers a
-// few pipeline tools plus one the assistant must never see, records
-// every call with the principal it ran under, and answers the shapes
-// the real tools do.
-type catalogStub struct {
-	calls      []catalogCall
-	principals []domain.Principal
-	// grammar is what the deployment's own block kinds append to the
-	// pipeline grammar the prompt carries.
-	grammar string
-}
+// grammarStub stands in for the deployment's block grammar appendix.
+type grammarStub struct{ grammar string }
 
-type catalogCall struct {
-	Name  string
-	Input map[string]any
-}
-
-func (c *catalogStub) Grammar() string { return c.grammar }
-
-func (c *catalogStub) Tools() []application.ToolUseTool {
-	var tools []application.ToolUseTool
-	for _, name := range []string{"list_agents", "get_pipeline", "update_pipeline", "preview_pipeline", "create_escalation_path"} {
-		tools = append(tools, application.ToolUseTool{Name: name, Description: name, InputSchema: json.RawMessage(`{"type":"object"}`)})
-	}
-	return tools
-}
-
-func (c *catalogStub) Call(_ context.Context, principal domain.Principal, name string, input json.RawMessage) (AssistantToolResult, error) {
-	var decoded map[string]any
-	_ = json.Unmarshal(input, &decoded)
-	c.calls = append(c.calls, catalogCall{Name: name, Input: decoded})
-	c.principals = append(c.principals, principal)
-	switch name {
-	case "get_pipeline":
-		return AssistantToolResult{Content: `{"revision":2,"blocks":[]}`}, nil
-	case "update_pipeline":
-		return AssistantToolResult{Content: `{"revision":{"revision":3},"activated":true}`}, nil
-	case "preview_pipeline":
-		return AssistantToolResult{Content: `{"outcome":"human","terminal_block_id":"review-kubectl"}`}, nil
-	}
-	return AssistantToolResult{Content: "unexpected tool " + name, IsError: true}, nil
-}
+func (g *grammarStub) Grammar() string { return g.grammar }
 
 // provisioned drives a session to provisioning with codex connected, so
 // its agent exists for the assistant to write.
@@ -137,24 +99,23 @@ func provisioned(t *testing.T, h *harness) domain.OnboardingSession {
 	return session
 }
 
-func TestAssistantWritesRulesThroughTheCatalog(t *testing.T) {
+func TestAssistantWritesRulesIntoTheAgentsBranch(t *testing.T) {
 	ctx := context.Background()
 	h := newHarness()
 	model := &scriptedModel{replies: []application.ToolUseOutput{
-		toolCall("c1", "get_pipeline", `{"agent_slug":"codex"}`),
-		toolCall("c2", "update_pipeline", `{"agent_slug":"codex","blocks":[{"id":"review-kubectl","name":"Review kubectl changes","type":"cel","enabled":true,"timeout":"50ms","max_attempts":1,"config":{"when":{"id":"x"},"on_match":"human","reason":"kubectl changes wait."}}]}`),
-		toolCall("c3", "preview_pipeline", `{"agent_slug":"codex","blocks":[],"sample":{"tool":"Bash","arguments":{"command":"kubectl delete pod demo"}}}`),
+		toolCall("c1", getRulesTool, `{"agent_slug":"codex"}`),
+		toolCall("c2", updateRulesTool, `{"agent_slug":"codex","blocks":[{"id":"codex-review-kubectl","name":"Review kubectl changes","type":"cel","enabled":true,"timeout":"50ms","max_attempts":1,"config":{"when":{"id":"5b7d7a8e-2d4e-4d3a-9a1c-1f2e3d4c5b6a","field":"/request/tool","operator":"equals","value":"Bash"},"on_match":"human","reason":"kubectl changes wait."}}]}`),
+		toolCall("c3", previewRulesTool, `{"agent_slug":"codex","blocks":[],"sample":{"tool":"Bash","arguments":{"command":"kubectl delete pod demo"}}}`),
 		toolCall("c4", "list_agents", `{}`),
-		toolCall("c5", "update_pipeline", `{"agent_slug":"claude-code","blocks":[]}`),
-		toolCall("c6", "update_pipeline", `{"blocks":[]}`),
+		toolCall("c5", updateRulesTool, `{"agent_slug":"claude-code","blocks":[]}`),
+		toolCall("c6", updateRulesTool, `{"blocks":[]}`),
 		toolCall("c7", setTestPromptTool, `{"agent_slug":"codex","tool":"Bash","prompt":"Run kubectl delete pod demo --dry-run=client and show me the output","sample_arguments":{"command":"kubectl delete pod demo --dry-run=client"}}`),
 		answer("Codex now waits for you on kubectl commands that change the cluster; everything else runs. The test asks it to dry-run a pod deletion."),
 	}}
-	catalog := &catalogStub{grammar: "\n## scripted\n\nA kind this deployment adds.\n"}
 	h.service.RegisterAssistantModel(model)
-	h.service.RegisterAssistantTools(catalog)
+	h.service.RegisterAssistantGrammar(&grammarStub{grammar: "\n## scripted\n\nA kind this deployment adds.\n"})
 	if !h.service.AssistantEnabled() {
-		t.Fatal("assistant should be enabled with a model and a catalog")
+		t.Fatal("assistant should be enabled with a model and a grammar")
 	}
 	provisioned(t, h)
 
@@ -184,8 +145,8 @@ func TestAssistantWritesRulesThroughTheCatalog(t *testing.T) {
 		"Wrote Codex's rules (revision 3)",
 		"Tested a Bash call for Codex: waits for a person",
 		"Refused a list_agents call: list_agents is not available here.",
-		"Refused a update_pipeline call for claude-code: Only the agents this setup connected can be changed here: codex.",
-		"Refused a update_pipeline call: Name agent_slug: the organization pipeline is not part of this setup. Choose one of codex.",
+		"Refused a update_agent_rules call for claude-code: Only the agents this setup connected can be changed here: codex.",
+		"Refused a update_agent_rules call: Only the agents this setup connected can be changed here: codex.",
 		"Chose Codex's test: a Bash call",
 	}
 	if strings.Join(summaries, "\n") != strings.Join(want, "\n") {
@@ -197,24 +158,25 @@ func TestAssistantWritesRulesThroughTheCatalog(t *testing.T) {
 		}
 	}
 
-	// Only the in-scope calls reached the catalog, under the person's
-	// principal, and the saved pipeline hands human exits to their path.
-	if len(catalog.calls) != 3 || catalog.calls[0].Name != "get_pipeline" || catalog.calls[1].Name != "update_pipeline" || catalog.calls[2].Name != "preview_pipeline" {
-		t.Fatalf("catalog calls: %+v", catalog.calls)
+	// The write replaced codex's branch alone, with the person's path on
+	// the human exit the model left bare, and activated the entry.
+	entry := h.pipelines.entryBlocks()
+	branch, ok := RuntimeBranchOf(entry, "codex")
+	if !ok || len(branch.Branch.Blocks) != 1 || branch.Branch.Blocks[0].ID != "codex-review-kubectl" || branch.Branch.Blocks[0].CEL.EscalationPath != "notify-chris-battarbee" {
+		t.Fatalf("codex branch after the write: %+v", entry)
 	}
-	if catalog.calls[1].Input["default_escalation_path"] != "notify-chris-battarbee" {
-		t.Fatalf("the setup's path should be the default: %+v", catalog.calls[1].Input)
-	}
-	for _, principal := range catalog.principals {
-		if principal.MembershipID != h.principal.MembershipID {
-			t.Fatalf("calls must run as the person: %+v", principal)
-		}
+	if h.pipelines.activated[EntryPipelineKey] != 2 {
+		t.Fatalf("the write must activate against the provisioned revision, got %v", h.pipelines.activated)
 	}
 
-	// The test command follows the assistant's prompt once the sample
-	// was shown to reach a person.
-	if len(h.pipelines.previews) != 1 || h.pipelines.previews[0].Request.Tool != "Bash" || !strings.Contains(string(h.pipelines.previews[0].Request.Arguments), "dry-run") {
+	// The preview and the test check both ran the whole entry document
+	// as the codex agent; the test command follows the assistant's
+	// prompt once the sample was shown to reach a person.
+	if len(h.pipelines.previews) != 2 || h.pipelines.previews[0].Agent.Slug != "codex" || h.pipelines.previews[1].Request.Tool != "Bash" || !strings.Contains(string(h.pipelines.previews[1].Request.Arguments), "dry-run") {
 		t.Fatalf("sample previews: %+v", h.pipelines.previews)
+	}
+	if _, ok := RuntimeBranchOf(h.pipelines.previewed, "codex"); !ok {
+		t.Fatalf("the test check must preview the entry document with the branch: %+v", h.pipelines.previewed)
 	}
 	command := session.TestCommands["codex"]
 	if command.Tool != "Bash" || !strings.Contains(command.Command, "kubectl delete pod demo --dry-run=client") || !strings.HasPrefix(command.Command, "codex exec") {
@@ -229,7 +191,7 @@ func TestAssistantWritesRulesThroughTheCatalog(t *testing.T) {
 	for _, tool := range first.Tools {
 		names = append(names, tool.Name)
 	}
-	if strings.Join(names, ",") != "get_pipeline,update_pipeline,preview_pipeline,set_test_prompt" {
+	if strings.Join(names, ",") != "get_agent_rules,update_agent_rules,preview_agent_rules,set_test_prompt" {
 		t.Fatalf("tools offered: %v", names)
 	}
 	for _, needle := range []string{"agent slug `codex`", "- Bash (built-in, shell): Run shell commands. Arguments: command, timeout. Waits", "- Read (built-in)", "notify-chris-battarbee", "# Pipeline blocks", "## scripted\n\nA kind this deployment adds.", "# Conditions"} {
@@ -271,7 +233,7 @@ func TestAssistantGuards(t *testing.T) {
 	}
 	model := &scriptedModel{}
 	h.service.RegisterAssistantModel(model)
-	h.service.RegisterAssistantTools(&catalogStub{})
+	h.service.RegisterAssistantGrammar(&grammarStub{})
 
 	// Before provisioning the agents do not exist.
 	begun, _ := h.service.Begin(ctx, h.principal)
@@ -317,7 +279,7 @@ func TestAssistantGuards(t *testing.T) {
 	// A turn that never answers within the step budget fails clearly.
 	model.replies = nil
 	for step := 0; step < maxAssistantSteps; step++ {
-		model.replies = append(model.replies, toolCall("loop", "get_pipeline", `{"agent_slug":"codex"}`))
+		model.replies = append(model.replies, toolCall("loop", getRulesTool, `{"agent_slug":"codex"}`))
 	}
 	h.sessions.sessions[begun.Session.ID].SelectedRuntimes = []string{"codex"}
 	session, err = h.service.Ask(ctx, h.principal, "Loop.")
@@ -335,7 +297,7 @@ func TestAssistantTestPromptRefusesCallsTheRulesWouldNotHold(t *testing.T) {
 		answer("I could not pick a test."),
 	}}
 	h.service.RegisterAssistantModel(model)
-	h.service.RegisterAssistantTools(&catalogStub{})
+	h.service.RegisterAssistantGrammar(&grammarStub{})
 	before := provisioned(t, h).TestCommands
 	h.pipelines.previewOutcome = "approve"
 	session, err := h.service.Ask(ctx, h.principal, "Only kubectl.")
@@ -385,11 +347,11 @@ func TestSetGatedToolsRewritesTheStartingRules(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SetGatedTools: %v", err)
 	}
-	if got := GatedToolsOf(h.pipelines.created["codex"]); strings.Join(got, ",") != "Bash,Read" {
+	if got := GatedToolsOf(h.pipelines.entryBlocks(), "codex"); strings.Join(got, ",") != "Bash,Read" {
 		t.Fatalf("gated tools: %v", got)
 	}
-	if h.pipelines.activated["codex"] != 1 {
-		t.Fatalf("activation should carry the stub's active revision, got %v", h.pipelines.activated["codex"])
+	if h.pipelines.activated[EntryPipelineKey] != 2 {
+		t.Fatalf("activation should carry the provisioned revision, got %v", h.pipelines.activated[EntryPipelineKey])
 	}
 	if command := session.TestCommands["codex"]; command.Tool != "Bash" {
 		t.Fatalf("test command should follow the choice: %+v", command)
@@ -398,7 +360,7 @@ func TestSetGatedToolsRewritesTheStartingRules(t *testing.T) {
 	if err != nil {
 		t.Fatalf("empty list: %v", err)
 	}
-	if _, ok := session.TestCommands["codex"]; ok || len(GatedToolsOf(h.pipelines.created["codex"])) != 0 {
+	if _, ok := session.TestCommands["codex"]; ok || len(GatedToolsOf(h.pipelines.entryBlocks(), "codex")) != 0 {
 		t.Fatalf("nothing gated should leave no test: %+v", session.TestCommands)
 	}
 }
@@ -438,14 +400,14 @@ func TestAssistantLogsEachStep(t *testing.T) {
 	// nothing, which the adapter rejects with the response's usage.
 	model := &rejectingModel{
 		scriptedModel: &scriptedModel{replies: []application.ToolUseOutput{
-			withUsage(toolCall("c1", "get_pipeline", `{"agent_slug":"codex"}`), 9000, 200, 100),
+			withUsage(toolCall("c1", getRulesTool, `{"agent_slug":"codex"}`), 9000, 200, 100),
 		}},
 		after:    1,
 		rejected: application.ToolUseOutput{StopReason: application.ToolUseStopMaxTokens, ProviderStop: "length", ResponseID: "chatcmpl-9", InputTokens: 9800, OutputTokens: 4096, ReasoningTokens: 4096},
 		err:      errors.New("model returned no content"),
 	}
 	h.service.RegisterAssistantModel(model)
-	h.service.RegisterAssistantTools(&catalogStub{})
+	h.service.RegisterAssistantGrammar(&grammarStub{})
 	provisioned(t, h)
 	buffer.Reset()
 
@@ -459,11 +421,11 @@ func TestAssistantLogsEachStep(t *testing.T) {
 		t.Fatalf("turn started: %v", started)
 	}
 	call := findLog(lines, "setup assistant model call")
-	if call == nil || call["step"].(float64) != 1 || call["tool_calls"] != "get_pipeline" || call["step_input_tokens"].(float64) != 9000 {
+	if call == nil || call["step"].(float64) != 1 || call["tool_calls"] != getRulesTool || call["step_input_tokens"].(float64) != 9000 {
 		t.Fatalf("model call: %v", call)
 	}
 	tool := findLog(lines, "setup assistant tool call")
-	if tool == nil || tool["tool"] != "get_pipeline" || tool["agent_slug"] != "codex" || tool["ok"] != true || tool["step"].(float64) != 1 {
+	if tool == nil || tool["tool"] != getRulesTool || tool["agent_slug"] != "codex" || tool["ok"] != true || tool["step"].(float64) != 1 {
 		t.Fatalf("tool call: %v", tool)
 	}
 	failed := findLog(lines, "setup assistant model call failed")

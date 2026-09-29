@@ -79,7 +79,6 @@ describe("walking the tree", () => {
 
   it("labels positions across sections and finds blocks at any depth", () => {
     expect(positionLabel([2, 2, 1])).toBe("2.2.1");
-    expect(positionLabel([2, 2, 1], 3)).toBe("5.2.1");
     expect(findDraft(tree(), "huge")?.path).toEqual([2, 2, 1]);
     expect(findDraft(tree(), "missing")).toBeUndefined();
     expect(railOf(tree(), "large").map((block) => block.id)).toEqual(["huge"]);
@@ -190,10 +189,9 @@ describe("reachability", () => {
     expect(reachability.stoppedBy).toBe(stop);
   });
 
-  it("carries the organization's Always into the agent section", () => {
-    const organizationStop = always("org-stop");
-    const reachability = pipelineReachability([branch("refunds", [cel("small")])], organizationStop);
-    expect([...reachability.blockedBy.keys()]).toEqual(["refunds", "small"]);
-    expect(reachability.stoppedBy).toBe(organizationStop);
+  it("leaves a branch alone when nothing before it stops the rail", () => {
+    const reachability = pipelineReachability([branch("refunds", [cel("small")])]);
+    expect(reachability.blockedBy.size).toBe(0);
+    expect(reachability.stoppedBy).toBeUndefined();
   });
 });

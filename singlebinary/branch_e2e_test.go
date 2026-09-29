@@ -112,11 +112,14 @@ func TestBranchPipelineEndToEnd(t *testing.T) {
 	condition := func(field, operator string, value any) map[string]any {
 		return map[string]any{"id": uuid.NewString(), "field": field, "operator": operator, "value": value}
 	}
+	// The billing team's pipeline holds the branch; the entry pipeline
+	// delegates the billing agent's requests to it.
 	var created struct {
 		Revision   int64 `json:"revision"`
 		BlockCount int   `json:"block_count"`
 	}
-	api.postJSON("/api/v1/request-approval-pipelines/agents/billing/revisions", map[string]any{
+	api.postJSON("/api/v1/request-approval-pipelines", map[string]any{
+		"pipeline_key": "billing", "name": "Billing",
 		"blocks": []any{
 			map[string]any{
 				"id": "refunds", "name": "Refunds", "type": "branch", "enabled": true, "timeout": "50ms", "max_attempts": 1,
@@ -148,10 +151,21 @@ func TestBranchPipelineEndToEnd(t *testing.T) {
 			},
 		},
 	}, http.StatusCreated, &created)
-	if created.BlockCount != 4 {
-		t.Fatalf("block_count %d, want every block including those inside the branch", created.BlockCount)
+	if created.BlockCount != 4 || created.Revision != 1 {
+		t.Fatalf("created pipeline = %+v, want revision 1 with every block including those inside the branch", created)
 	}
-	api.request("POST", fmt.Sprintf("/api/v1/request-approval-pipelines/agents/billing/revisions/%d/activate", created.Revision), nil, http.StatusOK, nil, "If-Match", `"1"`)
+	var entry struct {
+		Revision int64 `json:"revision"`
+	}
+	api.postJSON("/api/v1/request-approval-pipelines/entry/revisions", map[string]any{
+		"blocks": []any{map[string]any{
+			"id": "to-billing", "name": "Billing agent", "type": "delegate", "enabled": true, "timeout": "50ms", "max_attempts": 1,
+			"config": map[string]any{"when": condition("/agent/slug", "equals", "billing"), "pipeline_key": "billing"},
+		}},
+	}, http.StatusCreated, &entry)
+	api.request("POST", fmt.Sprintf("/api/v1/request-approval-pipelines/entry/revisions/%d/activate", entry.Revision), nil, http.StatusOK, nil, "If-Match", `"1"`)
+	// The delegated pipeline cannot be archived while the entry names it.
+	api.request("DELETE", "/api/v1/request-approval-pipelines/billing", nil, http.StatusConflict, nil)
 
 	type approval struct {
 		ID     string `json:"id"`

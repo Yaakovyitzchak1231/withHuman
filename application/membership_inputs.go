@@ -20,13 +20,16 @@ func validAssignmentSpecs(field string, specs []domain.AssignmentSpec) error {
 			return invalidField(field, "every grant needs a role id")
 		}
 		if !domain.ValidScopeKind(spec.ScopeKind) {
-			return invalidField(field, "scope kind must be organization, team, or agent_slug")
+			return invalidField(field, "scope kind must be organization, team, agent, or pipeline")
 		}
 		if (spec.ScopeKind == domain.ScopeOrganization) != (spec.ScopeID == "") {
-			return invalidField(field, "scope id is required exactly when the scope is a team or agent type")
+			return invalidField(field, "scope id is required exactly when the scope is a team, agent, or pipeline")
 		}
 		if spec.ScopeKind == domain.ScopeAgent && !domain.AgentSlug(spec.ScopeID).Valid() {
-			return invalidField(field, "agent type scope id is malformed")
+			return invalidField(field, "agent scope id is malformed")
+		}
+		if spec.ScopeKind == domain.ScopePipeline && !domain.ValidPipelineKey(spec.ScopeID) {
+			return invalidField(field, "pipeline scope id is malformed")
 		}
 		if _, duplicate := seen[spec]; duplicate {
 			return invalidField(field, "must not repeat a grant")

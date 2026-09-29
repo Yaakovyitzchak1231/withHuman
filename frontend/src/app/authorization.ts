@@ -14,9 +14,10 @@ export function holdsAnywhere(principal: Principal, permission: string): boolean
 }
 
 /* Whether a grant of the permission covers the resource. An organization
- * grant covers everything; a team or agent grant covers only the
- * resource of the same kind and id (an agent's id is its slug). With no resource, the action is
- * about the organization itself. */
+ * grant covers everything; a team, agent or pipeline grant covers only
+ * the resource of the same kind and id (an agent's id is its slug, a
+ * pipeline's its key). With no resource, the action is about the
+ * organization itself. */
 export function can(principal: Principal, permission: string, resource?: Resource): boolean {
   const target: Resource = resource ?? { kind: "organization" };
   return principal.grants.some((grant) => {
@@ -30,7 +31,7 @@ export function can(principal: Principal, permission: string, resource?: Resourc
 export type ScopeSet = "all" | Array<{ kind: ScopeKind; id: string }>;
 
 /* The scopes the principal holds the permission in: "all" when an
- * organization grant exists, else the list of team and agent
+ * organization grant exists, else the list of team, agent and pipeline
  * scopes (empty when the permission is not held at all). */
 export function scopeOf(principal: Principal, permission: string): ScopeSet {
   const held = principal.grants.filter((grant) => grant.permission === permission);

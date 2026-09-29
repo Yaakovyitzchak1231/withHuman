@@ -60,7 +60,7 @@ func TestPipelineSuspensionsAgainstRealPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateAgentInstanceWithCredential: %v", err)
 	}
-	revision := createPipelineTestRevision(t, ctx, store, orgID, ownerMembershipID, "", []application.RequestApprovalBlockSnapshotInput{
+	revision := createPipelineTestRevision(t, ctx, store, orgID, ownerMembershipID, domain.EntryPipelineKey, []application.RequestApprovalBlockSnapshotInput{
 		pipelineTestBlock("judge", `{"on_match":"human"}`),
 	}, now)
 
@@ -84,8 +84,8 @@ func TestPipelineSuspensionsAgainstRealPostgres(t *testing.T) {
 		}
 		suspension := domain.PipelineSuspension{
 			RequestID: request.ID, OrganizationID: orgID, EvaluationID: domain.ID(uuid.NewString()),
-			OrganizationPipelineID: revision.ID, ResumePosition: 0,
-			PreviousMetadata: map[string]json.RawMessage{"organization/risk": json.RawMessage(`{"risk":"low"}`)},
+			PinnedRevisions: map[string]domain.ID{domain.EntryPipelineKey: revision.ID}, ResumePosition: 0,
+			PreviousMetadata: map[string]json.RawMessage{"entry/risk": json.RawMessage(`{"risk":"low"}`)},
 			StartedAt:        now, SuspendedAt: now,
 		}
 		created, err := store.InitializeApproval(ctx, application.InitializeApprovalInput{
@@ -113,8 +113,8 @@ func TestPipelineSuspensionsAgainstRealPostgres(t *testing.T) {
 			t.Fatalf("GetPipelineSuspension: %v", err)
 		}
 		var risk map[string]string
-		_ = json.Unmarshal(stored.PreviousMetadata["organization/risk"], &risk)
-		if !stored.Open() || stored.OrganizationPipelineID != revision.ID || stored.AgentPipelineID != "" || risk["risk"] != "low" {
+		_ = json.Unmarshal(stored.PreviousMetadata["entry/risk"], &risk)
+		if !stored.Open() || stored.EntryPipelineID() != revision.ID || len(stored.PinnedRevisions) != 1 || risk["risk"] != "low" {
 			t.Fatalf("suspension did not round trip: %#v", stored)
 		}
 		decision := &domain.Decision{

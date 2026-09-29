@@ -76,7 +76,11 @@ type Input struct {
 	EvaluationID domain.ID
 	// Preview marks a management-time evaluation so external calls can be
 	// flagged as such and never bind to a request.
-	Preview          bool
+	Preview bool
+	// PipelineKey is the pipeline the block being evaluated belongs to,
+	// so a block's external side effects can be keyed apart from a block
+	// of the same key in another pipeline of the same run.
+	PipelineKey      string
 	Request          Request
 	Agent            Agent
 	PreviousMetadata map[string]json.RawMessage

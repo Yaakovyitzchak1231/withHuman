@@ -18,7 +18,7 @@ func TestABranchEndCanAskTheAgentOwner(t *testing.T) {
 	now := time.Unix(7_000, 0).UTC()
 	branch := refundsBranch(pipelineDefinition("never", approvalblock.Approve, approvalblock.Field("/request/tool").Equals("other")))
 	branch.Branch.AskAgentOwner = true
-	service, _ := branchFixture(t, now, NewBlockRegistry(), branchScope{slug: "billing", definitions: []approvalblock.Definition{branch}})
+	service, _ := branchFixture(t, now, NewBlockRegistry(), branchScope{key: "entry", definitions: []approvalblock.Definition{branch}})
 	input, err := service.Evaluate(context.Background(), branchRequest(now, "stripe.refund", `{}`))
 	if err != nil {
 		t.Fatal(err)
@@ -38,7 +38,7 @@ func TestTheOwnerRouteTravelsWithItsPath(t *testing.T) {
 	ownPath.CEL.EscalationPath = "release-managers"
 	inherits := pipelineDefinition("inherits", approvalblock.Human, approvalblock.Field("/request/tool").Equals("push"))
 	service, _ := branchFixture(t, now, NewBlockRegistry(), branchScope{
-		slug: "billing", defaultPath: "on-call", askOwner: true,
+		key: "entry", defaultPath: "on-call", askOwner: true,
 		definitions: []approvalblock.Definition{ownPath, inherits},
 	})
 
@@ -97,15 +97,15 @@ func TestAnOwnerRouteRequiresItsFallback(t *testing.T) {
 	management := NewManagementService(repository, NewCompiledPipelineState(repository, NewBlockRegistry()), fixedPipelineClock{now: time.Unix(7_000, 0).UTC()})
 	principal := pipelineManagerPrincipal("organization-1")
 
-	if _, err := management.CreateRevision(context.Background(), principal, "billing", nil, Route{AskAgentOwner: true}); !errors.Is(err, domain.ErrInvalid) {
+	if _, err := management.CreateRevision(context.Background(), principal, "billing", pipelineName("billing"), nil, Route{AskAgentOwner: true}); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("a default owner route without a path must be invalid: %v", err)
 	}
 	block := pipelineDefinition("asks", approvalblock.Human, approvalblock.Field("/request/tool").Equals("push"))
 	block.CEL.AskAgentOwner = true
-	if _, err := management.CreateRevision(context.Background(), principal, "billing", []approvalblock.Definition{block}, Route{}); !errors.Is(err, domain.ErrInvalid) {
+	if _, err := management.CreateRevision(context.Background(), principal, "billing", pipelineName("billing"), []approvalblock.Definition{block}, Route{}); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("a block owner route without a path must be invalid: %v", err)
 	}
-	created, err := management.CreateRevision(context.Background(), principal, "billing", nil, Route{EscalationPath: "on-call", AskAgentOwner: true})
+	created, err := management.CreateRevision(context.Background(), principal, "billing", pipelineName("billing"), nil, Route{EscalationPath: "on-call", AskAgentOwner: true})
 	if err != nil {
 		t.Fatal(err)
 	}

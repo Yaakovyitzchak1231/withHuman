@@ -1,5 +1,4 @@
 import type {
-  PipelineScope,
   PreviewBlockOutcome,
   RequestApprovalPipelinePreview,
   RequestApprovalPipelinePreviewBlock,
@@ -9,21 +8,21 @@ import type { BlockDraft } from "./pipeline-blocks";
 
 /*
  * A test run replayed on the rail. A preview lists every evaluation in
- * execution order as one flat list, whatever the block's depth, so the
- * rail finds a block's step by key: the section it sits in (the
- * organization and an agent may share a block key) and its block key,
- * with "#end" for the closing entry of a branch the request ran out of.
+ * execution order as one flat list, whatever the block's depth or the
+ * pipeline that holds it, so the rail finds a block's step by key: the
+ * pipeline it sits in (the previewed pipeline, or one a delegate handed
+ * the request to; two pipelines may share a block key) and its block
+ * key, with "#end" for the closing entry of a branch or delegate the
+ * request ran out of.
  */
 
-/* Which section of the effective pipeline a rail draws. */
-export type RailSection = PipelineScope;
+/* Which pipeline a rail draws, by key. */
+export type RailSection = string;
 
 /* Where one block stands inside a replayed test run. */
 export type TestStatus = "idle" | "pending" | "evaluating" | "passed" | "terminal" | "unreached";
 
-/* A test run's result: a terminal outcome, or "continue" when the
- * organization section alone falls through to the agent's pipeline. */
-export type TestOutcome = "approve" | "deny" | "human" | "continue";
+export type TestOutcome = "approve" | "deny" | "human";
 
 /* A webhook step's evidence: what was called and what came back. */
 export interface DeliveryStepEvidence {
@@ -38,7 +37,7 @@ export interface TestStep {
   blockId: string;
   section: RailSection;
   outcome: PreviewBlockOutcome;
-  /* The closing entry of a branch no block inside decided. */
+  /* The closing entry of a branch or delegate no block inside decided. */
   endOfBranch: boolean;
   errorCode?: string;
   /* What the block returned for later blocks and the reader: a kind
@@ -50,7 +49,7 @@ export interface TestStep {
 export interface TestRun {
   steps: TestStep[];
   outcome: TestOutcome;
-  reasonCode: RequestApprovalPipelinePreview["reason_code"] | "end_of_section";
+  reasonCode: RequestApprovalPipelinePreview["reason_code"];
   /* The step that decided, when a block did: the terminal block's key,
    * or its "#end" key when the request ran out of that branch. */
   terminalKey?: string;
@@ -60,7 +59,7 @@ export function stepKey(section: RailSection, blockId: string, end = false): str
   return `${section}/${blockId}${end ? "#end" : ""}`;
 }
 
-export function testStep(block: RequestApprovalPipelinePreviewBlock, section: RailSection): TestStep {
+export function testStep(block: RequestApprovalPipelinePreviewBlock): TestStep {
   const delivery: DeliveryStepEvidence | undefined = block.delivery
     ? {
         endpointHost: block.delivery.endpoint_host,
@@ -71,9 +70,9 @@ export function testStep(block: RequestApprovalPipelinePreviewBlock, section: Ra
     : undefined;
   const endOfBranch = block.end_of_branch === true;
   return {
-    key: stepKey(section, block.block_id, endOfBranch),
+    key: stepKey(block.pipeline_key, block.block_id, endOfBranch),
     blockId: block.block_id,
-    section,
+    section: block.pipeline_key,
     outcome: block.outcome,
     endOfBranch,
     errorCode: block.error_code,
@@ -82,48 +81,28 @@ export function testStep(block: RequestApprovalPipelinePreviewBlock, section: Ra
   };
 }
 
-export function stepsFromPreview(preview: RequestApprovalPipelinePreview, section: RailSection): TestStep[] {
-  return preview.blocks.map((block) => testStep(block, section));
+export function stepsFromPreview(preview: RequestApprovalPipelinePreview): TestStep[] {
+  return preview.blocks.map(testStep);
 }
 
 /* The step that ended the run: the block the preview names, or that
- * branch's end when the request ran out of it. None when nothing
- * decided. */
-export function terminalKeyOf(preview: RequestApprovalPipelinePreview, section: RailSection): string | undefined {
+ * branch's end when the request ran out of it. The block's pipeline is
+ * read off its last evaluation, which for a branch or delegate the
+ * request ran out of is the closing entry. None when nothing decided. */
+export function terminalKeyOf(preview: RequestApprovalPipelinePreview): string | undefined {
   if (!preview.terminal_block_id) return undefined;
+  const last = [...preview.blocks].reverse().find((block) => block.block_id === preview.terminal_block_id);
+  const section = last?.pipeline_key ?? "";
   return stepKey(section, preview.terminal_block_id, preview.reason_code === "end_of_branch");
 }
 
-/* What the blocks of a section that ran through returned, for the next
- * section's blocks to read, keyed by block key as at runtime. */
-export function carriedMetadata(preview: RequestApprovalPipelinePreview): Record<string, Record<string, unknown>> {
-  const carried: Record<string, Record<string, unknown>> = {};
-  for (const block of preview.blocks) {
-    if (block.outcome === "next" && block.metadata && Object.keys(block.metadata).length) {
-      carried[block.block_id] = block.metadata;
-    }
-  }
-  return carried;
-}
-
-/* One run from the previews a test made, in execution order: the
- * organization section, then the agent's when the organization's ran
- * through. The last preview decides. On the organization pipeline's own
- * page (continues), running through goes on to the agent's pipeline. */
-export function runFromPreviews(
-  previews: { section: RailSection; preview: RequestApprovalPipelinePreview }[],
-  continues = false,
-): TestRun {
-  const steps = previews.flatMap(({ section, preview }) => stepsFromPreview(preview, section));
-  const last = previews[previews.length - 1];
-  if (continues && last.preview.reason_code === "end_of_pipeline") {
-    return { steps, outcome: "continue", reasonCode: "end_of_section" };
-  }
+/* One run from the preview a test made. */
+export function runFromPreview(preview: RequestApprovalPipelinePreview): TestRun {
   return {
-    steps,
-    outcome: last.preview.outcome,
-    reasonCode: last.preview.reason_code,
-    terminalKey: terminalKeyOf(last.preview, last.section),
+    steps: stepsFromPreview(preview),
+    outcome: preview.outcome,
+    reasonCode: preview.reason_code,
+    terminalKey: terminalKeyOf(preview),
   };
 }
 
@@ -149,12 +128,13 @@ export function statusAt(run: TestRun | null, cursor: number, key: string): Test
 }
 
 /* Which exit of a block a test step took: the answer for a webhook,
- * "match" for conditions and Always, "enter" when a branch's conditions
- * were met, "continue" when it fell through, and whatever a registered
- * kind reads from its own metadata. A failed evaluation took none. */
+ * "match" for conditions and Always, "enter" when a branch's or
+ * delegate's conditions were met, "continue" when it fell through, and
+ * whatever a registered kind reads from its own metadata. A failed
+ * evaluation took none. */
 export function takenExit(step: TestStep | undefined, block: BlockDraft): string | undefined {
   if (!step) return undefined;
-  if (block.kind === "branch") {
+  if (block.kind === "branch" || block.kind === "delegate") {
     if (step.errorCode) return undefined;
     if (step.outcome === "enter") return "enter";
     return step.outcome === "next" ? "continue" : undefined;

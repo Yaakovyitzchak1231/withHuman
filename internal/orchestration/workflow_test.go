@@ -675,7 +675,7 @@ func suspendedWorkflowRequest(t *testing.T) (domain.ApprovalRequest, *workflowRe
 	request := workflowRequest(10 * time.Minute)
 	return request, &workflowRepository{request: request, suspension: &domain.PipelineSuspension{
 		RequestID: request.ID, OrganizationID: request.OrganizationID, EvaluationID: "evaluation-1",
-		OrganizationPipelineID: "pipeline-1", ResumePosition: 1, StartedAt: request.CreatedAt, SuspendedAt: request.CreatedAt,
+		PinnedRevisions: map[string]domain.ID{domain.EntryPipelineKey: "pipeline-1"}, ResumePosition: 1, StartedAt: request.CreatedAt, SuspendedAt: request.CreatedAt,
 	}}
 }
 
@@ -786,7 +786,7 @@ func TestResumePipelineIsANoOpWithoutAnOpenSuspension(t *testing.T) {
 		t.Fatalf("a request without a suspension must pass through untouched: resumed=%d committed=%d loaded=%d", pipeline.resumed, repository.resumed, repository.loaded)
 	}
 	now := request.CreatedAt
-	repository.suspension = &domain.PipelineSuspension{RequestID: request.ID, OrganizationID: request.OrganizationID, EvaluationID: "evaluation-1", OrganizationPipelineID: "pipeline-1", ResumedAt: &now}
+	repository.suspension = &domain.PipelineSuspension{RequestID: request.ID, OrganizationID: request.OrganizationID, EvaluationID: "evaluation-1", PinnedRevisions: map[string]domain.ID{domain.EntryPipelineKey: "pipeline-1"}, ResumedAt: &now}
 	if _, err := activities.ResumePipeline(context.Background(), request); err != nil || pipeline.resumed != 0 {
 		t.Fatalf("a resumed suspension must not run again: err=%v resumed=%d", err, pipeline.resumed)
 	}

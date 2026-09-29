@@ -256,7 +256,7 @@ func TestAgentOwnerRoutingAgainstRealPostgres(t *testing.T) {
 
 	t.Run("a revision stores its default owner route", func(t *testing.T) {
 		created, err := store.CreateRequestApprovalPipelineRevision(ctx, application.CreateRequestApprovalPipelineRevisionInput{
-			ID: domain.ID(uuid.NewString()), OrganizationID: orgID, AgentSlug: agent.AgentSlug,
+			ID: domain.ID(uuid.NewString()), OrganizationID: orgID, PipelineKey: domain.EntryPipelineKey, Name: "Entry pipeline",
 			DefaultEscalationPath: "platform", DefaultAskAgentOwner: true,
 			CreatedByActorID: ownerMembershipID, Now: now,
 		})
@@ -264,14 +264,14 @@ func TestAgentOwnerRoutingAgainstRealPostgres(t *testing.T) {
 			t.Fatalf("CreateRequestApprovalPipelineRevision: %v", err)
 		}
 		read, err := store.GetRequestApprovalPipelineRevision(ctx, application.GetRequestApprovalPipelineRevisionInput{
-			OrganizationID: orgID, AgentSlug: agent.AgentSlug, Revision: created.Revision,
+			OrganizationID: orgID, PipelineKey: domain.EntryPipelineKey, Revision: created.Revision,
 		})
 		if err != nil || !read.DefaultAskAgentOwner || read.DefaultEscalationPath != "platform" {
 			t.Fatalf("revision = %+v, %v", read, err)
 		}
 		if _, err := store.Pool().Exec(ctx, `INSERT INTO request_approval_pipelines
-			(id, organization_id, agent_slug, revision, is_active, block_ids, default_ask_agent_owner, created_by_actor_id, created_at)
-			VALUES ($1, $2, $3, 99, false, '{}', true, $4, $5)`, uuid.NewString(), orgID, agent.AgentSlug, ownerMembershipID, now); err == nil {
+			(id, organization_id, pipeline_key, name, revision, is_active, block_ids, default_ask_agent_owner, created_by_actor_id, created_at)
+			VALUES ($1, $2, $3, 'Entry pipeline', 99, false, '{}', true, $4, $5)`, uuid.NewString(), orgID, domain.EntryPipelineKey, ownerMembershipID, now); err == nil {
 			t.Fatal("the database accepted an owner route without its fallback path")
 		}
 	})

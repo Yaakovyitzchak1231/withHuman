@@ -33,18 +33,21 @@ import {
   pathTarget,
   routeKeyOf,
 } from "./pipeline-blocks";
-import { TestRequestDialog } from "./pipeline-view";
-import type {
-  RequestApprovalPipelineRevision,
-  RequestApprovalPipelineSummary,
+import { pipelineLink } from "./pipeline-link";
+import { TestRequestDialog } from "./test-request-dialog";
+import {
+  ENTRY_PIPELINE_KEY,
+  type RequestApprovalPipelineRevision,
+  type RequestApprovalPipelineSummary,
 } from "../types";
 import { useTitle } from "./use-title";
 import { useRevisionActivation } from "./use-revision-activation";
 
 /*
  * The approval pipelines overview, drawn as the pipeline every request
- * experiences: entry, the organization pipeline (runs first), one
- * labeled fan-out into the table of agents, and the human terminus.
+ * experiences: entry, the entry pipeline (which every request runs),
+ * one labeled fan-out into the table of pipelines its delegate blocks
+ * hand to, and the human terminus.
  */
 
 /* What the pipelines route loader delivers. A failed load is reported
@@ -52,49 +55,43 @@ import { useRevisionActivation } from "./use-revision-activation";
  * sign-in gate, not the router's error boundary. */
 export interface PipelinesPage {
   pipelines: RequestApprovalPipelineSummary[];
-  /* Each agent's display name by slug, from the inventory the viewer may
-   * read; a pipeline whose agent is missing here shows its slug alone. */
-  agentNames: Record<string, string>;
-  organizationRevision: RequestApprovalPipelineRevision | null;
+  /* The entry pipeline's active revision, for the default reviewers
+   * shortcut; null when the viewer may not read it. */
+  entryRevision: RequestApprovalPipelineRevision | null;
   /* The organization's escalation paths, the choices for the default. */
   directory: ReviewerTarget[];
   defaultReviewers: ReviewerTarget | null;
   error: string;
 }
 
-/* The agent table's filter: the pipelines still in service (the
- * default), the ones archived with their agent, or both. */
+/* The table's filter: the pipelines still in service (the default),
+ * the archived ones, or both. */
 type PipelineFilter = "all" | "active" | "archived";
 
 export async function loadPipelinesPage(): Promise<PipelinesPage> {
   try {
     const response = await api.requestApprovalPipelines("all");
     const pipelines = response.request_approval_pipelines;
-    const organization = pipelines.find((pipeline) => pipeline.scope === "organization");
-    /* Read the active revision to resolve the organization default
-     * reviewers, and the paths so the terminus card can offer them. */
-    const [organizationRevision, directory, agents] = await Promise.all([
-      organization?.active_revision
-        ? api.requestApprovalPipelineRevision("", organization.active_revision)
+    const entry = pipelines.find((pipeline) => pipeline.pipeline_key === ENTRY_PIPELINE_KEY);
+    /* Read the active revision to resolve the default reviewers, and the
+     * paths so the terminus card can offer them. */
+    const [entryRevision, directory] = await Promise.all([
+      entry?.active_revision
+        ? api.requestApprovalPipelineRevision(ENTRY_PIPELINE_KEY, entry.active_revision).catch(() => null)
         : Promise.resolve(null),
       loadPathDirectory(),
-      /* Names are decoration on the rows; the pipelines list stands
-       * without them. */
-      api.agents("all").then((response) => response.agents, () => []),
     ]);
     return {
       pipelines,
-      agentNames: Object.fromEntries(agents.map((agent) => [agent.slug, agent.name])),
-      organizationRevision,
+      entryRevision,
       directory,
-      defaultReviewers: pathTarget(organizationRevision?.default_escalation_path, directory, organizationRevision?.default_ask_agent_owner),
+      defaultReviewers: pathTarget(entryRevision?.default_escalation_path, directory, entryRevision?.default_ask_agent_owner),
       error: "",
     };
   } catch (reason) {
     return {
       pipelines: [],
-      agentNames: {},
-      organizationRevision: null,
+      entryRevision: null,
       directory: [],
       defaultReviewers: null,
       error: reason instanceof Error ? reason.message : "Unable to load approval pipelines.",
@@ -105,76 +102,54 @@ export async function loadPipelinesPage(): Promise<PipelinesPage> {
 export function PipelinesScreen({ page }: { page: PipelinesPage }) {
   const navigate = useNavigate();
   const router = useRouter();
-  const { can, holdsAnywhere, scopeOf } = useAccess();
-  /* null when the viewer reads every pipeline; otherwise the slugs of
-   * the agents they manage. The server filters the list the same way,
-   * and the organization pipeline is out of a scoped reader's reach. */
-  const managedAgents = useMemo<string[] | null>(() => {
-    const scope = scopeOf("pipeline.read");
-    if (scope === "all") return null;
-    return scope.filter((entry) => entry.kind === "agent").map((entry) => entry.id);
-  }, [scopeOf]);
+  const { can, scopeOf } = useAccess();
+  /* Whether the viewer reads every pipeline. The server narrows the list
+   * the same way, and the entry pipeline is out of a scoped reader's
+   * reach unless their grant names it. */
+  const readsAll = scopeOf("pipeline.read") === "all";
+  const entryResource = { kind: "pipeline", id: ENTRY_PIPELINE_KEY } as const;
+  const canReadEntry = can("pipeline.read", entryResource);
+  const canCreate = can("pipeline.write");
   const toast = useToast();
   const revisionActivation = useRevisionActivation();
-  const { pipelines, agentNames, organizationRevision, directory, defaultReviewers, error } = page;
+  const { pipelines, entryRevision, directory, defaultReviewers, error } = page;
   const [filter, setFilter] = useState("");
   const [status, setStatus] = useState<PipelineFilter>("active");
   useTitle("Approval pipelines");
 
-  const agentPipelines = useMemo(
-    () => pipelines.filter((pipeline) => pipeline.scope === "agent"),
+  const entry = pipelines.find((pipeline) => pipeline.pipeline_key === ENTRY_PIPELINE_KEY);
+  const others = useMemo(
+    () => pipelines.filter((pipeline) => pipeline.pipeline_key !== ENTRY_PIPELINE_KEY),
     [pipelines],
   );
-  const archivedCount = agentPipelines.filter((pipeline) => pipeline.archived_at).length;
-  const agentRows = useMemo(() => {
+  const archivedCount = others.filter((pipeline) => pipeline.archived_at).length;
+  const rows = useMemo(() => {
     const query = filter.trim().toLowerCase();
-    return agentPipelines.filter((pipeline) => {
+    return others.filter((pipeline) => {
       if (status === "active" && pipeline.archived_at) return false;
       if (status === "archived" && !pipeline.archived_at) return false;
-      const slug = pipeline.agent_slug ?? "";
       return (
-        slug.toLowerCase().includes(query) ||
-        (agentNames[slug] ?? "").toLowerCase().includes(query)
+        pipeline.pipeline_key.toLowerCase().includes(query) ||
+        pipeline.name.toLowerCase().includes(query)
       );
     });
-  }, [agentPipelines, agentNames, filter, status]);
-  const agentTotal = agentPipelines.length;
+  }, [others, filter, status]);
 
-  /* Testing from the overview: the sample names an agent by slug, and
-   * the run opens that pipeline, which replays the whole order
-   * (organization blocks first) on its own rail. */
-  const canTest = holdsAnywhere("pipeline.write");
+  /* Testing from the overview: the run opens the entry pipeline, which
+   * replays the whole order, delegated pipelines included, on its rail. */
+  const canTest = can("pipeline.write", entryResource);
   const [testOpen, setTestOpen] = useState(false);
-  const [sampleText, setSampleText] = useState(() => {
-    const first = pipelines.find(
-      (pipeline) => pipeline.scope === "agent" && !pipeline.archived_at,
-    )?.agent_slug;
-    return JSON.stringify(defaultSample(first ?? "example"), null, 2);
-  });
+  const [sampleText, setSampleText] = useState(() => JSON.stringify(defaultSample(), null, 2));
   async function runTest(): Promise<string | null> {
-    const sample = JSON.parse(sampleText) as { agent?: { slug?: unknown } };
-    const slug = typeof sample.agent?.slug === "string" ? sample.agent.slug.trim() : "";
-    if (!slug) return "Set agent.slug in the sample to the agent sending the request.";
-    const target = pipelines.find((pipeline) => pipeline.agent_slug === slug);
-    if (!target) {
-      return `No agent has the slug ${slug}. Use one of the agents listed below.`;
-    }
-    if (target.archived_at) {
-      return `The ${slug} pipeline was archived with its agent. Restore the agent to test it.`;
-    }
-    if (!can("pipeline.write", { kind: "agent", id: slug })) {
-      return `You cannot test the ${slug} pipeline.`;
-    }
-    handOffTestSample(slug, sampleText);
+    handOffTestSample(ENTRY_PIPELINE_KEY, sampleText);
     setTestOpen(false);
-    await navigate({ to: "/pipelines/agents/$agentSlug", params: { agentSlug: slug } });
+    await navigate(pipelineLink(ENTRY_PIPELINE_KEY));
     return null;
   }
 
-  /* The shortcut saves an organization pipeline revision, then uses the
-   * same activation choice as the full pipeline editor. */
-  const canEditDefault =
-    organizationRevision !== null && can("pipeline.write", { kind: "organization" });
+  /* The shortcut saves an entry pipeline revision, then uses the same
+   * activation choice as the full pipeline editor. */
+  const canEditDefault = entryRevision !== null && can("pipeline.write", entryResource);
   const [editingDefault, setEditingDefault] = useState(false);
   const [draftDefault, setDraftDefault] = useState<ReviewerTarget | null>(null);
   const [savingDefault, setSavingDefault] = useState(false);
@@ -186,10 +161,10 @@ export function PipelinesScreen({ page }: { page: PipelinesPage }) {
     setEditingDefault(false);
   }
   async function saveDefault() {
-    if (!organizationRevision) return;
+    if (!entryRevision) return;
     if (
       routeKeyOf(draftDefault) ===
-      routeKeyOf(pathTarget(organizationRevision.default_escalation_path, [], organizationRevision.default_ask_agent_owner))
+      routeKeyOf(pathTarget(entryRevision.default_escalation_path, [], entryRevision.default_ask_agent_owner))
     ) {
       setEditingDefault(false);
       return;
@@ -198,17 +173,17 @@ export function PipelinesScreen({ page }: { page: PipelinesPage }) {
     try {
       /* The blocks go back exactly as stored; only the default changes. */
       const key = pathKeyOf(draftDefault);
-      const revision = await api.createRequestApprovalPipelineRevision("", {
-        blocks: definitionsFromStored(organizationRevision.blocks),
+      const revision = await api.createRequestApprovalPipelineRevision(ENTRY_PIPELINE_KEY, {
+        blocks: definitionsFromStored(entryRevision.blocks),
         ...(key ? { default_escalation_path: key } : {}),
         ...(key && asksAgentOwner(draftDefault) ? { default_ask_agent_owner: true } : {}),
       });
       await revisionActivation.offer({
         revision: revision.revision,
-        activeRevision: organizationRevision.revision,
-        canActivate: can("pipeline.activate", { kind: "organization" }),
+        activeRevision: entryRevision.revision,
+        canActivate: can("pipeline.activate", entryResource),
         activationDescription: "Once active, new requests use these default reviewers.",
-        activate: () => api.activateRequestApprovalPipelineRevision("", revision.revision, organizationRevision.revision),
+        activate: () => api.activateRequestApprovalPipelineRevision(ENTRY_PIPELINE_KEY, revision.revision, entryRevision.revision),
       });
       setEditingDefault(false);
       await router.invalidate();
@@ -226,30 +201,22 @@ export function PipelinesScreen({ page }: { page: PipelinesPage }) {
   const columns = useMemo<TableColumn<RequestApprovalPipelineSummary>[]>(
     () => [
       {
-        id: "agent",
-        label: "Agent",
+        id: "pipeline",
+        label: "Pipeline",
         grow: true,
-        cell: (pipeline) => {
-          const slug = pipeline.agent_slug ?? "";
-          const name = agentNames[slug];
-          return (
-            <span
-              className="flex min-w-0 flex-col items-start gap-0.5"
-              onClick={(event) => event.stopPropagation()}
-              onKeyDown={(event) => event.stopPropagation()}
-            >
-              <ReferenceChip
-                reference={{ kind: "pipeline", agentSlug: slug }}
-                link={{ to: "/pipelines/agents/$agentSlug", params: { agentSlug: slug } }}
-              >
-                {name ?? <span className="font-mono text-[12px]">{slug}</span>}
-              </ReferenceChip>
-              {name ? (
-                <span className="pl-2 font-mono text-[12px] text-ink-muted">{slug}</span>
-              ) : null}
-            </span>
-          );
-        },
+        cell: (pipeline) => (
+          <span
+            className="flex min-w-0 flex-col items-start gap-0.5"
+            onClick={(event) => event.stopPropagation()}
+            onKeyDown={(event) => event.stopPropagation()}
+          >
+            <ReferenceChip
+              reference={{ kind: "pipeline", pipelineKey: pipeline.pipeline_key, name: pipeline.name }}
+              link={pipelineLink(pipeline.pipeline_key)}
+            />
+            <span className="pl-2 font-mono text-[12px] text-ink-muted">{pipeline.pipeline_key}</span>
+          </span>
+        ),
       },
       {
         id: "status",
@@ -285,7 +252,7 @@ export function PipelinesScreen({ page }: { page: PipelinesPage }) {
         ),
       },
     ],
-    [agentNames],
+    [],
   );
 
   return (
@@ -296,20 +263,23 @@ export function PipelinesScreen({ page }: { page: PipelinesPage }) {
           <h1 className="text-title-lg text-ink">Approval pipelines</h1>
           <p className="mt-1.5 max-w-[620px] text-body text-ink-muted">
             Approval pipelines decide what to do with an agent’s request.{" "}
-            {managedAgents === null
-              ? "Define rules that automatically approve, deny or route requests to a human."
-              : "You see the rules for the agents you manage."}
+            {readsAll
+              ? "Every request enters the entry pipeline, whose delegate blocks can hand matching requests to pipelines other teams own."
+              : "You see the pipelines you manage."}
           </p>
         </div>
-        {canTest ? (
-          <Button
-            variant="ghost"
-            className="shrink-0 self-end sm:self-auto"
-            onClick={() => setTestOpen(true)}
-          >
-            Test request
-          </Button>
-        ) : null}
+        <div className="flex shrink-0 items-center gap-2 self-end sm:self-auto">
+          {canTest ? (
+            <Button variant="ghost" onClick={() => setTestOpen(true)}>
+              Test request
+            </Button>
+          ) : null}
+          {canCreate ? (
+            <Button variant="primary" onClick={() => void navigate({ to: "/pipelines/new" })}>
+              New pipeline
+            </Button>
+          ) : null}
+        </div>
       </div>
 
       {error ? (
@@ -325,19 +295,17 @@ export function PipelinesScreen({ page }: { page: PipelinesPage }) {
 
       <div className="flex flex-col">
         <PipelineEntryCard />
-        <PipelineConnector
-          label={managedAgents === null ? "First, check organization rules" : "Check rules for your agents"}
-        />
+        <PipelineConnector label={canReadEntry ? "First, check the entry pipeline" : "Check the pipelines you manage"} />
 
-        {managedAgents === null ? (
+        {canReadEntry && entry ? (
         <Card
           role="button"
           tabIndex={0}
-          onClick={() => void navigate({ to: "/pipelines/organization" })}
+          onClick={() => void navigate(pipelineLink(ENTRY_PIPELINE_KEY))}
           onKeyDown={(event) => {
             if (event.key === "Enter" || event.key === " ") {
               event.preventDefault();
-              void navigate({ to: "/pipelines/organization" });
+              void navigate(pipelineLink(ENTRY_PIPELINE_KEY));
             }
           }}
           className="flex cursor-pointer items-center gap-3 px-4 py-2.5 transition-colors duration-100 hover:bg-fill-hover"
@@ -346,13 +314,14 @@ export function PipelinesScreen({ page }: { page: PipelinesPage }) {
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
               <h3 className="text-label font-medium text-ink" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}>
-                <Referenced reference={{ kind: "pipeline", agentSlug: "" }} inline focusable={false}>
-                  <Link to="/pipelines/organization">Organization pipeline</Link>
+                <Referenced reference={{ kind: "pipeline", pipelineKey: ENTRY_PIPELINE_KEY, name: entry.name }} inline focusable={false}>
+                  <Link {...pipelineLink(ENTRY_PIPELINE_KEY)}>{entry.name}</Link>
                 </Referenced>
               </h3>
+              <Badge tone="approve">Active revision {entry.active_revision}</Badge>
             </div>
             <p className="mt-0.5 text-micro text-ink-muted">
-              These approval rules are shared across all agents and run for every request first.
+              Every request runs these rules first. Delegate blocks here hand matching requests to the pipelines below.
             </p>
           </div>
           <span
@@ -366,7 +335,7 @@ export function PipelinesScreen({ page }: { page: PipelinesPage }) {
                   id: "view",
                   group: "open",
                   label: "View pipeline",
-                  action: () => void navigate({ to: "/pipelines/organization" }),
+                  action: () => void navigate(pipelineLink(ENTRY_PIPELINE_KEY)),
                 },
                 ...(canTest
                   ? [{ id: "test", label: "Test request", action: () => setTestOpen(true) }]
@@ -375,7 +344,7 @@ export function PipelinesScreen({ page }: { page: PipelinesPage }) {
             >
               <MenuTrigger
                 render={
-                  <IconButton aria-label="Actions for the organization pipeline" size="sm">
+                  <IconButton aria-label="Actions for the entry pipeline" size="sm">
                     <EllipsisIcon width={15} height={15} />
                   </IconButton>
                 }
@@ -386,10 +355,10 @@ export function PipelinesScreen({ page }: { page: PipelinesPage }) {
         </Card>
         ) : null}
 
-        {managedAgents === null ? (
-          <PipelineConnector label="If no decision is made">
+        {canReadEntry && entry ? (
+          <PipelineConnector label="If a delegate block matches">
             <span className="text-micro text-ink-muted">
-              continue to the pipeline for the agent that sent the request
+              continue in the pipeline it names
             </span>
           </PipelineConnector>
         ) : null}
@@ -397,14 +366,14 @@ export function PipelinesScreen({ page }: { page: PipelinesPage }) {
         <Card className="overflow-x-auto">
           <div className="flex flex-wrap items-center gap-3 border-b-hairline border-edge px-4 py-3">
             <TextField
-              aria-label="Filter agents"
-              placeholder="Filter agents"
+              aria-label="Filter pipelines"
+              placeholder="Filter pipelines"
               value={filter}
               onChange={(event) => setFilter(event.target.value)}
               className="w-[220px]"
             />
             <span className="text-micro text-ink-muted">
-              {agentRows.length} of {agentTotal} agents
+              {rows.length} of {others.length} pipelines
             </span>
             <span className="ml-auto flex items-center gap-3">
               {archivedCount > 0 ? (
@@ -420,60 +389,36 @@ export function PipelinesScreen({ page }: { page: PipelinesPage }) {
               ) : null}
             </span>
           </div>
-          {agentRows.length ? (
+          {rows.length ? (
             <Table
-              aria-label="Agent pipelines"
-              items={agentRows}
-              getId={(pipeline) => pipeline.agent_slug ?? ""}
+              aria-label="Delegated pipelines"
+              items={rows}
+              getId={(pipeline) => pipeline.pipeline_key}
               selected={new Set()}
               onSelectedChange={() => undefined}
               selectable={false}
               openOnClick
               openLabel="View pipeline"
-              onOpen={(pipeline) =>
-                void navigate({
-                  to: "/pipelines/agents/$agentSlug",
-                  params: { agentSlug: pipeline.agent_slug ?? "" },
-                })
-              }
+              onOpen={(pipeline) => void navigate(pipelineLink(pipeline.pipeline_key))}
               columns={columns}
-              rowLabel={(pipeline) => agentNames[pipeline.agent_slug ?? ""] ?? pipeline.agent_slug ?? "organization"}
-              rowActions={(pipeline) => [
-                {
-                  id: "agent",
-                  label: "View agent",
-                  action: () =>
-                    void navigate({
-                      to: "/agents/$agentSlug",
-                      params: { agentSlug: pipeline.agent_slug ?? "" },
-                    }),
-                },
-              ]}
+              rowLabel={(pipeline) => pipeline.name}
               className="min-w-[620px]"
             />
           ) : (
             <p className="px-4 py-6 text-body text-ink-muted">
-              {agentTotal === 0 && managedAgents !== null ? (
-                managedAgents.length > 0 ? (
-                  <>
-                    No pipelines for the agents you manage yet. You can manage{" "}
-                    <span className="font-mono text-[12px] text-ink-secondary">
-                      {managedAgents.join(", ")}
-                    </span>
-                    .
-                  </>
-                ) : (
-                  "No pipelines for the agents you manage yet."
-                )
-              ) : agentTotal === 0 ? (
-                "Connect an agent to start setting up its approval rules."
+              {others.length === 0 && !readsAll ? (
+                "No pipelines you manage yet."
+              ) : others.length === 0 ? (
+                canCreate
+                  ? "No other pipelines yet. Create one to give a team rules of its own, then hand requests to it with a delegate block."
+                  : "No other pipelines yet. Every request is decided by the entry pipeline."
               ) : status === "archived" ? (
-                "No archived pipeline matches. A pipeline is archived with its agent and restored with it."
-              ) : status === "active" && agentRows.length === 0 && !filter.trim() ? (
-                "Every pipeline is archived. Restore an agent or connect a new one to start a fresh pipeline."
+                "No archived pipeline matches."
+              ) : status === "active" && rows.length === 0 && !filter.trim() ? (
+                "Every other pipeline is archived. Create a new one to hand requests to."
               ) : (
                 <>
-                  No agent matches{" "}
+                  No pipeline matches{" "}
                   <span className="font-mono text-[12px] text-ink-secondary">{filter.trim()}</span>.
                 </>
               )}
@@ -503,7 +448,7 @@ export function PipelinesScreen({ page }: { page: PipelinesPage }) {
         sampleText={sampleText}
         onSampleTextChange={setSampleText}
         onRun={runTest}
-        description="See what would happen to a sample request, one block at a time. This does not create a real approval request."
+        description="See what would happen to a sample request, one block at a time, starting in the entry pipeline. This does not create a real approval request."
       />
     </Page>
   );

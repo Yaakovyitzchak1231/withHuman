@@ -11,11 +11,8 @@ import (
 	"sync"
 
 	"github.com/gin-gonic/gin"
-	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/withHumanAI/withHuman/application"
 	"github.com/withHumanAI/withHuman/domain"
-	"github.com/withHumanAI/withHuman/internal/onboarding"
 )
 
 // MCPPath is where the product server speaks MCP. It is the management
@@ -290,86 +287,19 @@ func mcpObject(fields map[string]any) (*mcp.CallToolResult, any, error) {
 
 // addMCPTool registers one typed tool whose handler answers with raw
 // JSON from the product API, so every tool shares the same result and
-// error shaping. The tool also joins the catalog the setup assistant
-// reads, with the input schema the SDK infers, so both callers see one
-// definition.
+// error shaping.
 func addMCPTool[In any](a *API, server *mcp.Server, tool *mcp.Tool, handler func(call *mcpCall, input In) (*mcp.CallToolResult, any, error)) {
 	mcp.AddTool(server, tool, func(ctx context.Context, request *mcp.CallToolRequest, input In) (*mcp.CallToolResult, any, error) {
 		return handler(a.newMCPCall(ctx, request), input)
 	})
-	schema, err := jsonschema.For[In](nil)
-	if err != nil {
-		panic(fmt.Sprintf("mcp tool %s: input schema: %v", tool.Name, err))
-	}
-	encoded, err := json.Marshal(schema)
-	if err != nil {
-		panic(fmt.Sprintf("mcp tool %s: input schema: %v", tool.Name, err))
-	}
-	a.mcpCatalog = append(a.mcpCatalog, mcpCatalogEntry{tool: tool, schema: encoded, invoke: func(call *mcpCall, raw json.RawMessage) (*mcp.CallToolResult, error) {
-		var input In
-		if len(raw) > 0 {
-			if err := json.Unmarshal(raw, &input); err != nil {
-				return nil, fmt.Errorf("the input could not be read: %w", err)
-			}
-		}
-		result, _, err := handler(call, input)
-		return result, err
-	}})
 }
 
-// mcpCatalogEntry is one tool as the setup assistant sees it.
-type mcpCatalogEntry struct {
-	tool   *mcp.Tool
-	schema json.RawMessage
-	invoke func(call *mcpCall, input json.RawMessage) (*mcp.CallToolResult, error)
-}
+// mcpAssistantGrammar hands the setup assistant the deployment's block
+// grammar: the same appendix read_reference serves. The assistant's
+// tools are the setup's own, so nothing of the catalog is exposed to it.
+type mcpAssistantGrammar struct{ api *API }
 
-// mcpAssistantTools hands the setup assistant the management tool
-// catalog, executed in process under the person's own principal: the
-// same authorization, validation, and audit provenance a browser request
-// of theirs would get.
-type mcpAssistantTools struct{ api *API }
-
-func (t mcpAssistantTools) Tools() []application.ToolUseTool {
-	t.api.mcpServer()
-	tools := make([]application.ToolUseTool, 0, len(t.api.mcpCatalog))
-	for _, entry := range t.api.mcpCatalog {
-		tools = append(tools, application.ToolUseTool{Name: entry.tool.Name, Description: entry.tool.Description, InputSchema: entry.schema})
-	}
-	return tools
-}
-
-func (t mcpAssistantTools) Grammar() string { return t.api.compiledPipelines.Grammar() }
-
-func (t mcpAssistantTools) Call(ctx context.Context, principal domain.Principal, name string, input json.RawMessage) (onboarding.AssistantToolResult, error) {
-	t.api.mcpServer()
-	for _, entry := range t.api.mcpCatalog {
-		if entry.tool.Name != name {
-			continue
-		}
-		result, err := entry.invoke(&mcpCall{api: t.api, ctx: ctx, header: http.Header{}, principal: &principal}, input)
-		if err != nil {
-			return onboarding.AssistantToolResult{Content: err.Error(), IsError: true}, nil
-		}
-		return onboarding.AssistantToolResult{Content: mcpResultText(result), IsError: result != nil && result.IsError}, nil
-	}
-	return onboarding.AssistantToolResult{}, fmt.Errorf("unknown tool %s", name)
-}
-
-// mcpResultText is a tool result as text: what a client that reads only
-// text would see.
-func mcpResultText(result *mcp.CallToolResult) string {
-	if result == nil {
-		return `{"ok":true}`
-	}
-	var text strings.Builder
-	for _, content := range result.Content {
-		if typed, ok := content.(*mcp.TextContent); ok {
-			text.WriteString(typed.Text)
-		}
-	}
-	return text.String()
-}
+func (t mcpAssistantGrammar) Grammar() string { return t.api.compiledPipelines.Grammar() }
 
 var (
 	mcpReadOnly = &mcp.ToolAnnotations{ReadOnlyHint: true, DestructiveHint: boolPointer(false), OpenWorldHint: boolPointer(false)}
@@ -389,9 +319,8 @@ func boolPointer(value bool) *bool { return &value }
 // process and shared by every stateless request and by the setup
 // assistant.
 type mcpServerState struct {
-	mcpOnce    sync.Once
-	mcp        *mcp.Server
-	mcpCatalog []mcpCatalogEntry
+	mcpOnce sync.Once
+	mcp     *mcp.Server
 }
 
 // mcpInstructions is what the client hands its model at initialize: the
@@ -399,7 +328,7 @@ type mcpServerState struct {
 const mcpInstructions = `withHuman decides which of an AI agent's tool calls need a human's approval. You are connected to one organization's management API with an API key; every tool acts with that key's permissions and is recorded in the audit log.
 
 How the pieces fit:
-- An approval request runs through the organization's approval pipeline first, then the requesting agent's own pipeline. Blocks run in order; the first block that decides (approve, deny, or human) ends the pipeline. A request no block decides falls through to human review, so end a pipeline with an always block whose outcome is approve when the rest should be automatic. Every agent has exactly one pipeline, seeded empty (everything falls through to a person) when the agent is created.
+- Every approval request starts in the organization's entry pipeline (key entry). Blocks run in order; the first block that decides (approve, deny, or human) ends the pipeline. A delegate block hands the requests its condition matches to another pipeline by key, and that pipeline's owners decide what happens to them: a request that enters it is decided inside it or goes to a person, and nothing after the delegate runs for it. A request no block decides falls through to human review, so end a pipeline with an always block whose outcome is approve when the rest should be automatic. Pipelines other than entry are created explicitly (create_pipeline) and owned through grants at pipeline:<key>.
 - A block that answers "human" hands the request to an escalation path, which names who reviews it (members by membership id, teams by team id), in what order, and what happens when nobody answers. A pipeline revision also carries a default_escalation_path for human exits that name no path. Setting ask_agent_owner beside a block's escalation_path (default_ask_agent_owner beside the default) sends the request to the person who owns the agent instance instead, with the path as the fallback for agents without an owner.
 - Pipelines, escalation paths and webhook endpoints are revisioned: every save creates a new numbered revision and the write tools activate it right away unless activate is false. Earlier revisions stay readable for rollback through the activate_* tools. Activating a pipeline requires every escalation path and webhook endpoint it names to be active.
 
@@ -407,7 +336,7 @@ Typical setup:
 1. list_agents to find the agent slug (or create_agent).
 2. list_members and list_teams to find reviewer targets; create_team and set_team_members to shape a team.
 3. create_escalation_path naming those targets.
-4. update_pipeline for the organization or one agent, with blocks that send risky calls to that path and approve the rest.
+4. update_pipeline for the entry pipeline (pipeline_key entry) with blocks that send risky calls to that path and approve the rest; create_pipeline and a delegate block when another team should own part of the rules.
 5. preview_pipeline with a sample request to check the outcome before or after activating.
 
 Call read_reference before writing your first pipeline blocks, conditions, or escalation path document: the grammar is strict, unknown fields are refused, and every condition and node id must be a UUID you generate.`

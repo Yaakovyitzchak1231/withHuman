@@ -483,30 +483,30 @@ func TestOperatorBindingNeverReturnsAnAmbiguousCELValue(t *testing.T) {
 	}
 }
 
-func TestCELReadsPreviousBlockMetadataByScopeAndKey(t *testing.T) {
+func TestCELReadsPreviousBlockMetadataByPipelineAndKey(t *testing.T) {
 	block := mustCompile(t, blockDefinition(approvalblock.Approve, approvalblock.All(
-		approvalblock.Field("/previous_metadata/organization/fraud-check/risk_score").LessThan(50),
+		approvalblock.Field("/previous_metadata/entry/fraud-check/risk_score").LessThan(50),
 	)))
 	input := blockInput(`{"amount_cents":900}`)
-	input.PreviousMetadata = map[string]json.RawMessage{"organization/fraud-check": json.RawMessage(`{"risk_score":12,"band":"low"}`)}
+	input.PreviousMetadata = map[string]json.RawMessage{"entry/fraud-check": json.RawMessage(`{"risk_score":12,"band":"low"}`)}
 	if result := execute(t, block, input); result.Outcome != BlockApprove {
 		t.Fatalf("threshold on previous metadata did not match: %+v", result)
 	}
-	input.PreviousMetadata = map[string]json.RawMessage{"agent/fraud-check": json.RawMessage(`{"risk_score":12}`)}
+	input.PreviousMetadata = map[string]json.RawMessage{"billing/fraud-check": json.RawMessage(`{"risk_score":12}`)}
 	if result := execute(t, block, input); result.Outcome != BlockNext || result.ErrorCode != "" {
-		t.Fatalf("metadata under another scope matched: %+v", result)
+		t.Fatalf("metadata under another pipeline matched: %+v", result)
 	}
 	input.PreviousMetadata = nil
 	if result := execute(t, block, input); result.Outcome != BlockNext || result.ErrorCode != "" {
 		t.Fatalf("absent block did not fall through: %+v", result)
 	}
 	absent := mustCompile(t, blockDefinition(approvalblock.Human, approvalblock.All(
-		approvalblock.Field("/previous_metadata/organization/fraud-check").NotExists(),
+		approvalblock.Field("/previous_metadata/entry/fraud-check").NotExists(),
 	)))
 	if result := execute(t, absent, input); result.Outcome != BlockHuman {
 		t.Fatalf("not_exists did not match an absent block: %+v", result)
 	}
-	for _, path := range []string{"/previous_metadata", "/previous_metadata/organization", "/previous_metadata/other/x/y"} {
+	for _, path := range []string{"/previous_metadata", "/previous_metadata/entry", "/previous_metadata/Bad_Key/x", "/previous_metadata/entry/"} {
 		if _, err := CompileCELBlock(blockDefinition(approvalblock.Approve, approvalblock.Field(path).Exists())); err == nil {
 			t.Fatalf("path %q compiled", path)
 		}

@@ -184,7 +184,7 @@ func (a *API) router() *gin.Engine {
 	// The setup assistant runs the management tools in process; the
 	// catalog is this layer's, so it is handed over here.
 	if a.onboarding != nil {
-		a.onboarding.RegisterAssistantTools(mcpAssistantTools{api: a})
+		a.onboarding.RegisterAssistantGrammar(mcpAssistantGrammar{api: a})
 	}
 	router.Use(a.observability(), a.recovery())
 	root := &router.RouterGroup
@@ -991,27 +991,37 @@ func (a *API) revokeCredential(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
-// A pipeline scope is addressed as "organization" or
-// "agents/{agent_slug}". Handlers read the agent_slug route parameter,
-// which is empty on the organization routes, so both scope forms share one
-// handler set: an empty scope is the organization pipeline. The slug is
-// the scope key itself, so no agent lookup happens here; an unknown slug
-// reads as a scope without revisions.
+// Pipelines are addressed by key. The entry pipeline, where every
+// request starts, is the reserved key "entry"; every other pipeline is
+// created explicitly and reached through delegate blocks. Handlers read
+// the pipeline_key route parameter and hand it to the service, which
+// validates it and checks the permission at the pipeline's own scope.
 func (a *API) installRequestApprovalPipelineRoutes(router *gin.RouterGroup) {
 	read, write, activate := string(domain.PermissionPipelineRead), string(domain.PermissionPipelineWrite), string(domain.PermissionPipelineActivate)
 	a.handle(router, http.MethodGet, "/request-approval-pipelines", read, a.listRequestApprovalPipelines)
-	for _, scope := range []string{"/request-approval-pipelines/organization", "/request-approval-pipelines/agents/:agent_slug"} {
-		a.handle(router, http.MethodGet, scope, read, a.getActiveRequestApprovalPipeline)
-		a.handle(router, http.MethodPost, scope+"/preview", write, a.previewRequestApprovalPipeline)
-		a.handle(router, http.MethodPost, scope+"/revisions", write, a.createRequestApprovalPipelineRevision)
-		a.handle(router, http.MethodGet, scope+"/revisions", read, a.listRequestApprovalPipelineRevisions)
-		a.handle(router, http.MethodGet, scope+"/revisions/:revision", read, a.getRequestApprovalPipelineRevision)
-		a.handle(router, http.MethodGet, scope+"/revisions/:revision/references", read, a.getRequestApprovalPipelineRevisionReferences)
-		a.handle(router, http.MethodPost, scope+"/revisions/:revision/activate", activate, a.activateRequestApprovalPipelineRevision)
-	}
+	a.handle(router, http.MethodPost, "/request-approval-pipelines", write, a.createRequestApprovalPipeline)
+	pipeline := "/request-approval-pipelines/:pipeline_key"
+	a.handle(router, http.MethodGet, pipeline, read, a.getActiveRequestApprovalPipeline)
+	a.handle(router, http.MethodDelete, pipeline, activate, a.archiveRequestApprovalPipeline)
+	a.handle(router, http.MethodGet, pipeline+"/uses", read, a.listRequestApprovalPipelineUses)
+	a.handle(router, http.MethodPost, pipeline+"/preview", write, a.previewRequestApprovalPipeline)
+	a.handle(router, http.MethodPost, pipeline+"/revisions", write, a.createRequestApprovalPipelineRevision)
+	a.handle(router, http.MethodGet, pipeline+"/revisions", read, a.listRequestApprovalPipelineRevisions)
+	a.handle(router, http.MethodGet, pipeline+"/revisions/:revision", read, a.getRequestApprovalPipelineRevision)
+	a.handle(router, http.MethodGet, pipeline+"/revisions/:revision/references", read, a.getRequestApprovalPipelineRevisionReferences)
+	a.handle(router, http.MethodPost, pipeline+"/revisions/:revision/activate", activate, a.activateRequestApprovalPipelineRevision)
 }
 
 type requestApprovalPipelineDocumentRequest struct {
+	Name                  string                     `json:"name,omitempty"`
+	Blocks                []approvalblock.Definition `json:"blocks"`
+	DefaultEscalationPath string                     `json:"default_escalation_path,omitempty"`
+	DefaultAskAgentOwner  bool                       `json:"default_ask_agent_owner,omitempty"`
+}
+
+type requestApprovalPipelineCreateRequest struct {
+	PipelineKey           string                     `json:"pipeline_key"`
+	Name                  string                     `json:"name"`
 	Blocks                []approvalblock.Definition `json:"blocks"`
 	DefaultEscalationPath string                     `json:"default_escalation_path,omitempty"`
 	DefaultAskAgentOwner  bool                       `json:"default_ask_agent_owner,omitempty"`
@@ -1034,8 +1044,7 @@ type requestApprovalPipelinePreviewRequest struct {
 			Name string `json:"name" binding:"required"`
 		} `json:"agent" binding:"required"`
 		// PreviousMetadata seeds what earlier blocks returned, nested by
-		// scope and block key, so a stitched effective test can carry the
-		// organization preview's metadata into the agent-type preview.
+		// pipeline key and block key.
 		PreviousMetadata map[string]map[string]json.RawMessage `json:"previous_metadata"`
 	} `json:"sample" binding:"required"`
 }
@@ -1050,14 +1059,50 @@ func (a *API) listRequestApprovalPipelines(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"request_approval_pipelines": newRequestApprovalPipelineSummaryResponses(summaries)})
 }
 
+func (a *API) createRequestApprovalPipeline(c *gin.Context) {
+	var request requestApprovalPipelineCreateRequest
+	if !bindStrict(c, &request) {
+		return
+	}
+	if request.Blocks == nil {
+		request.Blocks = []approvalblock.Definition{}
+	}
+	revision, err := a.pipelines.Create(c.Request.Context(), currentPrincipal(c), request.PipelineKey, request.Name, request.Blocks, approvalpipeline.Route{
+		EscalationPath: request.DefaultEscalationPath, AskAgentOwner: request.DefaultAskAgentOwner,
+	})
+	if err != nil {
+		a.writeError(c, err)
+		return
+	}
+	setActiveRevisionETag(c, revision.Revision.Revision)
+	c.JSON(http.StatusCreated, newRequestApprovalPipelineRevisionResponse(revision))
+}
+
 func (a *API) getActiveRequestApprovalPipeline(c *gin.Context) {
-	revision, err := a.pipelines.GetActive(c.Request.Context(), currentPrincipal(c), domain.AgentSlug(c.Param("agent_slug")))
+	revision, err := a.pipelines.GetActive(c.Request.Context(), currentPrincipal(c), c.Param("pipeline_key"))
 	if err != nil {
 		a.writeError(c, err)
 		return
 	}
 	setActiveRevisionETag(c, revision.Revision.Revision)
 	c.JSON(http.StatusOK, newRequestApprovalPipelineRevisionResponse(revision))
+}
+
+func (a *API) archiveRequestApprovalPipeline(c *gin.Context) {
+	if _, err := a.pipelines.Archive(c.Request.Context(), currentPrincipal(c), c.Param("pipeline_key")); err != nil {
+		a.writeError(c, err)
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
+func (a *API) listRequestApprovalPipelineUses(c *gin.Context) {
+	uses, err := a.pipelines.Uses(c.Request.Context(), currentPrincipal(c), c.Param("pipeline_key"))
+	if err != nil {
+		a.writeError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"uses": newPipelineUseResponses(uses)})
 }
 
 func (a *API) previewRequestApprovalPipeline(c *gin.Context) {
@@ -1069,7 +1114,7 @@ func (a *API) previewRequestApprovalPipeline(c *gin.Context) {
 		a.writeError(c, fmt.Errorf("blocks are required: %w", domain.ErrInvalid))
 		return
 	}
-	result, err := a.pipelines.Preview(c.Request.Context(), currentPrincipal(c), domain.AgentSlug(c.Param("agent_slug")), request.Blocks, approvalpipeline.Route{
+	result, err := a.pipelines.Preview(c.Request.Context(), currentPrincipal(c), c.Param("pipeline_key"), request.Blocks, approvalpipeline.Route{
 		EscalationPath: request.DefaultEscalationPath, AskAgentOwner: request.DefaultAskAgentOwner,
 	}, approvalpipeline.PreviewSample{
 		Request: approvalpipeline.BlockRequest{
@@ -1086,13 +1131,13 @@ func (a *API) previewRequestApprovalPipeline(c *gin.Context) {
 	c.JSON(http.StatusOK, newRequestApprovalPipelinePreviewResponse(result))
 }
 
-// flattenPreviewMetadata turns the wire's nested scope/block object into
-// the executor's "<scope>/<block_key>" keys.
+// flattenPreviewMetadata turns the wire's nested pipeline/block object
+// into the executor's "<pipeline_key>/<block_key>" keys.
 func flattenPreviewMetadata(nested map[string]map[string]json.RawMessage) map[string]json.RawMessage {
 	flat := make(map[string]json.RawMessage)
-	for scope, blocks := range nested {
+	for pipelineKey, blocks := range nested {
 		for blockKey, metadata := range blocks {
-			flat[scope+"/"+blockKey] = metadata
+			flat[pipelineKey+"/"+blockKey] = metadata
 		}
 	}
 	return flat
@@ -1107,7 +1152,7 @@ func (a *API) createRequestApprovalPipelineRevision(c *gin.Context) {
 		a.writeError(c, fmt.Errorf("blocks are required: %w", domain.ErrInvalid))
 		return
 	}
-	revision, err := a.pipelines.CreateRevision(c.Request.Context(), currentPrincipal(c), domain.AgentSlug(c.Param("agent_slug")), request.Blocks, approvalpipeline.Route{
+	revision, err := a.pipelines.CreateRevision(c.Request.Context(), currentPrincipal(c), c.Param("pipeline_key"), request.Name, request.Blocks, approvalpipeline.Route{
 		EscalationPath: request.DefaultEscalationPath, AskAgentOwner: request.DefaultAskAgentOwner,
 	})
 	if err != nil {
@@ -1118,7 +1163,7 @@ func (a *API) createRequestApprovalPipelineRevision(c *gin.Context) {
 }
 
 func (a *API) listRequestApprovalPipelineRevisions(c *gin.Context) {
-	page, err := a.pipelines.ListRevisions(c.Request.Context(), currentPrincipal(c), domain.AgentSlug(c.Param("agent_slug")), queryInt(c, "limit", 50), c.Query("cursor"))
+	page, err := a.pipelines.ListRevisions(c.Request.Context(), currentPrincipal(c), c.Param("pipeline_key"), queryInt(c, "limit", 50), c.Query("cursor"))
 	if err != nil {
 		a.writeError(c, err)
 		return
@@ -1134,7 +1179,7 @@ func (a *API) getRequestApprovalPipelineRevision(c *gin.Context) {
 		a.writeError(c, err)
 		return
 	}
-	revision, err := a.pipelines.GetRevision(c.Request.Context(), currentPrincipal(c), domain.AgentSlug(c.Param("agent_slug")), revisionNumber)
+	revision, err := a.pipelines.GetRevision(c.Request.Context(), currentPrincipal(c), c.Param("pipeline_key"), revisionNumber)
 	if err != nil {
 		a.writeError(c, err)
 		return
@@ -1151,7 +1196,7 @@ func (a *API) getRequestApprovalPipelineRevisionReferences(c *gin.Context) {
 		a.writeError(c, err)
 		return
 	}
-	references, err := a.pipelines.References(c.Request.Context(), currentPrincipal(c), domain.AgentSlug(c.Param("agent_slug")), revisionNumber)
+	references, err := a.pipelines.References(c.Request.Context(), currentPrincipal(c), c.Param("pipeline_key"), revisionNumber)
 	if err != nil {
 		a.writeError(c, err)
 		return
@@ -1170,7 +1215,7 @@ func (a *API) activateRequestApprovalPipelineRevision(c *gin.Context) {
 		a.writeError(c, err)
 		return
 	}
-	revision, err := a.pipelines.Activate(c.Request.Context(), currentPrincipal(c), domain.AgentSlug(c.Param("agent_slug")), revisionNumber, expected)
+	revision, err := a.pipelines.Activate(c.Request.Context(), currentPrincipal(c), c.Param("pipeline_key"), revisionNumber, expected)
 	if err != nil {
 		a.writeError(c, err)
 		return
@@ -1424,6 +1469,10 @@ func WriteError(c *gin.Context, logger *slog.Logger, err error) {
 	var pathInUse domain.EscalationPathInUseError
 	var pathsInactive domain.EscalationPathsInactiveError
 	var endpointInUse domain.WebhookEndpointInUseError
+	var pipelineInUse domain.RequestApprovalPipelineInUseError
+	var pipelinesInactive domain.PipelinesInactiveError
+	var delegationCycle domain.PipelineDelegationCycleError
+	var delegationTooDeep domain.PipelineDelegationTooDeepError
 	var endpointsInactive domain.WebhookEndpointsInactiveError
 	var memberInPath domain.MembershipInEscalationPathError
 	var teamMemberInPolicy domain.TeamMemberInEscalationPolicyError
@@ -1497,6 +1546,26 @@ func WriteError(c *gin.Context, logger *slog.Logger, err error) {
 		status, errorType, code = http.StatusConflict, "conflict", "agent_instance_name_taken"
 	case errors.Is(err, domain.ErrRequestApprovalPipelineArchived):
 		status, errorType, code = http.StatusConflict, "conflict", "request_approval_pipeline_archived"
+	case errors.Is(err, domain.ErrRequestApprovalPipelineExists):
+		status, errorType, code = http.StatusConflict, "conflict", "request_approval_pipeline_exists"
+	case errors.Is(err, domain.ErrRequestApprovalPipelineEntry):
+		status, errorType, code = http.StatusConflict, "conflict", "request_approval_pipeline_entry"
+	case errors.As(err, &pipelineInUse):
+		status, errorType, code = http.StatusConflict, "conflict", "request_approval_pipeline_in_use"
+		details = map[string]any{"pipeline_key": pipelineInUse.PipelineKey, "uses": newPipelineUseResponses(pipelineInUse.Uses)}
+	case errors.As(err, &pipelinesInactive):
+		status, errorType, code = http.StatusConflict, "conflict", "request_approval_pipeline_inactive"
+		details = map[string]any{"pipelines": pipelinesInactive.PipelineKeys}
+	case errors.As(err, &delegationCycle):
+		status, errorType, code = http.StatusConflict, "conflict", "request_approval_pipeline_delegation_cycle"
+		details = map[string]any{"pipelines": delegationCycle.PipelineKeys}
+	case errors.As(err, &delegationTooDeep):
+		status, errorType, code = http.StatusConflict, "conflict", "request_approval_pipeline_delegation_too_deep"
+		details = map[string]any{"depth": delegationTooDeep.Depth, "maximum": domain.MaximumDelegationDepth}
+	case errors.Is(err, domain.ErrEffectivePipelineTooLarge):
+		status, errorType, code = http.StatusConflict, "conflict", "request_approval_pipeline_too_large"
+	case errors.Is(err, domain.ErrRequestApprovalPipelineNotFound):
+		status, errorType, code = http.StatusBadRequest, "invalid_request", "request_approval_pipeline_not_found"
 	case errors.As(err, &pathInUse):
 		status, errorType, code = http.StatusConflict, "conflict", "escalation_path_in_use"
 		details = map[string]any{"path_key": pathInUse.PathKey, "uses": newPipelineUseResponses(pathInUse.Uses)}

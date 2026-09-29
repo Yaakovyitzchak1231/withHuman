@@ -97,6 +97,7 @@ func webhookDefinition(options ...approvalblock.Option) approvalblock.Definition
 func webhookInput() RequestApprovalBlockInput {
 	input := scriptedInput()
 	input.EvaluationID = "evaluation-1"
+	input.PipelineKey = "entry"
 	input.Request.ID = "request-1"
 	input.Request.CreatedAt = time.Unix(1_000, 0).UTC()
 	input.Request.DeadlineAt = time.Unix(2_000, 0).UTC()
@@ -186,7 +187,7 @@ func TestWebhookBlockBuildsTheDeliveryPayload(t *testing.T) {
 		t.Fatalf("unexpected result %+v", result)
 	}
 	delivery := deliverer.deliveries[0]
-	if delivery.URL != "https://fraud.example.com/hooks/approval" || delivery.Secret != "whsec_test" || delivery.Timeout != 5*time.Second || delivery.IdempotencyKey != "request-1:fraud-check" {
+	if delivery.URL != "https://fraud.example.com/hooks/approval" || delivery.Secret != "whsec_test" || delivery.Timeout != 5*time.Second || delivery.IdempotencyKey != "request-1:entry:fraud-check" {
 		t.Fatalf("delivery envelope: %+v", delivery)
 	}
 	var payload map[string]any
@@ -194,7 +195,7 @@ func TestWebhookBlockBuildsTheDeliveryPayload(t *testing.T) {
 		t.Fatal(err)
 	}
 	if payload["version"] != webhookdelivery.PayloadVersion || payload["type"] != webhookdelivery.TypeBlockDelivery || payload["preview"] != false ||
-		payload["idempotency_key"] != "request-1:fraud-check" || payload["delivery_id"] != delivery.DeliveryID || payload["organization_id"] != "organization-1" {
+		payload["idempotency_key"] != "request-1:entry:fraud-check" || payload["delivery_id"] != delivery.DeliveryID || payload["organization_id"] != "organization-1" {
 		t.Fatalf("payload envelope: %v", payload)
 	}
 	request := payload["request"].(map[string]any)

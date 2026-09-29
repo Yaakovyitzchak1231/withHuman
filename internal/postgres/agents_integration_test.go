@@ -526,10 +526,10 @@ func TestAgentInventoryAgainstRealPostgres(t *testing.T) {
 }
 
 // Archiving is reversible: the agent keeps its instances and history and
-// resolves nothing, its name is freed while its slug stays taken for good,
-// and its pipeline is archived in the same transaction. Restoring brings
-// the agent and its pipeline back; credentials and provisioner tokens
-// revoked at archive stay revoked. Renaming changes the name alone.
+// resolves nothing, its name is freed while its slug stays taken for good.
+// Restoring brings the agent back; credentials and provisioner tokens
+// revoked at archive stay revoked. Renaming changes the name alone. Agents
+// own no pipeline: the entry pipeline is the organization's.
 func TestArchiveAgentAgainstRealPostgres(t *testing.T) {
 	server := embeddedpgtest.Start(t)
 	ctx := context.Background()
@@ -561,26 +561,12 @@ func TestArchiveAgentAgainstRealPostgres(t *testing.T) {
 		}
 		return agent
 	}
-	activeRevision := func(agentSlug domain.AgentSlug) (domain.RequestApprovalPipelineRevision, error) {
-		return store.GetActiveRequestApprovalPipelineRevision(ctx, application.GetActiveRequestApprovalPipelineRevisionInput{OrganizationID: orgID, AgentSlug: agentSlug})
-	}
 	list := func(status application.AgentListStatus) []domain.AgentSummary {
 		summaries, err := store.ListAgentSummaries(ctx, application.ListAgentSummariesInput{OrganizationID: orgID, Scope: domain.ScopeSet{All: true}, Status: status, Limit: 50, Now: now})
 		if err != nil {
 			t.Fatalf("ListAgentSummaries %q: %v", status, err)
 		}
 		return summaries
-	}
-	pipelines := func(status application.PipelineStatus) map[domain.AgentSlug]domain.RequestApprovalPipelineSummary {
-		summaries, err := store.ListRequestApprovalPipelineSummaries(ctx, application.ListRequestApprovalPipelineSummariesInput{OrganizationID: orgID, Scope: domain.ScopeSet{All: true}, Status: status, Limit: 50})
-		if err != nil {
-			t.Fatalf("ListRequestApprovalPipelineSummaries %q: %v", status, err)
-		}
-		bySlug := make(map[domain.AgentSlug]domain.RequestApprovalPipelineSummary, len(summaries))
-		for _, summary := range summaries {
-			bySlug[summary.AgentSlug] = summary
-		}
-		return bySlug
 	}
 	detailOf := func(agentID domain.ID) domain.AgentDetail {
 		detail, err := store.GetAgentDetail(ctx, application.GetAgentDetailInput{OrganizationID: orgID, AgentID: agentID, Now: now})
@@ -592,9 +578,8 @@ func TestArchiveAgentAgainstRealPostgres(t *testing.T) {
 
 	first := createAgent("release automation", "release")
 	createAgent("crm hygiene", "crm")
-	seed, err := activeRevision("release")
-	if err != nil || seed.Revision != 1 || !seed.IsActive {
-		t.Fatalf("seeded release revision = %#v, %v", seed, err)
+	if _, err := store.GetActiveRequestApprovalPipelineRevision(ctx, application.GetActiveRequestApprovalPipelineRevisionInput{OrganizationID: orgID, PipelineKey: "release"}); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("an agent must not seed a pipeline of its own, got %v", err)
 	}
 	secret := sha256.Sum256([]byte("runner"))
 	credentialID := domain.ID(uuid.NewString())
@@ -615,42 +600,15 @@ func TestArchiveAgentAgainstRealPostgres(t *testing.T) {
 		t.Fatalf("CreateAgentProvisioner: %v", err)
 	}
 
-	// Archiving the agent archives its pipeline in the same transaction:
-	// every revision stamped, none active, and no way to revise or
-	// activate within it.
+	// Archiving the agent leaves the organization's pipelines alone.
 	archivedAt := now.Add(time.Minute)
 	archived, err := store.ArchiveAgent(ctx, application.ArchiveAgentInput{OrganizationID: orgID, AgentID: first.ID, ActorID: membershipID, Now: archivedAt})
 	if err != nil || archived.Status != domain.AgentArchived || archived.ArchivedAt == nil || !archived.ArchivedAt.Equal(archivedAt) || archived.AgentSlug != "release" {
 		t.Fatalf("ArchiveAgent = %#v, %v", archived, err)
 	}
-	if _, err := activeRevision("release"); !errors.Is(err, domain.ErrNotFound) {
-		t.Fatalf("an archived pipeline has no active revision, got %v", err)
+	if entry, err := store.GetActiveRequestApprovalPipelineRevision(ctx, application.GetActiveRequestApprovalPipelineRevisionInput{OrganizationID: orgID, PipelineKey: domain.EntryPipelineKey}); err != nil || !entry.IsActive {
+		t.Fatalf("archiving an agent must leave the entry pipeline active: %#v, %v", entry, err)
 	}
-	if _, ok := pipelines("")["release"]; ok {
-		t.Fatalf("the default pipeline list must leave the archived scope out")
-	}
-	if summary, ok := pipelines(application.PipelineStatusArchived)["release"]; !ok || summary.ActiveRevision != nil || summary.ArchivedAt == nil || !summary.ArchivedAt.Equal(archivedAt) || summary.RevisionCount != 1 {
-		t.Fatalf("archived pipeline summary = %#v, %v", summary, ok)
-	}
-	if all := pipelines(application.PipelineStatusAll); len(all) != 3 || all["crm"].ActiveRevision == nil {
-		t.Fatalf("the full pipeline list must carry live and archived scopes: %#v", all)
-	}
-	page, err := store.ListRequestApprovalPipelineRevisions(ctx, application.ListRequestApprovalPipelineRevisionsInput{OrganizationID: orgID, AgentSlug: "release", Limit: 10})
-	if err != nil || len(page.Revisions) != 1 || page.Revisions[0].IsActive || page.Revisions[0].ArchivedAt == nil {
-		t.Fatalf("archived revisions stay readable, stamped and inactive: %#v, %v", page, err)
-	}
-	if _, err := store.CreateRequestApprovalPipelineRevision(ctx, application.CreateRequestApprovalPipelineRevisionInput{
-		ID: domain.ID(uuid.NewString()), OrganizationID: orgID, AgentSlug: "release", CreatedByActorID: membershipID, Now: now,
-	}); !errors.Is(err, domain.ErrRequestApprovalPipelineArchived) {
-		t.Fatalf("an archived pipeline takes no revisions, got %v", err)
-	}
-	if _, err := store.ActivateRequestApprovalPipelineRevision(ctx, application.ActivateRequestApprovalPipelineRevisionInput{
-		OrganizationID: orgID, AgentSlug: "release", Revision: 1, ExpectedActiveRevision: 1, ActorID: membershipID, Now: now,
-	}); !errors.Is(err, domain.ErrRequestApprovalPipelineArchived) {
-		t.Fatalf("an archived pipeline activates nothing, got %v", err)
-	}
-	assertSQLRejected(t, ctx, store, `UPDATE request_approval_pipelines SET is_active = true
-		WHERE organization_id = $1 AND agent_slug = 'release'`, "frozen", orgID)
 
 	// Nothing of the agent resolves while it is archived. The credential
 	// was revoked with the agent, so it reads as no credential at all
@@ -692,7 +650,7 @@ func TestArchiveAgentAgainstRealPostgres(t *testing.T) {
 	// The name is freed while the slug stays taken: the archived agent is
 	// still reachable by its slug, a new agent may take its name under
 	// another slug, and no agent may ever take the slug again, so the
-	// archived pipeline can never change hands.
+	// archived slug can never change hands.
 	if found, err := store.GetAgentBySlug(ctx, application.GetAgentBySlugInput{OrganizationID: orgID, AgentSlug: "release"}); err != nil || found.ID != first.ID || found.Status != domain.AgentArchived {
 		t.Fatalf("an archived agent must stay reachable by its slug, got %#v, %v", found, err)
 	}
@@ -701,9 +659,6 @@ func TestArchiveAgentAgainstRealPostgres(t *testing.T) {
 		OrganizationID: orgID, ActorID: membershipID, Name: "release again", AgentSlug: "release", AgentQuota: application.UnlimitedQuota(), Now: now,
 	}); !errors.Is(err, domain.ErrAgentSlugTaken) || !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("an archived agent's slug must never be reused, got %v", err)
-	}
-	if _, err := activeRevision("release"); !errors.Is(err, domain.ErrNotFound) {
-		t.Fatalf("the refused agent must not revive the archived pipeline, got %v", err)
 	}
 	if live := list(""); len(live) != 2 || slices.ContainsFunc(live, func(summary domain.AgentSummary) bool { return summary.ID == first.ID }) {
 		t.Fatalf("the default list must leave archived agents out: %#v", live)
@@ -752,9 +707,7 @@ func TestArchiveAgentAgainstRealPostgres(t *testing.T) {
 		t.Fatalf("renaming an archived agent's instance must be refused, got %v", err)
 	}
 
-	// Restoring puts the agent back to active and its pipeline with it:
-	// the archived revision loses its stamp and is active again, so the
-	// scope takes revisions as before.
+	// Restoring puts the agent back to active.
 	restoredAt := now.Add(3 * time.Minute)
 	restored, err := store.RestoreAgent(ctx, application.RestoreAgentInput{OrganizationID: orgID, AgentID: first.ID, ActorID: membershipID, Now: restoredAt})
 	if err != nil || restored.ID != first.ID || restored.Status != domain.AgentActive || restored.ArchivedAt != nil || restored.AgentSlug != "release" || restored.Name != first.Name || !restored.UpdatedAt.Equal(restoredAt) {
@@ -763,27 +716,6 @@ func TestArchiveAgentAgainstRealPostgres(t *testing.T) {
 	if _, err := store.RestoreAgent(ctx, application.RestoreAgentInput{OrganizationID: orgID, AgentID: first.ID, ActorID: membershipID, Now: restoredAt}); !errors.Is(err, domain.ErrAgentNotArchived) {
 		t.Fatalf("restoring twice must be refused, got %v", err)
 	}
-	revived, err := activeRevision("release")
-	if err != nil || revived.ID != seed.ID || revived.Revision != 1 || !revived.IsActive || revived.ArchivedAt != nil {
-		t.Fatalf("restore must re-activate the latest archived revision: %#v, %v", revived, err)
-	}
-	if summary, ok := pipelines("")["release"]; !ok || summary.ActiveRevision == nil || *summary.ActiveRevision != 1 || summary.RevisionCount != 1 || summary.ArchivedAt != nil {
-		t.Fatalf("restored pipeline summary = %#v, %v", summary, ok)
-	}
-	if _, ok := pipelines(application.PipelineStatusArchived)["release"]; ok {
-		t.Fatalf("a restored pipeline must leave the archived list")
-	}
-	page, err = store.ListRequestApprovalPipelineRevisions(ctx, application.ListRequestApprovalPipelineRevisionsInput{OrganizationID: orgID, AgentSlug: "release", Limit: 10})
-	if err != nil || len(page.Revisions) != 1 || !page.Revisions[0].IsActive || page.Revisions[0].ArchivedAt != nil {
-		t.Fatalf("restored revisions must be unstamped: %#v, %v", page, err)
-	}
-	next, err := store.CreateRequestApprovalPipelineRevision(ctx, application.CreateRequestApprovalPipelineRevisionInput{
-		ID: domain.ID(uuid.NewString()), OrganizationID: orgID, AgentSlug: "release", CreatedByActorID: membershipID, Now: restoredAt,
-	})
-	if err != nil || next.Revision != 2 {
-		t.Fatalf("a restored pipeline must take revisions again: %#v, %v", next, err)
-	}
-
 	// Credentials and provisioner tokens revoked at archive stay revoked;
 	// the instances stay and new ones enroll the ordinary way.
 	if _, err := store.ResolveAgentCredential(ctx, application.ResolveAgentCredentialInput{CredentialID: credentialID, SecretHash: secret[:], Now: restoredAt}); !errors.Is(err, domain.ErrUnauthenticated) {
@@ -813,24 +745,21 @@ func TestArchiveAgentAgainstRealPostgres(t *testing.T) {
 		t.Fatalf("the archived list must be empty after restore: %#v", only)
 	}
 
-	// The trail: archive and restore each audit the agent and its pipeline
-	// at the same instant, the rename audits the name change with the
-	// stable slug.
+	// The trail: archive and restore each audit the agent, the rename
+	// audits the name change with the stable slug.
 	type auditRow struct {
 		eventType string
 		data      struct {
 			AgentSlug           string `json:"agent_slug"`
 			Name                string `json:"name"`
 			PreviousName        string `json:"previous_name"`
-			PipelineArchived    bool   `json:"pipeline_archived"`
-			PipelineRestored    bool   `json:"pipeline_restored"`
 			CredentialsRevoked  int    `json:"credentials_revoked"`
 			ProvisionersRevoked int    `json:"provisioners_revoked"`
 		}
 	}
 	var trail []auditRow
 	rows, err := store.Pool().Query(ctx, `SELECT event_type, data FROM test_audit_events
-		WHERE organization_id = $1 AND event_type IN ('agent.archived', 'request_approval_pipeline.archived', 'agent.renamed', 'agent.restored', 'request_approval_pipeline.restored')
+		WHERE organization_id = $1 AND event_type IN ('agent.archived', 'agent.renamed', 'agent.restored')
 		ORDER BY occurred_at, event_type`, orgID)
 	if err != nil {
 		t.Fatalf("query audit events: %v", err)
@@ -851,16 +780,16 @@ func TestArchiveAgentAgainstRealPostgres(t *testing.T) {
 	for _, row := range trail {
 		events = append(events, row.eventType)
 	}
-	if want := []string{"agent.archived", "request_approval_pipeline.archived", "agent.renamed", "agent.restored", "request_approval_pipeline.restored"}; !slices.Equal(events, want) {
+	if want := []string{"agent.archived", "agent.renamed", "agent.restored"}; !slices.Equal(events, want) {
 		t.Fatalf("audit events = %v, want %v", events, want)
 	}
-	if archivedEvent := trail[0].data; archivedEvent.AgentSlug != "release" || archivedEvent.Name != first.Name || !archivedEvent.PipelineArchived || archivedEvent.CredentialsRevoked != 1 || archivedEvent.ProvisionersRevoked != 1 {
+	if archivedEvent := trail[0].data; archivedEvent.AgentSlug != "release" || archivedEvent.Name != first.Name || archivedEvent.CredentialsRevoked != 1 || archivedEvent.ProvisionersRevoked != 1 {
 		t.Fatalf("agent.archived data = %+v", archivedEvent)
 	}
-	if renamedEvent := trail[2].data; renamedEvent.AgentSlug != "release-two" || renamedEvent.PreviousName != first.Name || renamedEvent.Name != "release canary" {
+	if renamedEvent := trail[1].data; renamedEvent.AgentSlug != "release-two" || renamedEvent.PreviousName != first.Name || renamedEvent.Name != "release canary" {
 		t.Fatalf("agent.renamed data = %+v", renamedEvent)
 	}
-	if restoredEvent := trail[3].data; restoredEvent.AgentSlug != "release" || restoredEvent.Name != first.Name || !restoredEvent.PipelineRestored {
+	if restoredEvent := trail[2].data; restoredEvent.AgentSlug != "release" || restoredEvent.Name != first.Name {
 		t.Fatalf("agent.restored data = %+v", restoredEvent)
 	}
 }

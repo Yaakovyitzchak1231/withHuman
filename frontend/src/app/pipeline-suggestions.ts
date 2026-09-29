@@ -97,27 +97,23 @@ function loadServerDirectory(): Promise<ServerDirectoryEntry[]> {
 
 /* Optional, permission-scoped reads belong to the route loader. Failure of
  * one directory must not prevent editing or discard the other sources. */
-export async function loadPipelineSuggestions(agentSlug: string): Promise<{
-  /* The agent whose pipeline this is, when the inventory lists it; empty
-   * for the organization scope. */
-  sourceAgents: AgentSummary[];
+export async function loadPipelineSuggestions(): Promise<{
   toolSchemas: ToolSchema[];
   valueSuggestions: ConditionValueSuggestions;
   /* What the editor can say under a suggested server: its name and
    * source, for the edition's registered ones. */
   valueDetails: ConditionValueDetails;
-  /* Argument fields the scope's agents have actually sent. */
+  /* Argument fields the agents have actually sent. */
   argumentPaths: string[];
-  /* The newest real request as the test sample, when the scope has one. */
+  /* The newest real request as the test sample, when there is one. */
   sample: RequestApprovalPipelinePreviewSample | null;
 }> {
-  const [inventory, catalogue, directory] = await Promise.all([
+  const [agents, catalogue, directory] = await Promise.all([
     api.agents().then((page) => page.agents, () => []),
-    loadToolCatalog(agentSlug),
+    loadToolCatalog(),
     loadServerDirectory(),
   ]);
-  const agents = inventory.filter((agent) => !agentSlug || agent.slug === agentSlug);
-  const requests = (await loadRecentRequests(agents)).filter((request) => !agentSlug || request.agent_slug === agentSlug);
+  const requests = await loadRecentRequests(agents);
   const tools = [
     ...catalogue.tools.map((tool) => tool.name),
     ...requests.map((request) => request.tool),
@@ -133,12 +129,11 @@ export async function loadPipelineSuggestions(agentSlug: string): Promise<{
   ].filter(Boolean);
   const newest = requests[0];
   return {
-    sourceAgents: agentSlug ? agents : [],
     toolSchemas: [...catalogSchemas(catalogue.tools, requests), ...serverArgumentSchemas(directory)],
     valueSuggestions: mergeValueSuggestions({
       "/request/tool": tools,
       "/request/server": servers,
-      "/agent/slug": agentSlug ? [agentSlug] : agents.map((agent) => agent.slug),
+      "/agent/slug": agents.map((agent) => agent.slug),
       "/agent/name": agents.map((agent) => agent.name),
     }, ...requests.map((request) => sampleValueSuggestions(JSON.stringify({ request: { arguments: request.arguments, context: request.context } })))),
     valueDetails: {

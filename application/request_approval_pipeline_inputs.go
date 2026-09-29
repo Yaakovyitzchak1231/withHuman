@@ -3,6 +3,7 @@ package application
 import (
 	"encoding/json"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/withHumanAI/withHuman/domain"
@@ -12,6 +13,7 @@ const (
 	maximumRequestApprovalPipelineBlocks = 1_000
 	maximumRequestApprovalBlockTimeoutMS = 60_000
 	maximumRequestApprovalBlockAttempts  = 10
+	maximumPipelineNameLength            = 120
 )
 
 var requestApprovalBlockRegistryKeyPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`)
@@ -56,10 +58,29 @@ func (input RequestApprovalBlockSnapshotInput) Validate() error {
 	return nil
 }
 
+// CreateRequestApprovalPipelineInput creates a pipeline and persists its
+// first revision, active at once, so the pipeline exists with an active
+// revision from its first moment. A key that was ever used refuses with
+// domain.ErrRequestApprovalPipelineExists; the entry key is refused with
+// domain.ErrRequestApprovalPipelineEntry, since the organization's
+// activation seeds it.
+type CreateRequestApprovalPipelineInput CreateRequestApprovalPipelineRevisionInput
+
+func (input CreateRequestApprovalPipelineInput) Validate() error {
+	if input.PipelineKey == domain.EntryPipelineKey {
+		return invalidField("pipeline key", "is reserved for the entry pipeline")
+	}
+	return CreateRequestApprovalPipelineRevisionInput(input).Validate()
+}
+
+// CreateRequestApprovalPipelineRevisionInput appends the next immutable
+// revision of a live pipeline. Name is the pipeline's display name as of
+// this revision.
 type CreateRequestApprovalPipelineRevisionInput struct {
 	ID                    domain.ID
 	OrganizationID        domain.ID
-	AgentSlug             domain.AgentSlug
+	PipelineKey           string
+	Name                  string
 	Blocks                []RequestApprovalBlockSnapshotInput
 	DefaultEscalationPath string
 	DefaultAskAgentOwner  bool
@@ -71,7 +92,8 @@ func (input CreateRequestApprovalPipelineRevisionInput) Validate() error {
 	if err := firstError([]error{
 		requiredID("request approval pipeline ID", input.ID),
 		requiredID("organization ID", input.OrganizationID),
-		validPipelineScope(input.AgentSlug),
+		validPipelineKey(input.PipelineKey),
+		validPipelineName(input.Name),
 		validOptionalEscalationPathKey(input.DefaultEscalationPath),
 		agentOwnerFallback(input.DefaultEscalationPath, input.DefaultAskAgentOwner),
 		requiredID("creating membership ID", input.CreatedByActorID),
@@ -102,13 +124,13 @@ func (input CreateRequestApprovalPipelineRevisionInput) Validate() error {
 
 type GetRequestApprovalPipelineRevisionInput struct {
 	OrganizationID domain.ID
-	AgentSlug      domain.AgentSlug
+	PipelineKey    string
 	Revision       int64
 }
 
-// PipelineStatus selects which scopes a listing returns: the live ones
-// (those with an active revision, the default), the archived ones (every
-// revision archived with the last agent of the type), or both.
+// PipelineStatus selects which pipelines a listing returns: the live ones
+// (those with an active revision, the default), the archived ones, or
+// both.
 type PipelineStatus string
 
 const (
@@ -128,7 +150,7 @@ func validPipelineStatus(status PipelineStatus) error {
 type ListRequestApprovalPipelineSummariesInput struct {
 	OrganizationID domain.ID
 	// Scope is where the caller holds pipeline.read: everything, or a set
-	// of agent types. The organization pipeline is listed only for All.
+	// of pipeline keys.
 	Scope domain.ScopeSet
 	// Status defaults to live.
 	Status PipelineStatus
@@ -138,7 +160,7 @@ type ListRequestApprovalPipelineSummariesInput struct {
 func (input ListRequestApprovalPipelineSummariesInput) Validate() error {
 	return firstError([]error{
 		requiredID("organization ID", input.OrganizationID),
-		validScopeSet("scope", input.Scope, domain.ScopeAgent),
+		validScopeSet("scope", input.Scope, domain.ScopePipeline),
 		validPipelineStatus(input.Status),
 		nonNegative("limit", int64(input.Limit)),
 	})
@@ -147,7 +169,7 @@ func (input ListRequestApprovalPipelineSummariesInput) Validate() error {
 func (input GetRequestApprovalPipelineRevisionInput) Validate() error {
 	if err := firstError([]error{
 		requiredID("organization ID", input.OrganizationID),
-		validPipelineScope(input.AgentSlug),
+		validPipelineKey(input.PipelineKey),
 	}); err != nil {
 		return err
 	}
@@ -156,7 +178,7 @@ func (input GetRequestApprovalPipelineRevisionInput) Validate() error {
 
 type ListRequestApprovalPipelineRevisionsInput struct {
 	OrganizationID domain.ID
-	AgentSlug      domain.AgentSlug
+	PipelineKey    string
 	Limit          int
 	// Cursor is the NextCursor of the previous page; empty for the first.
 	Cursor string
@@ -182,7 +204,7 @@ func (input ListRequestApprovalPipelineRevisionsInput) Validate() error {
 	_, cursorErr := DecodeRevisionCursor(input.Cursor)
 	return firstError([]error{
 		requiredID("organization ID", input.OrganizationID),
-		validPipelineScope(input.AgentSlug),
+		validPipelineKey(input.PipelineKey),
 		nonNegative("limit", int64(input.Limit)),
 		cursorErr,
 	})
@@ -190,14 +212,83 @@ func (input ListRequestApprovalPipelineRevisionsInput) Validate() error {
 
 type GetActiveRequestApprovalPipelineRevisionInput struct {
 	OrganizationID domain.ID
-	AgentSlug      domain.AgentSlug
+	PipelineKey    string
 }
 
 func (input GetActiveRequestApprovalPipelineRevisionInput) Validate() error {
 	return firstError([]error{
 		requiredID("organization ID", input.OrganizationID),
-		validPipelineScope(input.AgentSlug),
+		validPipelineKey(input.PipelineKey),
 	})
+}
+
+// ArchiveRequestApprovalPipelineInput archives a pipeline, revisions
+// included. The entry pipeline refuses with
+// domain.ErrRequestApprovalPipelineEntry, a pipeline an active revision
+// delegates to with domain.RequestApprovalPipelineInUseError.
+type ArchiveRequestApprovalPipelineInput struct {
+	OrganizationID domain.ID
+	PipelineKey    string
+	ActorID        domain.ID
+	Now            time.Time
+}
+
+func (input ArchiveRequestApprovalPipelineInput) Validate() error {
+	return firstError([]error{
+		requiredID("organization ID", input.OrganizationID),
+		validPipelineKey(input.PipelineKey),
+		requiredID("actor ID", input.ActorID),
+		requiredTime("current time", input.Now),
+	})
+}
+
+// ListRequestApprovalPipelineUsesInput asks which active pipeline
+// revisions delegate to the pipeline.
+type ListRequestApprovalPipelineUsesInput struct {
+	OrganizationID domain.ID
+	PipelineKey    string
+}
+
+func (input ListRequestApprovalPipelineUsesInput) Validate() error {
+	return firstError([]error{
+		requiredID("organization ID", input.OrganizationID),
+		validPipelineKey(input.PipelineKey),
+	})
+}
+
+// ResolvePipelineKeysInput asks which of the named pipeline keys exist
+// (live, not archived) and which have an active revision. Pipeline
+// revisions consult it: creation needs every delegated key to exist,
+// activation needs every delegated key active.
+type ResolvePipelineKeysInput struct {
+	OrganizationID domain.ID
+	PipelineKeys   []string
+}
+
+func (input ResolvePipelineKeysInput) Validate() error {
+	if err := requiredID("organization ID", input.OrganizationID); err != nil {
+		return err
+	}
+	seen := make(map[string]struct{}, len(input.PipelineKeys))
+	for _, key := range input.PipelineKeys {
+		if err := validPipelineKey(key); err != nil {
+			return err
+		}
+		if _, duplicate := seen[key]; duplicate {
+			return invalidField("pipeline keys", "must be unique")
+		}
+		seen[key] = struct{}{}
+	}
+	return nil
+}
+
+// ResolvedPipelineKeys answers ResolvePipelineKeysInput: Missing keys
+// have no live revision (never created, or archived); Inactive keys are
+// live without an active revision, which the store never allows but the
+// port reports for completeness.
+type ResolvedPipelineKeys struct {
+	Missing  []string
+	Inactive []string
 }
 
 type GetRequestApprovalBlocksInput struct {
@@ -222,13 +313,13 @@ func (input GetRequestApprovalBlocksInput) Validate() error {
 	return nil
 }
 
-// ActivateRequestApprovalPipelineRevisionInput switches a scope's active
-// revision. Every scope always has one, so the caller states which
-// revision it believes is active and the switch is refused when that has
-// changed.
+// ActivateRequestApprovalPipelineRevisionInput switches a pipeline's
+// active revision. Every live pipeline always has one, so the caller
+// states which revision it believes is active and the switch is refused
+// when that has changed.
 type ActivateRequestApprovalPipelineRevisionInput struct {
 	OrganizationID         domain.ID
-	AgentSlug              domain.AgentSlug
+	PipelineKey            string
 	Revision               int64
 	ExpectedActiveRevision int64
 	ActorID                domain.ID
@@ -238,12 +329,23 @@ type ActivateRequestApprovalPipelineRevisionInput struct {
 func (input ActivateRequestApprovalPipelineRevisionInput) Validate() error {
 	return firstError([]error{
 		requiredID("organization ID", input.OrganizationID),
-		validPipelineScope(input.AgentSlug),
+		validPipelineKey(input.PipelineKey),
 		positiveRevision(input.Revision),
 		positiveRevision(input.ExpectedActiveRevision),
 		requiredID("actor actor ID", input.ActorID),
 		requiredTime("current time", input.Now),
 	})
+}
+
+func validPipelineName(value string) error {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return invalidField("pipeline name", "is required")
+	}
+	if len(trimmed) > maximumPipelineNameLength {
+		return invalidField("pipeline name", "must be at most 120 characters")
+	}
+	return nil
 }
 
 func validRegistryKey(field, value string) error {

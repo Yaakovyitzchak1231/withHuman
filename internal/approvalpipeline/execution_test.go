@@ -14,15 +14,15 @@ import (
 	"github.com/withHumanAI/withHuman/domain"
 )
 
-func TestExecutionSelectsAgentStopsAtFirstTerminalAndCachesRevision(t *testing.T) {
+func TestExecutionRunsTheEntryPipelineStopsAtFirstTerminalAndCachesRevision(t *testing.T) {
 	now := time.Unix(1_000, 0).UTC()
-	pipelines := activeExecutionPipeline(t, now, "billing", []approvalblock.Definition{
+	pipelines := activeExecutionPipeline(t, now, "entry", []approvalblock.Definition{
 		pipelineDefinition("skip", approvalblock.Approve, approvalblock.Field("/request/tool").Equals("other.tool")),
 		pipelineDefinition("deny", approvalblock.Deny, approvalblock.Field("/request/tool").Equals("deploy")),
 		pipelineDefinition("later", approvalblock.Approve, approvalblock.Field("/request/tool").Equals("deploy")),
 	})
 	management := NewManagementService(pipelines, NewCompiledPipelineState(pipelines, NewBlockRegistry()), fixedPipelineClock{now: now})
-	release, err := management.CreateRevision(context.Background(), pipelineManagerPrincipal("organization-1"), "release", []approvalblock.Definition{
+	release, err := management.CreateRevision(context.Background(), pipelineManagerPrincipal("organization-1"), "release", pipelineName("release"), []approvalblock.Definition{
 		pipelineDefinition("approve", approvalblock.Approve, approvalblock.Field("/request/tool").Equals("deploy")),
 	}, Route{})
 	if err != nil {
@@ -93,7 +93,7 @@ func TestExecutionSelectsAgentStopsAtFirstTerminalAndCachesRevision(t *testing.T
 
 func TestExecutionAutomaticallyApproves(t *testing.T) {
 	now := time.Unix(1_500, 0).UTC()
-	pipelines := activeExecutionPipeline(t, now, "billing", []approvalblock.Definition{
+	pipelines := activeExecutionPipeline(t, now, "entry", []approvalblock.Definition{
 		pipelineDefinition("approve", approvalblock.Approve, approvalblock.Field("/request/tool").Equals("deploy")),
 	})
 	service := initializedExecutionService(t, pipelines, executionAgentRepositoryStub{agent: domain.Agent{
@@ -147,7 +147,7 @@ func TestExecutionFallsBackToHumanReview(t *testing.T) {
 				pipelineDefinition("corrupt", approvalblock.Approve, approvalblock.Field("/request/tool").Equals("deploy")),
 			},
 			mutate: func(repository *memoryPipelineRepository) {
-				revision := repository.revisions["billing"][1]
+				revision := repository.revisions["entry"][1]
 				block := repository.blocks[revision.BlockIDs[0]]
 				block.Config = json.RawMessage(`{"unknown":true}`)
 				repository.blocks[block.ID] = block
@@ -158,7 +158,7 @@ func TestExecutionFallsBackToHumanReview(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			pipelines := activeExecutionPipeline(t, now, "billing", test.definitions)
+			pipelines := activeExecutionPipeline(t, now, "entry", test.definitions)
 			if test.mutate != nil {
 				test.mutate(pipelines)
 			}
@@ -188,99 +188,6 @@ func TestExecutionFallsBackToHumanReview(t *testing.T) {
 				t.Fatalf("unexpected safe fallback evidence: %#v", completed)
 			}
 		})
-	}
-}
-
-func TestExecutionOrganizationSectionOutcomePreemptsAgentSection(t *testing.T) {
-	now := time.Unix(4_000, 0).UTC()
-	repository := activeExecutionPipeline(t, now, "", []approvalblock.Definition{
-		pipelineDefinition("org-skip", approvalblock.Approve, approvalblock.Field("/request/tool").Equals("other.tool")),
-		pipelineDefinition("org-approve", approvalblock.Approve, approvalblock.Field("/request/tool").Equals("deploy")),
-	})
-	management := NewManagementService(repository, NewCompiledPipelineState(repository, NewBlockRegistry()), fixedPipelineClock{now: now})
-	created, err := management.CreateRevision(context.Background(), pipelineManagerPrincipal("organization-1"), "billing", []approvalblock.Definition{
-		pipelineDefinition("deny", approvalblock.Deny, approvalblock.Field("/request/tool").Equals("deploy")),
-	}, Route{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := management.Activate(context.Background(), pipelineManagerPrincipal("organization-1"), "billing", created.Revision.Revision, 1); err != nil {
-		t.Fatal(err)
-	}
-	service := initializedExecutionService(t, repository, executionAgentRepositoryStub{agent: domain.Agent{
-		ID: "agent-1", OrganizationID: "organization-1", Name: "billing-agent", AgentSlug: "billing",
-	}}, fixedPipelineClock{now: now.Add(time.Second)})
-
-	initialization, err := service.Evaluate(context.Background(), executionRequest(now, "request-1", "key-1", "billing", json.RawMessage(`{}`)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if initialization.Request.Status != domain.ApprovalApproved || initialization.Decision == nil {
-		t.Fatalf("organization approve did not preempt agent deny: %#v", initialization)
-	}
-	started := auditData(t, initialization.AuditEvents[1])
-	if started["organization_revision"] != float64(2) || started["agent_revision"] != float64(2) || started["block_count"] != float64(3) {
-		t.Fatalf("started event did not pin both sections: %#v", started)
-	}
-	completed := auditData(t, initialization.AuditEvents[4])
-	if completed["terminal_block_key"] != "org-approve" || completed["terminal_block_scope"] != "organization" {
-		t.Fatalf("unexpected terminal evidence: %#v", completed)
-	}
-}
-
-func TestExecutionFallsThroughOrganizationSectionIntoAgentSection(t *testing.T) {
-	now := time.Unix(4_500, 0).UTC()
-	repository := activeExecutionPipeline(t, now, "", []approvalblock.Definition{
-		pipelineDefinition("org-skip", approvalblock.Approve, approvalblock.Field("/request/tool").Equals("other.tool")),
-	})
-	management := NewManagementService(repository, NewCompiledPipelineState(repository, NewBlockRegistry()), fixedPipelineClock{now: now})
-	created, err := management.CreateRevision(context.Background(), pipelineManagerPrincipal("organization-1"), "billing", []approvalblock.Definition{
-		pipelineDefinition("deny", approvalblock.Deny, approvalblock.Field("/request/tool").Equals("deploy")),
-	}, Route{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := management.Activate(context.Background(), pipelineManagerPrincipal("organization-1"), "billing", created.Revision.Revision, 1); err != nil {
-		t.Fatal(err)
-	}
-	service := initializedExecutionService(t, repository, executionAgentRepositoryStub{agent: domain.Agent{
-		ID: "agent-1", OrganizationID: "organization-1", Name: "billing-agent", AgentSlug: "billing",
-	}}, fixedPipelineClock{now: now.Add(time.Second)})
-
-	initialization, err := service.Evaluate(context.Background(), executionRequest(now, "request-1", "key-1", "billing", json.RawMessage(`{}`)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if initialization.Request.Status != domain.ApprovalDenied {
-		t.Fatalf("agent deny after organization fall-through was not prepared: %#v", initialization)
-	}
-	firstBlock := auditData(t, initialization.AuditEvents[2])
-	secondBlock := auditData(t, initialization.AuditEvents[3])
-	if firstBlock["scope"] != "organization" || firstBlock["position"] != float64(0) ||
-		secondBlock["scope"] != "agent" || secondBlock["position"] != float64(1) {
-		t.Fatalf("combined order was not organization first: first=%#v second=%#v", firstBlock, secondBlock)
-	}
-}
-
-func TestExecutionOrganizationSectionDecidesForUnconfiguredAgent(t *testing.T) {
-	now := time.Unix(5_000, 0).UTC()
-	repository := activeExecutionPipeline(t, now, "", []approvalblock.Definition{
-		pipelineDefinition("org-approve", approvalblock.Approve, approvalblock.Field("/request/tool").Equals("deploy")),
-	})
-	service := initializedExecutionService(t, repository, executionAgentRepositoryStub{agent: domain.Agent{
-		ID: "agent-1", OrganizationID: "organization-1", Name: "support-agent", AgentSlug: "support",
-	}}, fixedPipelineClock{now: now.Add(time.Second)})
-
-	initialization, err := service.Evaluate(context.Background(), executionRequest(now, "request-1", "key-1", "support", json.RawMessage(`{}`)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if initialization.Request.Status != domain.ApprovalApproved || initialization.Decision == nil {
-		t.Fatalf("organization section did not decide for an unconfigured agent: %#v", initialization)
-	}
-	started := auditData(t, initialization.AuditEvents[1])
-	if started["agent_pipeline_id"] != nil || started["organization_pipeline_id"] == nil {
-		t.Fatalf("started event did not record the absent agent section: %#v", started)
 	}
 }
 
@@ -356,15 +263,15 @@ func (repository executionAgentRepositoryStub) GetAgent(_ context.Context, input
 	return repository.agent, nil
 }
 
-func activeExecutionPipeline(t *testing.T, now time.Time, agentSlug domain.AgentSlug, definitions []approvalblock.Definition) *memoryPipelineRepository {
+func activeExecutionPipeline(t *testing.T, now time.Time, pipelineKey string, definitions []approvalblock.Definition) *memoryPipelineRepository {
 	t.Helper()
 	repository := newMemoryPipelineRepository()
 	management := NewManagementService(repository, NewCompiledPipelineState(repository, NewBlockRegistry()), fixedPipelineClock{now: now})
-	created, err := management.CreateRevision(context.Background(), pipelineManagerPrincipal("organization-1"), agentSlug, definitions, Route{})
+	created, err := management.CreateRevision(context.Background(), pipelineManagerPrincipal("organization-1"), pipelineKey, pipelineName(pipelineKey), definitions, Route{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := management.Activate(context.Background(), pipelineManagerPrincipal("organization-1"), agentSlug, created.Revision.Revision, 1); err != nil {
+	if _, err := management.Activate(context.Background(), pipelineManagerPrincipal("organization-1"), pipelineKey, created.Revision.Revision, 1); err != nil {
 		t.Fatal(err)
 	}
 	return repository

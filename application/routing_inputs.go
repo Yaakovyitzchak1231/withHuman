@@ -49,10 +49,12 @@ func validPathKeys(keys []string) error {
 }
 
 // HumanReviewRoute is what the pipeline resolved for a request that needs
-// a human: the route its terminal block named, else the effective
-// pipeline default, else none. The router turns it into the
-// pinned routing snapshot. PipelineRevisionID and BlockID are evidence of
-// where the path came from.
+// a human: the escalation path its terminal block named, else the default
+// of the pipeline the request was in, else the defaults of the pipelines
+// that delegated into it (nearest first), else none. The router turns it
+// into the pinned routing snapshot. PipelineRevisionID and BlockID are
+// evidence of where the path came from: for a pipeline default the
+// revision that supplied it, which may be a delegated pipeline's.
 type HumanReviewRoute struct {
 	PathKey string
 	// AskAgentOwner sends the request to the agent's owner first; PathKey

@@ -18,7 +18,6 @@ import {
   PipelineConnector,
   PipelineEntryCard,
   PipelineExits,
-  PipelineFoldedSection,
   PipelineTerminusCard,
   PolicyBlockCard,
   PolicyBlockSummaryCard,
@@ -29,6 +28,7 @@ import {
   BranchBlockSummaryCard,
   type BranchBlockDraft,
 } from "@/ds/components/branch-block";
+import { DelegateBlockCard, DelegateBlockSummaryCard, type DelegateBlockDraft } from "@/ds/components/delegate-block";
 import type { ReviewerTarget } from "@/ds/components/reviewer-target";
 import { ToggleGroup, ToggleGroupItem } from "@/ds/components/toggle-group";
 import { cn } from "@/ds/lib/cn";
@@ -174,6 +174,12 @@ const SMALL_REFUNDS: PolicyBlockDraft = {
   when: { id: "sg-small", all: [{ id: "sg-small-1", field: "/request/arguments/amount_cents", operator: "less_than", value: 1000 }] },
 };
 
+const DEMO_PIPELINES = [
+  { key: "payments", name: "Payments", active: true },
+  { key: "deploys", name: "Deploys", active: true },
+  { key: "legacy", name: "Legacy checks", active: false },
+];
+
 const DEMO_BRANCH: BranchBlockDraft<PolicyBlockDraft> = {
   id: "refunds",
   name: "Refunds",
@@ -187,6 +193,17 @@ const DEMO_BRANCH: BranchBlockDraft<PolicyBlockDraft> = {
 type WellDemoState = "idle" | "enter" | "skip";
 
 export function PolicyBuilderSection() {
+  const [delegateOpen, setDelegateOpen] = useState(true);
+  const [demoDelegate, setDemoDelegate] = useState<DelegateBlockDraft>({
+    id: "payments",
+    name: "Payments go to the payments team",
+    enabled: true,
+    when: {
+      id: "sg-del",
+      all: [{ id: "sg-del-1", field: "/request/server", operator: "equals", value: "stripe" }],
+    },
+    pipelineKey: "payments",
+  });
   const [webhook, setWebhook] = useState<WebhookBlockDraft>(DEMO_WEBHOOK);
   const [webhookExpanded, setWebhookExpanded] = useState(false);
   const [unknownExpanded, setUnknownExpanded] = useState(true);
@@ -197,11 +214,8 @@ export function PolicyBuilderSection() {
   const [always, setAlways] = useState<AlwaysBlockDraft>({ id: "remaining", name: "Review remaining requests", enabled: true, outcome: "human", reason: "All remaining requests need human review." });
   const [alwaysExpanded, setAlwaysExpanded] = useState(true);
   const [expanded, setExpanded] = useState(false);
-  const [foldOpen, setFoldOpen] = useState(false);
   const [summaryOpen, setSummaryOpen] = useState(true);
   const [webhookSummaryOpen, setWebhookSummaryOpen] = useState(true);
-  const [foldLocked, setFoldLocked] = useState(false);
-  const [railFoldOpen, setRailFoldOpen] = useState(false);
   const [branch, setBranch] = useState<BranchBlockDraft<PolicyBlockDraft>>(DEMO_BRANCH);
   const [branchExpanded, setBranchExpanded] = useState(true);
   const [branchSummaryOpen, setBranchSummaryOpen] = useState(false);
@@ -494,6 +508,42 @@ export function PolicyBuilderSection() {
       </Demo>
 
       <Demo
+        label="DelegateBlockCard and DelegateBlockSummaryCard"
+        hint="a branch whose body is another pipeline; the condition stays here, the blocks belong to the target's owners"
+      >
+        <div className="flex flex-col gap-4">
+          <DelegateBlockCard
+            block={demoDelegate}
+            pipelines={DEMO_PIPELINES}
+            position="4"
+            expanded={delegateOpen}
+            onExpandedChange={setDelegateOpen}
+            onChange={setDemoDelegate}
+            onDuplicate={() => undefined}
+            onRemove={() => undefined}
+          />
+          <DelegateBlockSummaryCard block={demoDelegate} pipelines={DEMO_PIPELINES} position="4" />
+          <PipelineBranchWell
+            name={DEMO_PIPELINES[0].name}
+            depth={1}
+            badge={<>Continue in {DEMO_PIPELINES[0].name}</>}
+            continueLabel="Otherwise, skip this pipeline and check the next block"
+          >
+            <PolicyBlockSummaryCard block={SMALL_REFUNDS} position="1" />
+            <PipelineConditionExits outcome="approve" continueLabel="Otherwise" />
+            <PipelineBranchEndCard branchName={DEMO_PIPELINES[0].name} defaultTarget={REFUND_REVIEWERS} />
+          </PipelineBranchWell>
+          <p className="text-micro text-ink-muted">
+            A delegate hands matching requests to another pipeline, named by key. The card edits the
+            condition and the target; the target's active blocks draw read only in a well under it,
+            the way a branch's blocks do, ending where the target sends a request nothing decided:
+            its own default reviewers, else the delegating pipeline's. The block has no reason and
+            no escalation path of its own.
+          </p>
+        </div>
+      </Demo>
+
+      <Demo
         label="PipelineBranchWell"
         hint="the elbow into a branch; the rail runs on past it"
       >
@@ -633,33 +683,8 @@ export function PolicyBuilderSection() {
         hint="one scaffolding for viewing and editing; exact tool names open reference cards when the app provides them"
       >
         <div className="flex flex-col">
-          <PipelineEntryCard agentSlug="billing" />
-          <PipelineConnector label="First, check organization rules" />
-          <PipelineFoldedSection
-            title="Organization pipeline"
-            positionLabel="1"
-            summary="1 block applies to every agent. Expand to see the checks."
-            expanded={railFoldOpen}
-            onExpandedChange={setRailFoldOpen}
-          >
-            <PolicyBlockSummaryCard
-              block={{
-                id: "never-delete",
-                name: "Never delete customers",
-                enabled: true,
-                outcome: "deny",
-                reason: "",
-                when: {
-                  id: "sg-ro",
-                  all: [
-                    { id: "sg-ro-1", field: "/request/tool", operator: "equals", value: "crm.delete_customer" },
-                  ],
-                },
-              }}
-              position={1}
-            />
-          </PipelineFoldedSection>
-          <PipelineConnector label="If no decision is made" />
+          <PipelineEntryCard />
+          <PipelineConnector label="Check the blocks in order" />
           <div className="rounded-lg border-hairline border-edge bg-surface px-4 py-3 text-body text-ink-muted shadow-sm">
             The pipeline's blocks render here in execution order: summary rows when viewing,
             editable cards when editing.
@@ -678,8 +703,9 @@ export function PolicyBuilderSection() {
           <PipelineTerminusCard />
         </div>
         <p className="mt-3 text-micro text-ink-muted">
-          The effective pipeline concatenates the organization section and one agent's section;
-          positions run across both, and blocks inside a branch number from the branch (3.1).
+          Every request enters the entry pipeline; a delegate block hands matching requests to
+          another pipeline, drawn read only in a well under it. Blocks inside a branch number from
+          the branch (3.1).
           Every block exits through PipelineExits (PipelineConditionExits for a conditions block):
           the horizontal match branch shows the block's terminal outcome in its decision color. A
           branch exits through a PipelineBranchWell instead: its blocks, their own add slot while
@@ -690,63 +716,9 @@ export function PolicyBuilderSection() {
           this exact scaffolding: Edit swaps the read-only rows for editable cards in place, the
           add slots appear, and a SaveBar rises once there are changes, with Create revision as
           its commit. Dragging reorders blocks within one rail; the block menu moves a block into
-          or out of a branch. The organization pipeline's own rail shows no agent section and
-          ends in a continue card instead of the human terminus.
+          or out of a branch. A delegate block's well draws the target pipeline's active blocks
+          read only, so the whole effective pipeline reads on one page.
         </p>
-      </Demo>
-
-      <Demo
-        label="PipelineFoldedSection"
-        hint="the organization section inside an agent's pipeline editor"
-      >
-        <div className="flex flex-col gap-3">
-          <PipelineFoldedSection
-            title="Organization pipeline"
-            positionLabel="1"
-            summary="1 block applies to every agent. Expand to see the checks."
-            badge={foldLocked ? <Badge icon={<LockIcon width={13} height={13} />}>View only</Badge> : null}
-            action={
-              foldLocked ? undefined : (
-                <Button size="sm" variant="ghost" onClick={() => undefined}>
-                  Edit
-                </Button>
-              )
-            }
-            expanded={foldOpen}
-            onExpandedChange={setFoldOpen}
-          >
-            <PolicyBlockSummaryCard
-              block={{
-                id: "never-delete",
-                name: "Never delete customers",
-                enabled: true,
-                outcome: "deny",
-                reason: "",
-                when: {
-                  id: "sg-fold",
-                  all: [
-                    { id: "sg-fold-1", field: "/request/tool", operator: "equals", value: "crm.delete_customer" },
-                  ],
-                },
-              }}
-              position={1}
-            />
-          </PipelineFoldedSection>
-          <label className="flex items-center gap-2 text-micro text-ink-muted">
-            <input
-              type="checkbox"
-              checked={foldLocked}
-              onChange={(event) => setFoldLocked(event.target.checked)}
-            />
-            Show the locked variant
-          </label>
-          <p className="text-micro text-ink-muted">
-            An agent's pipeline editor folds the organization section to this single row by default:
-            the blocks running first stay one click away without competing with the blocks being
-            edited. The organization editor shows no agent section at all; its rail ends
-            with a continue card instead of the human terminus.
-          </p>
-        </div>
       </Demo>
 
     </Section>

@@ -100,6 +100,8 @@ func (a *API) writeOnboardingError(c *gin.Context, err error) {
 		writeAPIError(c, http.StatusConflict, "conflict", "onboarding_assistant_busy", err.Error(), nil)
 	case errors.Is(err, onboarding.ErrAssistantFailed):
 		writeAPIError(c, http.StatusBadGateway, "dependency", "onboarding_assistant_failed", err.Error(), nil)
+	case errors.Is(err, onboarding.ErrEntryPipelineChanged):
+		writeAPIError(c, http.StatusConflict, "conflict", "entry_pipeline_changed", "The entry pipeline changed while the rules were being written. Try again.", nil)
 	default:
 		a.writeError(c, err)
 	}

@@ -38,9 +38,9 @@ one sitting, without leaving the product except to paste one command:
    the channels.
 7. Choose tools. Arriving here with the channels set and the tools
    discovered provisions the agents: the server writes an escalation
-   path that notifies this person, one agent per runtime with a starting
-   pipeline that sends the suggested tools to a human and lets the rest
-   run; the CLI enrolls one agent instance per
+   path that notifies this person, one agent per runtime, and one branch
+   per runtime in the entry pipeline that sends the suggested tools to a
+   human and lets the rest run; the CLI enrolls one agent instance per
    runtime and installs the hooks, behind a status line under the step's
    question that disappears once they are connected. The step asks how
    the person wants to set up their rules and offers three tiles, none
@@ -48,14 +48,14 @@ one sitting, without leaving the product except to paste one command:
    shows a prompt to paste into the person's own coding agent: connect
    the hosted MCP server, read the grammar and these agents' rules, ask
    what should wait, write them sending human exits to the setup's
-   path, and preview a few calls; the page re-reads the agents'
-   pipelines every few seconds while it is open and ticks each one
-   whose active revision moved. "Describe it in words" is a box to
+   path, and preview a few calls; the page re-reads the entry pipeline
+   every few seconds while it is open and ticks each agent whose branch
+   changed. "Describe it in words" is a box to
    answer in the person's own words ("only kubectl commands that change
    the cluster, and anything that pushes to git") with starters that
    build one sentence. The setup assistant, a model
    holding the management tools the hosted MCP server offers, reads,
-   writes, and previews the agents' pipelines and records the test
+   writes, and previews the agents' branches and records the test
    prompt for the next step; its answer appears in place with a badge
    saying whether rules changed, the steps folded behind a line, and the
    box stays for the next refinement, with Start over forgetting the
@@ -122,7 +122,7 @@ human sessions, agent credentials (`whc_`), and provisioner tokens
 
 ### Who writes what
 
-Provisioning (path, pipelines) runs under the person's
+Provisioning (path, the entry pipeline's branches) runs under the person's
 browser session with their ordinary permissions and audit attribution.
 Agent credentials are the exception: they are handed to the CLI once, so
 the CLI-initiated `enroll` call mints them. It does so with a delegated
@@ -161,7 +161,7 @@ requires `OnboardingPermissions` unless noted):
 | `POST /api/v1/onboarding/session/channels` | `{}` | 200 S with `channels_set_at`, status unchanged; allowed from `agents_selected` on. The channels themselves are the person's contact methods and notification rules under `/api/v1/me`; this records only the step |
 | `POST /api/v1/onboarding/session/provision` | `{}` | 200 S in `provisioning` with `generated` filled; 400 `channels_not_set` before the notification steps; on failure S unchanged with `last_error` and 502 `onboarding_provision_failed` |
 | `POST /api/v1/onboarding/session/assistant` | `{"message": "..."}` | 200 S with the turn appended to `assistant` and, when the assistant chose one, `test_commands` replaced; allowed from `provisioning` on. 501 `setup_assistant_unconfigured` without a model, 409 `onboarding_assistant_busy` while the previous turn runs, 502 `onboarding_assistant_failed` for a turn recorded as failed |
-| `PUT /api/v1/onboarding/session/gated-tools` | `{"runtime": "codex", "tools": ["Bash"]}` | 200 S with `test_commands[runtime]` following the choice; replaces the agent's pipeline with the starting shape over the list (empty list: every call runs); allowed from `provisioning` on. 400 `runtime_not_selected`, `tool_not_discovered` |
+| `PUT /api/v1/onboarding/session/gated-tools` | `{"runtime": "codex", "tools": ["Bash"]}` | 200 S with `test_commands[runtime]` following the choice; rewrites the runtime's branch of the entry pipeline with the starting shape over the list (empty list: every call runs); allowed from `provisioning` on. 409 `entry_pipeline_changed` when the entry pipeline moved under the write 400 `runtime_not_selected`, `tool_not_discovered` |
 | `POST /api/v1/onboarding/session/rules` | `{}` | 200 S with `rules_set_at`, status unchanged; allowed in `installed` and `tested` |
 | `POST /api/v1/onboarding/session/test` | `{"request_id": "..."}` | 200 S in `tested` with `test_request_id` and `tested_at`; 400 `test_request_unknown` (not the organization's), `test_request_not_enrolled` (not from an agent this session enrolled), `test_request_pending` (not decided yet) |
 | `POST /api/v1/onboarding/completion` | `{"outcome": "finished" \| "skipped"}` | 204. `finished` needs no open session or one in `tested`. Requires only `agent.write` |
@@ -188,7 +188,7 @@ selected_runtimes[], tools{runtime: [{name, source, server, description,
 kind, annotations, input_schema, suggested, reason}]},
 discovery_errors{runtime: [...]}, generated{escalation_path_key,
 escalation_path_name, escalation_path_revision, pipelines{runtime:
-{revision, replaced_active_revision}}, policy_tools[]}, enrollments[{runtime,
+{pipeline_key, branch_key, revision, replaced_active_revision}}}, enrollments[{runtime,
 agent_slug, agent_name, agent_instance_id, agent_instance_name,
 credential_id}], install_results[], test_commands{runtime: {tool,
 command, note}}, test_request_id, tested_at, channels_set_at,
@@ -219,8 +219,8 @@ first rule wins:
 4. Otherwise not suggested (`unknown`).
 
 The reason travels with the tool so the page can say why. The
-suggested set is what the starting pipeline gates until the person
-writes other rules in the rules step.
+suggested set is what the runtime's starting branch gates until the
+person writes other rules in the rules step.
 
 ## The setup assistant
 
@@ -237,19 +237,26 @@ starting rules alone. The prompt's grammar section carries every block
 kind the deployment registered, so the hosted assistant can write judge
 blocks.
 
-The assistant's tools are the hosted MCP server's own catalog
-(`internal/httpapi/mcp_tools.go`), dispatched in process under the
-person's resolved principal rather than a bearer, so every write is
-authorized, validated, and audited as theirs. It sees only the pipeline
-tools (`get_pipeline`, `update_pipeline`, `preview_pipeline`,
-`list_pipeline_revisions`, `activate_pipeline_revision`) and the
-service refuses any call outside the session's own agents or aimed at
-the organization pipeline; `update_pipeline` gets the setup's
-escalation path as `default_escalation_path`, with
-`default_ask_agent_owner: true`, unless the model named a path. One tool is the setup's own: `set_test_prompt` records, per agent,
-the instruction the test step shows, and refuses a sample the active
-rules would not hand to a person (the service previews it first), so
-the test always produces a request.
+The assistant's tools are the setup's own, implemented in the onboarding
+service over the pipeline management service under the person's
+resolved principal, so every write is authorized, validated, and audited
+as theirs: `get_agent_rules {agent_slug}` (the agent's branch of the
+entry pipeline, the setup's path, the entry revision),
+`update_agent_rules {agent_slug, blocks}` (strict decode, the setup's
+owner route, `ask_agent_owner` with the setup's `escalation_path` as
+the fallback, injected on every core block that can hand to a human
+and names no path, wrapped in the runtime's branch and written as one entry
+revision; a concurrent entry change is a tool error asking the model to
+re-read and retry), `preview_agent_rules {agent_slug, blocks, sample}`
+(previews the whole entry document with the proposed branch, reporting
+`decided_outside_your_rules` when another block decided) and
+`set_test_prompt`, which records, per agent, the instruction the test
+step shows and refuses a sample the active rules would not hand to a
+person (the service previews the active entry first), so the test
+always produces a request. Any slug outside the session's selected
+runtimes is refused; nothing outside the agents' branches can be
+touched, and there is no entry-wide rollback, which would revert other
+people's edits.
 
 The system prompt carries the agents, their discovered tools with
 argument names, the escalation path, the working method, and the
@@ -270,25 +277,30 @@ abandoned.
   document already targets the membership is reused; otherwise the key
   gets a numeric suffix.
 - One agent per selected runtime, its slug the runtime key (`codex`) and
-  its name the runtime's display name ("Codex"), created here so the
-  agent's pipeline exists before it is revised (enrollment reuses a live
-  agent with that slug). If the slug belongs to an archived agent the
+  its name the runtime's display name ("Codex"); enrollment reuses a
+  live agent with that slug. If the slug belongs to an archived agent the
   step fails with `agent_archived` and tells the person to restore the
   agent in the app or choose another slug.
-- One starting pipeline revision per selected runtime, in that agent's
-  pipeline scope (`agents/<slug>`): block `gate-selected-tools`, named
-  "Review tools chosen in setup" (`/request/tool in [suggested...]` →
-  human, asking the agent's owner with the path above as the fallback)
-  then `approve-the-rest`, named "Approve every other tool"
-  (`/request/tool exists` → approve), and the same owner route as the
-  revision's default. The runtime agents are personal, so each member's
-  requests go to that member; the path is used only if a request ever
-  arrives without an owner. See
-  [06-routing-and-escalation.md](06-routing-and-escalation.md#agent-owner-route). Names are verb-first like every
-  other block because the product quotes them inside sentences ("Review
-  tools chosen in setup" asked for a human). A second machine unions the
-  gated list with the active revision's; onboarding never removes a
-  tool. The assistant then replaces the revision with the person's own
+- One entry pipeline revision holding, per selected runtime, a top-level
+  `branch` whose id is the runtime key and whose condition is
+  `/agent/slug equals <runtime>` (condition ids are deterministic UUID
+  v5 values, so an unchanged document is recognised and written no
+  second time), inserted before the first top-level `always` block, else
+  appended, every other block untouched. The branch body is
+  `<runtime>-gate-selected-tools`, named "Review tools chosen in setup"
+  (`/request/tool in [suggested...]` → human, asking the agent's owner
+  with the escalation path above as the fallback, omitted when the list
+  is empty) then `<runtime>-approve-the-rest`, named "Approve every other
+  tool" (always → approve); the branch's own end takes the same owner
+  route. The runtime agents are personal, so each member's requests go
+  to that member; the path is used only if a request ever arrives
+  without an owner (see
+  [06-routing-and-escalation.md](06-routing-and-escalation.md#agent-owner-route)). The entry default is set to the path only when
+  it was empty. Names are verb-first like every other block because the
+  product quotes them inside sentences. A second machine unions the
+  gated list with the branch's; onboarding never removes a tool, and
+  leaves a branch alone once it no longer has the starting shape. The
+  assistant then replaces the branch's blocks with the person's own
   rules.
 - One agent per runtime (slug the runtime key, reused when present) with
   one instance named after the machine's hostname.

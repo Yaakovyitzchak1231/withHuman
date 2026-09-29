@@ -56,7 +56,7 @@ func OnMatch(outcome Outcome) Option {
 	}
 }
 
-// When sets the condition of a cel block or a branch.
+// When sets the condition of a cel block, a branch, or a delegate.
 func When(condition Condition) Option {
 	return func(definition *Definition) {
 		switch {
@@ -64,6 +64,8 @@ func When(condition Condition) Option {
 			definition.CEL.When = condition
 		case definition.Branch != nil:
 			definition.Branch.When = condition
+		case definition.Delegate != nil:
+			definition.Delegate.When = condition
 		}
 	}
 }

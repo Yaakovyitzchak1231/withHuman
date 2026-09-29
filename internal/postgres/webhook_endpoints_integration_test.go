@@ -172,7 +172,7 @@ func TestWebhookEndpointsAgainstRealPostgres(t *testing.T) {
 		"reason":  "Fraud service reviewed the request.",
 	})
 	revision, err := store.CreateRequestApprovalPipelineRevision(ctx, application.CreateRequestApprovalPipelineRevisionInput{
-		ID: domain.ID(uuid.NewString()), OrganizationID: orgID, AgentSlug: "billing",
+		ID: domain.ID(uuid.NewString()), OrganizationID: orgID, PipelineKey: domain.EntryPipelineKey, Name: entryPipelineName,
 		Blocks: []application.RequestApprovalBlockSnapshotInput{{
 			ID: domain.ID(uuid.NewString()), BlockKey: "fraud-check", Name: "Fraud service review", BlockType: "webhook",
 			ConfigVersion: 1, Config: config, TimeoutMS: 5000, MaxAttempts: 3,
@@ -186,14 +186,14 @@ func TestWebhookEndpointsAgainstRealPostgres(t *testing.T) {
 		t.Fatalf("inactive revision counted as a use: %+v %v", uses, err)
 	}
 	if _, err := store.ActivateRequestApprovalPipelineRevision(ctx, application.ActivateRequestApprovalPipelineRevisionInput{
-		OrganizationID: orgID, AgentSlug: "billing", Revision: revision.Revision, ExpectedActiveRevision: 1, ActorID: ownerMembershipID, Now: now,
+		OrganizationID: orgID, PipelineKey: domain.EntryPipelineKey, Revision: revision.Revision, ExpectedActiveRevision: 1, ActorID: ownerMembershipID, Now: now,
 	}); err != nil {
 		t.Fatalf("ActivateRequestApprovalPipelineRevision: %v", err)
 	}
 	// The batched lookup answers per key and omits keys nothing references.
 	usesByKey, err := store.ListWebhookEndpointUses(ctx, application.ListWebhookEndpointUsesInput{OrganizationID: orgID, EndpointKeys: []string{key, "other"}})
 	uses := usesByKey[key]
-	if err != nil || len(usesByKey) != 1 || len(uses) != 1 || uses[0].AgentSlug != "billing" || uses[0].BlockKey != "fraud-check" || uses[0].PipelineID != revision.ID {
+	if err != nil || len(usesByKey) != 1 || len(uses) != 1 || uses[0].PipelineKey != domain.EntryPipelineKey || uses[0].BlockKey != "fraud-check" || uses[0].PipelineID != revision.ID {
 		t.Fatalf("ListWebhookEndpointUses: %+v %v", usesByKey, err)
 	}
 	archive := application.DeactivateWebhookEndpointInput{OrganizationID: orgID, EndpointKey: key, ExpectedActiveRevision: 1, ActorID: ownerMembershipID, Now: now.Add(5 * time.Minute)}
@@ -202,13 +202,13 @@ func TestWebhookEndpointsAgainstRealPostgres(t *testing.T) {
 		t.Fatalf("archive while in use: got %v", err)
 	}
 	passThrough, err := store.CreateRequestApprovalPipelineRevision(ctx, application.CreateRequestApprovalPipelineRevisionInput{
-		ID: domain.ID(uuid.NewString()), OrganizationID: orgID, AgentSlug: "billing", CreatedByActorID: ownerMembershipID, Now: now,
+		ID: domain.ID(uuid.NewString()), OrganizationID: orgID, PipelineKey: domain.EntryPipelineKey, Name: entryPipelineName, CreatedByActorID: ownerMembershipID, Now: now,
 	})
 	if err != nil {
 		t.Fatalf("CreateRequestApprovalPipelineRevision (empty): %v", err)
 	}
 	if _, err := store.ActivateRequestApprovalPipelineRevision(ctx, application.ActivateRequestApprovalPipelineRevisionInput{
-		OrganizationID: orgID, AgentSlug: "billing", Revision: passThrough.Revision, ExpectedActiveRevision: revision.Revision, ActorID: ownerMembershipID, Now: now,
+		OrganizationID: orgID, PipelineKey: domain.EntryPipelineKey, Revision: passThrough.Revision, ExpectedActiveRevision: revision.Revision, ActorID: ownerMembershipID, Now: now,
 	}); err != nil {
 		t.Fatalf("activate empty revision: %v", err)
 	}
@@ -221,7 +221,7 @@ func TestWebhookEndpointsAgainstRealPostgres(t *testing.T) {
 	}
 	// The pipeline revision that posts to the archived key cannot come back.
 	if _, err := store.ActivateRequestApprovalPipelineRevision(ctx, application.ActivateRequestApprovalPipelineRevisionInput{
-		OrganizationID: orgID, AgentSlug: "billing", Revision: revision.Revision, ExpectedActiveRevision: passThrough.Revision, ActorID: ownerMembershipID, Now: now,
+		OrganizationID: orgID, PipelineKey: domain.EntryPipelineKey, Revision: revision.Revision, ExpectedActiveRevision: passThrough.Revision, ActorID: ownerMembershipID, Now: now,
 	}); !errors.Is(err, domain.ErrWebhookEndpointInactive) {
 		t.Fatalf("rollback onto an archived endpoint = %v", err)
 	}

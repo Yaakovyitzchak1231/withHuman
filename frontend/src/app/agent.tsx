@@ -132,7 +132,6 @@ export function AgentScreen({ page }: { page: AgentPage }) {
   const canIssue = resource !== null && can("agent.credential.issue", resource);
   const canRevoke =
     resource !== null && can("agent.credential.revoke", resource);
-  const canReadPipelines = resource !== null && can("pipeline.read", resource);
   /* A personal agent's instances belong to people, so there is no fleet
    * to mint for: no provisioner tokens, no provisioner tab. */
   const personal = agent?.kind === "personal";
@@ -202,8 +201,8 @@ export function AgentScreen({ page }: { page: AgentPage }) {
     }
   }
 
-  /* Restoring brings the agent and its pipeline back to active. Credentials
-   * revoked at archive stay revoked, so instances enroll again. */
+  /* Restoring brings the agent back to active. Credentials revoked at
+   * archive stay revoked, so instances enroll again. */
   async function restore() {
     if (!agent || restoring) return;
     setRestoring(true);
@@ -213,8 +212,7 @@ export function AgentScreen({ page }: { page: AgentPage }) {
       toast.add({
         type: "approve",
         title: "Agent restored",
-        description:
-          "Its approval pipeline is active again. Instances need a new credential to call in.",
+        description: "Instances need a new credential to call in.",
       });
     }
   }
@@ -527,7 +525,7 @@ export function AgentScreen({ page }: { page: AgentPage }) {
               </div>
             </div>
           </div>
-          {canWrite || canIssue || canReadAudit || canReadPipelines ? (
+          {canWrite || canIssue || canReadAudit ? (
             <div className="flex shrink-0 items-center gap-2">
               {canIssue ? (
                 <Button
@@ -543,7 +541,7 @@ export function AgentScreen({ page }: { page: AgentPage }) {
                   New instance
                 </Button>
               ) : null}
-              {canWrite || canIssue || canReadAudit || canReadPipelines ? (
+              {canWrite || canIssue || canReadAudit ? (
                 <Menu
                   actions={[
                     ...(canIssue && !personal
@@ -553,19 +551,6 @@ export function AgentScreen({ page }: { page: AgentPage }) {
                             label: "Issue provisioner token",
                             disabled: disabled || frozen || issuingProvisioner,
                             action: () => void issueProvisioner(),
-                          },
-                        ]
-                      : []),
-                    ...(canReadPipelines
-                      ? [
-                          {
-                            id: "pipeline",
-                            label: "View approval pipeline",
-                            action: () =>
-                              void navigate({
-                                to: "/pipelines/agents/$agentSlug",
-                                params: { agentSlug: agent.slug },
-                              }),
                           },
                         ]
                       : []),
@@ -633,7 +618,7 @@ export function AgentScreen({ page }: { page: AgentPage }) {
           Every credential was revoked and nothing can be enrolled under this
           agent while it stays archived. Its instances and requests stay here
           for the record, its name is free for a new agent, and its slug stays
-          reserved. Restore it to bring the agent and its pipeline back.
+          reserved. Restore it to bring the agent back.
         </Callout>
       ) : disabled ? (
         <Callout tone="warn" title="This agent is disabled">
@@ -705,21 +690,6 @@ export function AgentScreen({ page }: { page: AgentPage }) {
           );
         })}
         <TabPanel value="overview" className="space-y-3">
-          <Card className="overflow-hidden">
-            <PolicyRow
-              icon={<ShieldIcon width={18} height={18} />}
-              title={`Approval pipeline for ${agent.name}`}
-              description="View the rules that approve, deny, or send requests to a human reviewer. Organization rules run first, followed by this agent's own rules."
-              href={
-                canReadPipelines
-                  ? {
-                      to: "/pipelines/agents/$agentSlug",
-                      params: { agentSlug: agent.slug },
-                    }
-                  : null
-              }
-            />
-          </Card>
           <Card>
             <Link
               to="/agents/$agentSlug"
@@ -966,7 +936,7 @@ export function AgentScreen({ page }: { page: AgentPage }) {
             open={archiving}
             onOpenChange={setArchiving}
             title={`Archive ${agent.name}?`}
-            description="Every instance stops resolving and nothing can be enrolled under this agent while it is archived. All instance credentials and provisioner tokens are revoked for good, even if you restore the agent later. The agent's approval pipeline is archived with it."
+            description="Every instance stops resolving and nothing can be enrolled under this agent while it is archived. All instance credentials and provisioner tokens are revoked for good, even if you restore the agent later."
             confirmLabel="Archive agent"
             typeToConfirm={agent.name}
             onConfirm={async () => {
@@ -1138,45 +1108,3 @@ function CredentialState({ instance }: { instance: AgentInstanceDetail }) {
   );
 }
 
-function PolicyRow({
-  icon,
-  title,
-  description,
-  href,
-}: {
-  icon: ReactNode;
-  title: string;
-  description: ReactNode;
-  href: {
-    to: "/pipelines/agents/$agentSlug";
-    params: { agentSlug: string };
-  } | null;
-}) {
-  const body = (
-    <>
-      <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-fill-hover text-ink-muted">
-        {icon}
-      </span>
-      <div className="min-w-0 flex-1">
-        <p className="text-body font-medium text-ink">{title}</p>
-        <p className="text-label font-normal text-ink-muted">{description}</p>
-      </div>
-      {href ? (
-        <span className="text-ink-muted">
-          <ChevronRightIcon width={14} height={14} />
-        </span>
-      ) : null}
-    </>
-  );
-  const className = "flex items-center gap-3 px-5 py-5";
-  if (!href) return <div className={className}>{body}</div>;
-  return (
-    <Link
-      to={href.to}
-      params={href.params}
-      className={`${className} rounded-lg transition-colors duration-100 hover:bg-fill-hover ${focusRing}`}
-    >
-      {body}
-    </Link>
-  );
-}

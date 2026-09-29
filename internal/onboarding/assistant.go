@@ -9,9 +9,11 @@ package onboarding
 // validated, and audited as theirs. The conversation lives on the
 // session so a reload shows it, and every tool call is persisted as it
 // happens so the page can follow the work over the session events
-// stream. The assistant's reach is deliberately narrow: the pipelines of
-// the agents this setup connected, and the test prompt the last step
-// shows, checked against the rules before it is accepted.
+// stream. The assistant's reach is deliberately narrow: each connected
+// agent's own branch of the entry pipeline, read and written through
+// three tools of the setup's own so nothing outside those branches can
+// change, and the test prompt the last step shows, checked against the
+// rules before it is accepted.
 
 import (
 	"context"
@@ -47,8 +49,12 @@ const (
 	maxPromptToolsPerRuntime = 160
 	maxPromptDescription     = 140
 	maxPromptArguments       = 8
-	// setTestPromptTool is the one tool the setup owns: the assistant
-	// names the call the test step should provoke.
+	// The setup's own tools: one agent's rules are the blocks inside its
+	// branch of the entry pipeline, and the test prompt names the call the
+	// test step should provoke.
+	getRulesTool      = "get_agent_rules"
+	updateRulesTool   = "update_agent_rules"
+	previewRulesTool  = "preview_agent_rules"
 	setTestPromptTool = "set_test_prompt"
 )
 
@@ -62,16 +68,13 @@ var (
 	ErrAssistantFailed = errors.New("the setup assistant could not finish")
 )
 
-// AssistantTools is the management tool catalog the assistant draws on:
-// the same tools the hosted MCP server offers, executed in process under
-// the person's principal. Which of them the assistant sees is decided
-// here, not by the catalog.
-type AssistantTools interface {
-	Tools() []application.ToolUseTool
-	Call(ctx context.Context, principal domain.Principal, name string, input json.RawMessage) (AssistantToolResult, error)
-	// Grammar is what the deployment's block kinds add to core's
-	// pipeline_blocks reference (the hosted judge's section and model
-	// list), the same appendix read_reference serves.
+// AssistantGrammar is what the deployment's block kinds add to core's
+// pipeline_blocks reference (the hosted judge's section and model list),
+// the same appendix read_reference serves. The assistant's tools are the
+// setup's own and run through the pipeline manager under the person's
+// principal, so every write is authorized, validated, and audited as
+// theirs.
+type AssistantGrammar interface {
 	Grammar() string
 }
 
@@ -80,14 +83,6 @@ type AssistantTools interface {
 type AssistantToolResult struct {
 	Content string
 	IsError bool
-}
-
-// assistantToolNames are the catalog tools the assistant may use: the
-// pipeline tools alone. Agents, escalation paths, teams and webhook
-// endpoints are not the setup's to change.
-var assistantToolNames = map[string]bool{
-	"get_pipeline": true, "update_pipeline": true, "preview_pipeline": true,
-	"list_pipeline_revisions": true, "activate_pipeline_revision": true,
 }
 
 // assistantStatuses are the statuses in which the agents exist, so their
@@ -101,11 +96,13 @@ var assistantStatuses = map[domain.OnboardingStatus]bool{
 // the assistant is absent and the page says so.
 func (s *Service) RegisterAssistantModel(model application.ToolUseModel) { s.assistantModel = model }
 
-// RegisterAssistantTools installs the management tool catalog.
-func (s *Service) RegisterAssistantTools(tools AssistantTools) { s.assistantTools = tools }
+// RegisterAssistantGrammar installs the deployment's block grammar.
+func (s *Service) RegisterAssistantGrammar(grammar AssistantGrammar) { s.assistantGrammar = grammar }
 
 // AssistantEnabled reports whether the setup assistant can answer.
-func (s *Service) AssistantEnabled() bool { return s.assistantModel != nil && s.assistantTools != nil }
+func (s *Service) AssistantEnabled() bool {
+	return s.assistantModel != nil && s.assistantGrammar != nil
+}
 
 // Ask runs one turn of the assistant on the person's open session: their
 // message is recorded, the model works through the tools, and the
@@ -316,7 +313,7 @@ func (turn *assistantTurn) logStep(ctx context.Context, output application.ToolU
 func (turn *assistantTurn) run(ctx context.Context, history []application.ToolUseMessage, record func(domain.OnboardingAssistantAction) error) (string, error) {
 	turn.history = history
 	tools := turn.service.assistantToolCatalog()
-	system := assistantSystemPrompt(turn.session, turn.service.assistantTools.Grammar())
+	system := assistantSystemPrompt(turn.session, turn.service.assistantGrammar.Grammar())
 	turn.service.logger.InfoContext(ctx, "setup assistant turn started", turn.logAttributes(
 		"agents", strings.Join(turn.session.SelectedRuntimes, ","), "tools", len(tools),
 		"system_prompt_bytes", len(system), "context_messages", len(turn.history))...)
@@ -399,29 +396,45 @@ func historyBytes(history []application.ToolUseMessage) int {
 	return total
 }
 
-// assistantToolCatalog is what the model may call: the pipeline tools
-// from the management catalog plus the setup's own test prompt tool.
+// assistantToolCatalog is what the model may call: the setup's own
+// branch-scoped tools and the test prompt tool.
 func (s *Service) assistantToolCatalog() []application.ToolUseTool {
-	var tools []application.ToolUseTool
-	for _, tool := range s.assistantTools.Tools() {
-		if assistantToolNames[tool.Name] {
-			tools = append(tools, tool)
-		}
+	blockSchema := `"blocks":{"type":"array","items":{"type":"object","additionalProperties":true},"description":"The agent's complete ordered rule list (it replaces the current blocks, so include the ones to keep). Each block: id (key-shaped, unique across the whole entry pipeline; prefix it with the agent slug), name, type (always | cel | webhook | branch, or a kind this deployment adds), enabled: true, timeout (for example 50ms), max_attempts (1 for always, cel and branch), and config for its type. See the grammar in your instructions. An empty list makes every call from the agent run."}`
+	return []application.ToolUseTool{
+		{
+			Name:        getRulesTool,
+			Description: "Read one agent's current rules: the blocks inside its branch of the entry pipeline, in order, in the shape update_agent_rules accepts. Read before you write, because update_agent_rules replaces the whole list.",
+			InputSchema: json.RawMessage(`{"type":"object","properties":{"agent_slug":{"type":"string","description":"The agent, by slug, exactly as listed."}},"required":["agent_slug"],"additionalProperties":false}`),
+		},
+		{
+			Name: updateRulesTool,
+			Description: "Replace one agent's rules with a new block list and activate them at once. Blocks run in order and the first to decide wins; a request no block decides waits for a person, so end with an always block whose outcome is approve when everything else should run. " +
+				"Set escalation_path to the setup's path on every block whose outcome can be human. Nothing outside the agent's branch changes.",
+			InputSchema: json.RawMessage(`{"type":"object","properties":{"agent_slug":{"type":"string","description":"The agent, by slug, exactly as listed."},` + blockSchema + `},"required":["agent_slug","blocks"],"additionalProperties":false}`),
+		},
+		{
+			Name: previewRulesTool,
+			Description: "Run a sample call from one agent through the entry pipeline with the proposed rules in the agent's branch and report the outcome (approve, deny, or human), which block decided, and whether the decision was made outside your rules by a block the organization placed before the branch. Nothing is saved. " +
+				"Check at least one call that should wait for a person and one that should run.",
+			InputSchema: json.RawMessage(`{"type":"object","properties":{"agent_slug":{"type":"string","description":"The agent, by slug, exactly as listed."},` + blockSchema + `,` +
+				`"sample":{"type":"object","properties":{"tool":{"type":"string","description":"The tool the sample call asks for, exactly as listed for that agent."},"arguments":{"type":"object","description":"The call's arguments as the agent would send them."},"agent_reasoning":{"type":"string","description":"What the agent said it was trying to do, for blocks that include it."}},"required":["tool"],"additionalProperties":false}},` +
+				`"required":["agent_slug","blocks","sample"],"additionalProperties":false}`),
+		},
+		{
+			Name: setTestPromptTool,
+			Description: "Record, for one agent, the instruction the person will give it in the test step so that the rules you wrote send the resulting call to a person. " +
+				"Call it once per agent after the rules are saved. The sample arguments are run through the active entry pipeline first: a call the rules would approve or deny is refused, so pick one they hand to a person, and keep it harmless (a dry run, a read that still matches, an echo).",
+			InputSchema: json.RawMessage(`{"type":"object","properties":{` +
+				`"agent_slug":{"type":"string","description":"The agent, by slug, exactly as listed."},` +
+				`"tool":{"type":"string","description":"The tool the instruction makes the agent call, exactly as listed for that agent."},` +
+				`"prompt":{"type":"string","description":"One short instruction to the agent in plain language that makes it perform that call, for example: Run kubectl delete pod demo --dry-run=client and show me the output."},` +
+				`"sample_arguments":{"type":"object","description":"The arguments the agent would send for that call, for example {\"command\": \"kubectl delete pod demo --dry-run=client\"}."}},` +
+				`"required":["agent_slug","tool","prompt","sample_arguments"],"additionalProperties":false}`),
+		},
 	}
-	return append(tools, application.ToolUseTool{
-		Name: setTestPromptTool,
-		Description: "Record, for one agent, the instruction the person will give it in the test step so that the rules you wrote send the resulting call to a person. " +
-			"Call it once per agent after the pipelines are saved. The sample arguments are run through the agent's active rules first: a call the rules would approve or deny is refused, so pick one they hand to a person, and keep it harmless (a dry run, a read that still matches, an echo).",
-		InputSchema: json.RawMessage(`{"type":"object","properties":{` +
-			`"agent_slug":{"type":"string","description":"The agent, by slug, exactly as listed."},` +
-			`"tool":{"type":"string","description":"The tool the instruction makes the agent call, exactly as listed for that agent."},` +
-			`"prompt":{"type":"string","description":"One short instruction to the agent in plain language that makes it perform that call, for example: Run kubectl delete pod demo --dry-run=client and show me the output."},` +
-			`"sample_arguments":{"type":"object","description":"The arguments the agent would send for that call, for example {\"command\": \"kubectl delete pod demo --dry-run=client\"}."}},` +
-			`"required":["agent_slug","tool","prompt","sample_arguments"],"additionalProperties":false}`),
-	})
 }
 
-// scopedCall is the part of a pipeline tool's input the guard reads.
+// scopedCall is the part of every setup tool's input the guard reads.
 type scopedCall struct {
 	AgentSlug string `json:"agent_slug"`
 }
@@ -429,52 +442,189 @@ type scopedCall struct {
 // call executes one tool call within the setup's scope and describes it
 // for the page.
 func (turn *assistantTurn) call(ctx context.Context, call application.ToolUseBlock) (AssistantToolResult, domain.OnboardingAssistantAction) {
-	if call.Name == setTestPromptTool {
-		return turn.setTestPrompt(ctx, call.Input)
-	}
-	if !assistantToolNames[call.Name] {
-		return refuse(call.Name, "", fmt.Sprintf("%s is not available here.", call.Name))
-	}
 	var scoped scopedCall
 	_ = json.Unmarshal(call.Input, &scoped)
-	if scoped.AgentSlug == "" {
-		return refuse(call.Name, "", "Name agent_slug: the organization pipeline is not part of this setup. Choose one of "+strings.Join(turn.session.SelectedRuntimes, ", ")+".")
+	switch call.Name {
+	case getRulesTool, updateRulesTool, previewRulesTool, setTestPromptTool:
+	default:
+		return refuse(call.Name, "", fmt.Sprintf("%s is not available here.", call.Name))
 	}
-	if !turn.session.Selected(scoped.AgentSlug) {
+	if scoped.AgentSlug == "" || !turn.session.Selected(scoped.AgentSlug) {
 		return refuse(call.Name, scoped.AgentSlug, fmt.Sprintf("Only the agents this setup connected can be changed here: %s.", strings.Join(turn.session.SelectedRuntimes, ", ")))
 	}
-	input := call.Input
-	if call.Name == "update_pipeline" {
-		input = withDefaultPath(input, turn.session.Generated.EscalationPathKey)
+	var result AssistantToolResult
+	switch call.Name {
+	case getRulesTool:
+		result = turn.getRules(ctx, scoped.AgentSlug)
+	case updateRulesTool:
+		result = turn.updateRules(ctx, scoped.AgentSlug, call.Input)
+	case previewRulesTool:
+		result = turn.previewRules(ctx, scoped.AgentSlug, call.Input)
+	case setTestPromptTool:
+		return turn.setTestPrompt(ctx, call.Input)
 	}
-	result, err := turn.service.assistantTools.Call(ctx, turn.principal, call.Name, input)
-	if err != nil {
-		result = AssistantToolResult{Content: err.Error(), IsError: true}
-	}
-	return result, turn.describe(call.Name, scoped.AgentSlug, input, result)
+	return result, turn.describe(call.Name, scoped.AgentSlug, call.Input, result)
 }
 
-// withDefaultPath makes every pipeline the assistant saves hand human
-// exits to the agent's owner, with the setup's path as the fallback,
-// unless the model named a default path of its own.
-func withDefaultPath(input json.RawMessage, pathKey string) json.RawMessage {
-	if pathKey == "" {
-		return input
-	}
-	var body map[string]any
-	if err := json.Unmarshal(input, &body); err != nil || body == nil {
-		return input
-	}
-	if current, _ := body["default_escalation_path"].(string); current != "" {
-		return input
-	}
-	body["default_escalation_path"] = pathKey
-	body["default_ask_agent_owner"] = true
-	encoded, err := json.Marshal(body)
+// rulesInput is the block list the writing tools take.
+type rulesInput struct {
+	Blocks []approvalblock.Definition `json:"blocks"`
+	Sample struct {
+		Tool           string          `json:"tool"`
+		Arguments      json.RawMessage `json:"arguments"`
+		AgentReasoning string          `json:"agent_reasoning"`
+	} `json:"sample"`
+}
+
+func toolError(message string) AssistantToolResult {
+	return AssistantToolResult{Content: message, IsError: true}
+}
+
+func toolAnswer(value any) AssistantToolResult {
+	encoded, err := json.Marshal(value)
 	if err != nil {
-		return input
+		return toolError(err.Error())
 	}
-	return encoded
+	return AssistantToolResult{Content: string(encoded)}
+}
+
+// getRules answers the blocks inside the agent's branch, in the shape
+// update_agent_rules accepts; an agent without a branch yet has none.
+func (turn *assistantTurn) getRules(ctx context.Context, slug string) AssistantToolResult {
+	current, err := turn.service.readEntry(ctx, turn.principal)
+	if err != nil {
+		return toolError("The current rules could not be read: " + err.Error())
+	}
+	blocks := []approvalblock.Definition{}
+	if branch, ok := RuntimeBranchOf(current.blocks, slug); ok {
+		blocks = branch.Branch.Blocks
+	}
+	return toolAnswer(map[string]any{
+		"agent_slug": slug, "blocks": blocks,
+		"escalation_path": turn.session.Generated.EscalationPathKey, "entry_revision": current.revision,
+	})
+}
+
+// updateRules replaces the agent's branch with the model's blocks, the
+// setup's path set on every core block that can hand to a human and
+// names none, and activates the entry revision that holds it.
+func (turn *assistantTurn) updateRules(ctx context.Context, slug string, raw json.RawMessage) AssistantToolResult {
+	var input rulesInput
+	if err := json.Unmarshal(raw, &input); err != nil {
+		return toolError("The blocks could not be read: " + err.Error())
+	}
+	if input.Blocks == nil {
+		input.Blocks = []approvalblock.Definition{}
+	}
+	pathKey := turn.session.Generated.EscalationPathKey
+	current, err := turn.service.readEntry(ctx, turn.principal)
+	if err != nil {
+		return toolError("The current rules could not be read: " + err.Error())
+	}
+	branch := RuntimeBranch(slug, withPathOnHumanExits(input.Blocks, pathKey), pathKey)
+	activated, err := turn.service.writeEntry(ctx, turn.principal, current, EntryBlocks(current.blocks, branch))
+	if errors.Is(err, ErrEntryPipelineChanged) {
+		return toolError("The entry pipeline changed while you were working; read the rules again and retry.")
+	}
+	if err != nil {
+		return toolError(err.Error())
+	}
+	return toolAnswer(map[string]any{"revision": map[string]any{"revision": activated}, "activated": true})
+}
+
+// previewRules runs the sample through the whole entry pipeline with the
+// proposed blocks in the agent's branch, so the model sees blocks the
+// organization placed before the branch too.
+func (turn *assistantTurn) previewRules(ctx context.Context, slug string, raw json.RawMessage) AssistantToolResult {
+	var input rulesInput
+	if err := json.Unmarshal(raw, &input); err != nil {
+		return toolError("The input could not be read: " + err.Error())
+	}
+	if input.Blocks == nil {
+		input.Blocks = []approvalblock.Definition{}
+	}
+	if strings.TrimSpace(input.Sample.Tool) == "" {
+		return toolError("sample.tool is required.")
+	}
+	arguments := input.Sample.Arguments
+	if len(arguments) == 0 || string(arguments) == "null" {
+		arguments = json.RawMessage(`{}`)
+	}
+	pathKey := turn.session.Generated.EscalationPathKey
+	current, err := turn.service.readEntry(ctx, turn.principal)
+	if err != nil {
+		return toolError("The current rules could not be read: " + err.Error())
+	}
+	branch := RuntimeBranch(slug, withPathOnHumanExits(input.Blocks, pathKey), pathKey)
+	document := EntryBlocks(current.blocks, branch)
+	server := ""
+	for _, tool := range turn.session.Tools[slug] {
+		if tool.Name == input.Sample.Tool {
+			server = tool.Server
+		}
+	}
+	preview, err := turn.service.pipelines.Preview(ctx, turn.principal, EntryPipelineKey, document, current.route(), approvalpipeline.PreviewSample{
+		Request: approvalpipeline.BlockRequest{Tool: input.Sample.Tool, Server: server, Arguments: arguments, AgentReasoning: input.Sample.AgentReasoning},
+		Agent:   approvalpipeline.BlockAgent{Slug: slug, Name: turn.agentName(slug)},
+	})
+	if err != nil {
+		return toolError(err.Error())
+	}
+	inside := false
+	for _, block := range branch.Branch.Blocks {
+		inside = inside || block.ID == preview.TerminalBlockKey
+	}
+	answer := map[string]any{
+		"outcome": preview.Outcome, "reason_code": preview.ReasonCode,
+		"decided_outside_your_rules": preview.TerminalBlockKey != "" && preview.TerminalBlockKey != branch.ID && !inside,
+	}
+	if preview.TerminalBlockKey != "" {
+		answer["terminal_block_id"] = preview.TerminalBlockKey
+	}
+	for _, step := range preview.Blocks {
+		if step.BlockKey == preview.TerminalBlockKey && step.Reason != "" {
+			answer["reason"] = step.Reason
+		}
+	}
+	if preview.EscalationPath != "" {
+		answer["escalation_path"] = preview.EscalationPath
+	}
+	return toolAnswer(answer)
+}
+
+// withPathOnHumanExits makes the person the reviewer of every human exit
+// the model wrote without naming one: blocks inside a branch never
+// inherit the branch's path, so each names the setup's path itself.
+func withPathOnHumanExits(blocks []approvalblock.Definition, pathKey string) []approvalblock.Definition {
+	if pathKey == "" {
+		return blocks
+	}
+	out := make([]approvalblock.Definition, len(blocks))
+	for index, block := range blocks {
+		switch {
+		case block.Always != nil && block.Always.Outcome == approvalblock.Human && block.Always.EscalationPath == "":
+			always := *block.Always
+			always.EscalationPath, always.AskAgentOwner = pathKey, true
+			block.Always = &always
+		case block.CEL != nil && block.CEL.OnMatch == approvalblock.Human && block.CEL.EscalationPath == "":
+			cel := *block.CEL
+			cel.EscalationPath, cel.AskAgentOwner = pathKey, true
+			block.CEL = &cel
+		case block.Webhook != nil && block.Webhook.EscalationPath == "":
+			webhook := *block.Webhook
+			webhook.EscalationPath, webhook.AskAgentOwner = pathKey, true
+			block.Webhook = &webhook
+		case block.Branch != nil:
+			branch := *block.Branch
+			branch.Blocks = withPathOnHumanExits(branch.Blocks, pathKey)
+			if branch.EscalationPath == "" {
+				branch.EscalationPath, branch.AskAgentOwner = pathKey, true
+			}
+			block.Branch = &branch
+		}
+		out[index] = block
+	}
+	return out
 }
 
 func refuse(tool, agentSlug, message string) (AssistantToolResult, domain.OnboardingAssistantAction) {
@@ -498,14 +648,14 @@ func (turn *assistantTurn) describe(tool, agentSlug string, input json.RawMessag
 	_ = json.Unmarshal([]byte(result.Content), &answer)
 	var summary string
 	switch tool {
-	case "get_pipeline":
+	case getRulesTool:
 		summary = "Read " + agent + "'s current rules"
-	case "update_pipeline":
+	case updateRulesTool:
 		summary = "Wrote " + agent + "'s rules"
 		if answer.Revision.Revision > 0 {
 			summary += fmt.Sprintf(" (revision %d)", answer.Revision.Revision)
 		}
-	case "preview_pipeline":
+	case previewRulesTool:
 		var sample struct {
 			Sample struct {
 				Tool string `json:"tool"`
@@ -516,14 +666,6 @@ func (turn *assistantTurn) describe(tool, agentSlug string, input json.RawMessag
 		if answer.Outcome != "" {
 			summary += ": " + assistantOutcomeWord(answer.Outcome)
 		}
-	case "list_pipeline_revisions":
-		summary = "Listed " + agent + "'s rule revisions"
-	case "activate_pipeline_revision":
-		var revision struct {
-			Revision int64 `json:"revision"`
-		}
-		_ = json.Unmarshal(input, &revision)
-		summary = fmt.Sprintf("Activated revision %d of %s's rules", revision.Revision, agent)
 	default:
 		summary = "Called " + tool
 	}
@@ -595,17 +737,11 @@ func (turn *assistantTurn) setTestPrompt(ctx context.Context, raw json.RawMessag
 	if len(arguments) == 0 || string(arguments) == "null" {
 		arguments = json.RawMessage(`{}`)
 	}
-	active, err := turn.service.pipelines.GetActive(ctx, turn.principal, domain.AgentSlug(input.AgentSlug))
+	current, err := turn.service.readEntry(ctx, turn.principal)
 	if err != nil {
 		return refuse(setTestPromptTool, input.AgentSlug, "The active rules could not be read: "+err.Error())
 	}
-	definitions := make([]approvalblock.Definition, len(active.Blocks))
-	for index, block := range active.Blocks {
-		definitions[index] = block.Definition
-	}
-	preview, err := turn.service.pipelines.Preview(ctx, turn.principal, domain.AgentSlug(input.AgentSlug), definitions, approvalpipeline.Route{
-		EscalationPath: active.Revision.DefaultEscalationPath, AskAgentOwner: active.Revision.DefaultAskAgentOwner,
-	}, approvalpipeline.PreviewSample{
+	preview, err := turn.service.pipelines.Preview(ctx, turn.principal, EntryPipelineKey, current.blocks, current.route(), approvalpipeline.PreviewSample{
 		Request: approvalpipeline.BlockRequest{Tool: tool.Name, Server: tool.Server, Arguments: arguments},
 		Agent:   approvalpipeline.BlockAgent{Slug: input.AgentSlug, Name: agent},
 	})
@@ -666,7 +802,7 @@ func firstNonEmpty(values ...string) string {
 // the grammar itself, so no turn is spent reading it through a tool.
 func assistantSystemPrompt(session domain.OnboardingSession, editionGrammar string) string {
 	var prompt strings.Builder
-	prompt.WriteString(`You are the setup assistant inside withHuman's guided setup. withHuman decides which of an AI agent's tool calls wait for a human's approval: every call an agent makes goes through its approval pipeline, and the first block that decides wins (approve, deny, or human). The person has just connected the agents below and now tells you, in their own words, which calls should wait for them. You turn that into each agent's approval pipeline with the tools you have, check it, and explain what you did in plain language.
+	prompt.WriteString(`You are the setup assistant inside withHuman's guided setup. withHuman decides which of an AI agent's tool calls wait for a human's approval: every call an agent makes goes through the organization's entry pipeline, and the first block that decides wins (approve, deny, or human). Each agent's rules live in its own branch of that pipeline; a request from the agent enters its branch, the first block inside that decides wins, and when none decides the branch sends it to a person. You read and write that branch's blocks and nothing else. The person has just connected the agents below and now tells you, in their own words, which calls should wait for them. You turn that into each agent's rules with the tools you have, check them, and explain what you did in plain language.
 
 ## The agents
 
@@ -675,7 +811,7 @@ func assistantSystemPrompt(session domain.OnboardingSession, editionGrammar stri
 		fmt.Fprintf(&prompt, "- %s: agent slug `%s`.\n", runtimeDisplayName(session, runtime), runtime)
 	}
 	if session.Generated.EscalationPathKey != "" {
-		fmt.Fprintf(&prompt, "\nEvery human exit reaches the person through the escalation path `%s`; it is set as the default path of every pipeline you save, so leave escalation_path off individual blocks.\n", session.Generated.EscalationPathKey)
+		fmt.Fprintf(&prompt, "\nEvery human exit reaches the person through the escalation path `%s`: set escalation_path to it on every block whose outcome can be human (blocks inside a branch do not inherit a path). Core blocks you leave it off get it added.\n", session.Generated.EscalationPathKey)
 	}
 	prompt.WriteString("\n## The tools each agent can call\n\nTool names are exact: /request/tool carries them as written here. \"Waits\" marks the tools the starting rules already send to a person.\n")
 	for _, runtime := range session.SelectedRuntimes {
@@ -695,10 +831,10 @@ func assistantSystemPrompt(session domain.OnboardingSession, editionGrammar stri
 	prompt.WriteString(`
 ## How to work
 
-1. Read the agent's current rules with get_pipeline first: the person may have refined them in an earlier message, and update_pipeline replaces the whole block list.
+1. Read the agent's current rules with get_agent_rules first: the person may have refined them in an earlier message, and update_agent_rules replaces the whole block list.
 2. Write the rules as blocks. Put the blocks that send calls to a person first, then end with an always block whose outcome is approve when everything else should run without asking; when the person wants everything reviewed, end with always human instead. A request no block decides waits for a person.
-3. Save with update_pipeline for each agent the request concerns. Do not touch an agent the person did not mention.
-4. Check with preview_pipeline: at least one sample that should wait for a person and one that should run. Fix and save again when an outcome is wrong.
+3. Save with update_agent_rules for each agent the request concerns. Do not touch an agent the person did not mention.
+4. Check with preview_agent_rules: at least one sample that should wait for a person and one that should run. Fix and save again when an outcome is wrong. When the answer says the decision was made outside your rules, a block the organization placed before the agent's branch decided; say so instead of fighting it.
 5. Call set_test_prompt once per agent you changed, with a harmless call your rules send to a person. It is refused if the sample would not reach a person.
 6. Answer the person.
 
@@ -706,7 +842,7 @@ Writing rules:
 - Conditions test the request. /request/tool is the tool name; /request/arguments/<field> are the call's arguments, with the argument names listed above (a shell tool's command text is usually /request/arguments/command). Use regex (RE2) for command patterns, in for lists of tool names, starts_with for prefixes.
 - A shell rule like "kubectl commands that change the cluster" is a cel block on the shell tool with a regex over the command, for example ` + "`kubectl\\s+(apply|delete|scale|rollout|patch|edit|create|replace)`" + `. Read-only verbs (get, describe, logs) stay out of it.
 - Name blocks as short verb-first labels ("Review kubectl changes"); reasons are one full sentence a reviewer reads ("kubectl commands that change the cluster wait for a person.").
-- Every block id is key-shaped and unique; every condition id is a UUID you generate, unique across the revision.
+- Every block id is key-shaped and unique across the whole entry pipeline, so prefix it with the agent slug ("codex-review-kubectl"); every condition id is a UUID you generate, unique across the revision.
 - Rules reflect what the person asked, nothing more. If the request is too vague to act on, ask one short question instead of guessing.
 - Never use em dashes.
 

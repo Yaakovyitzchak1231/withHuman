@@ -17,8 +17,10 @@ import {
 import { pipelineReachability, walkDrafts } from "./pipeline-tree";
 import { parseDocument } from "./pipeline-view";
 
-function always(id = "remaining"): BlockDraft {
-  return { ...newDraftBlock("always"), id, name: "Review remaining requests", reason: "Review everything else." };
+function always(id = "remaining"): Extract<BlockDraft, { kind: "always" }> {
+  const block = newDraftBlock("always");
+  if (block.kind !== "always") throw new Error("expected an Always block");
+  return { ...block, id, name: "Review remaining requests", reason: "Review everything else." };
 }
 
 describe("Always blocks", () => {
@@ -42,7 +44,8 @@ describe("Always blocks", () => {
   it("retains human reviewers and excludes them from automatic outcomes", () => {
     const block = { ...always(), kind: "always" as const, when: undefined, outcome: "human" as const, target: { type: "escalation_path" as const, id: "payments", name: "Payments" } };
     const document = documentFromDrafts([block]);
-    expect(draftsFromBlocks(document.blocks, [block.target])[0].target).toEqual(block.target);
+    const restored = draftsFromBlocks(document.blocks, [block.target])[0];
+    expect(restored.kind === "always" ? restored.target : undefined).toEqual(block.target);
     expect(documentFromDrafts([{ ...block, outcome: "approve" }]).blocks[0].config).not.toHaveProperty("escalation_path");
     expect(duplicateDraft(block)).toMatchObject({ kind: "always", outcome: "human", target: block.target });
     expect(duplicateDraft(block).id).not.toBe(block.id);
@@ -98,7 +101,7 @@ describe("blocks of a kind this bundle does not know", () => {
     );
     expect(() => newDraftBlock("risk_score")).toThrow('No block kind "risk_score" is registered.');
     expect(() => parseDocument(JSON.stringify(documentFromDrafts([draft])))).toThrow(
-      'Block 1 must have type "always", "branch", "cel", or "webhook".',
+      'Block 1 must have type "always", "branch", "cel", "delegate", or "webhook".',
     );
   });
 });
@@ -118,12 +121,11 @@ describe("pipeline reachability", () => {
     expect(pipelineReachability([{ ...catchAll, enabled: false }, condition]).stoppedBy).toBeUndefined();
   });
 
-  it("keeps scopes separate even when block keys match", () => {
-    const org = pipelineReachability([catchAll]);
-    const agent = pipelineReachability([always(), condition], org.stoppedBy);
-    expect(agent.blockedBy.get("remaining")).toBe(catchAll);
-    expect(agent.blockedBy.get("conditional")).toBe(catchAll);
-    expect(agent.stoppedBy).toBe(catchAll);
+  it("treats a delegate as a leaf that never stops the rail", () => {
+    const delegate = { ...newDraftBlock("delegate"), id: "to-billing", pipelineKey: "billing" };
+    const reachability = pipelineReachability([delegate, condition]);
+    expect(reachability.blockedBy.size).toBe(0);
+    expect(reachability.stoppedBy).toBeUndefined();
   });
 
   it("derives warnings from edited JSON", () => {
@@ -296,7 +298,12 @@ describe("branch blocks", () => {
   it("validates the whole tree with the labels the position chips show", () => {
     const refunds = branch("refunds", [cel("small"), { ...cel("unnamed"), name: "" }], "Refunds");
     expect(validateDrafts([cel("first"), refunds])).toBe("Block 2.2 needs a name.");
-    expect(validateDrafts([cel("first"), refunds], { offset: 2 })).toBe("Block 4.2 needs a name.");
+    const delegate = { ...newDraftBlock("delegate"), name: "Billing", when: { id: "dw", all: [leaf("dl", "/agent/slug", "billing")] } };
+    if (delegate.kind !== "delegate") throw new Error("expected a delegate");
+    expect(validateDrafts([delegate])).toBe("Billing needs a pipeline to hand requests to.");
+    expect(validateDrafts([{ ...delegate, pipelineKey: "entry" }])).toBe("Billing cannot hand requests to the entry pipeline.");
+    expect(validateDrafts([{ ...delegate, pipelineKey: "payments" }], { pipelineKey: "payments" })).toBe("Billing cannot hand requests to this pipeline itself.");
+    expect(validateDrafts([{ ...delegate, pipelineKey: "payments" }], { pipelineKey: "entry" })).toBeNull();
     expect(validateDrafts([branch("empty", [], "Empty")])).toBe("Empty needs at least one block.");
     expect(validateDrafts([{ ...branch("refunds", [cel("small")], "Refunds"), reason: " " }])).toBe("Refunds needs a reason.");
     expect(validateDrafts([{ ...branch("refunds", [cel("small")], "Refunds"), when: { id: "w", all: [leaf("l", "", "x")] } }]))
@@ -318,7 +325,7 @@ describe("JSON documents with branches", () => {
     const missingWhen = { ...refunds, config: { ...refunds.config, blocks: [{ ...refunds.config.blocks[0], config: { on_match: "approve", reason: "r" } }] } };
     expect(() => parseDocument(text([documentFromDrafts([cel("first")]).blocks[0], missingWhen]))).toThrow("Block 2.1 is missing config.when.");
     const unknown = { ...refunds, config: { ...refunds.config, blocks: [{ id: "x", type: "group", config: {} }] } };
-    expect(() => parseDocument(text([unknown]))).toThrow('Block 1.1 must have type "always", "branch", "cel", or "webhook".');
+    expect(() => parseDocument(text([unknown]))).toThrow('Block 1.1 must have type "always", "branch", "cel", "delegate", or "webhook".');
     expect(() => parseDocument(text([{ ...refunds, config: { ...refunds.config, blocks: undefined } }]))).toThrow("Block 1 is missing config.blocks");
     expect(() => parseDocument(text([{ ...refunds, config: { ...refunds.config, when: undefined } }]))).toThrow("Block 1 is missing config.when.");
   });
@@ -341,7 +348,8 @@ describe("the agent-owner route", () => {
     const document = documentFromDrafts([block], ownerRoute);
     expect(document.blocks[0].config).toMatchObject({ escalation_path: "payments", ask_agent_owner: true });
     expect(document).toMatchObject({ default_escalation_path: "payments", default_ask_agent_owner: true });
-    expect(draftsFromBlocks(document.blocks, [payments])[0].target).toEqual(ownerRoute);
+    const restored = draftsFromBlocks(document.blocks, [payments])[0];
+    expect(restored.kind === "always" ? restored.target : undefined).toEqual(ownerRoute);
     const parsed = parseDocument(JSON.stringify(document));
     expect(parsed.default_ask_agent_owner).toBe(true);
     expect(documentFromDrafts(draftsFromBlocks(parsed.blocks, [payments]), ownerRoute)).toEqual(document);

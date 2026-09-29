@@ -481,7 +481,7 @@ func (h *Human) Provision() error {
 	p.session.ChannelsSetAt = &now
 	pipelines := map[string]domain.OnboardingGeneratedPipeline{}
 	for _, runtime := range p.session.SelectedRuntimes {
-		pipelines[runtime] = domain.OnboardingGeneratedPipeline{Revision: 2, ReplacedActiveRevision: 1}
+		pipelines[runtime] = domain.OnboardingGeneratedPipeline{PipelineKey: "entry", BranchKey: runtime, Revision: 2, ReplacedActiveRevision: 1}
 	}
 	p.session.Generated = domain.OnboardingGenerated{
 		EscalationPathKey: "notify-test-owner", EscalationPathName: "Notify Test Owner", EscalationPathRevision: 1,

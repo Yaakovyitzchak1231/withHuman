@@ -5,21 +5,21 @@ import type {
 } from "../types";
 import type { BlockDraft, BranchDraft } from "./pipeline-blocks";
 import {
-  carriedMetadata,
-  runFromPreviews,
+  runFromPreview,
   statusAt,
   stepAt,
   stepKey,
   takenExit,
   type TestRun,
 } from "./pipeline-replay";
+import type { DelegateDraft } from "./pipeline-blocks";
 
 function evaluated(
   blockId: string,
   outcome: RequestApprovalPipelinePreviewBlock["outcome"],
   extra: Partial<RequestApprovalPipelinePreviewBlock> = {},
 ): RequestApprovalPipelinePreviewBlock {
-  return { block_id: blockId, position: 0, outcome, cost: 1, trace: [], ...extra };
+  return { block_id: blockId, pipeline_key: "agent", position: 0, outcome, cost: 1, trace: [], ...extra };
 }
 
 function preview(
@@ -60,14 +60,11 @@ describe("replaying a branch", () => {
   const keys = ["agent/refunds", "agent/small", "agent/refunds#end", "agent/later"];
 
   it("greys a skipped branch's blocks and end, and takes the skip row", () => {
-    const run = runFromPreviews([{
-      section: "agent",
-      preview: preview([evaluated("refunds", "next"), evaluated("later", "approve")], {
+    const run = runFromPreview(preview([evaluated("refunds", "next"), evaluated("later", "approve")], {
         outcome: "approve",
         reason_code: "block_outcome",
         terminal_block_id: "later",
-      }),
-    }]);
+      }));
     expect(settled(run, keys)).toEqual({
       "agent/refunds": "passed",
       "agent/small": "unreached",
@@ -78,14 +75,11 @@ describe("replaying a branch", () => {
   });
 
   it("lights the elbow when the branch is entered and a block inside decides", () => {
-    const run = runFromPreviews([{
-      section: "agent",
-      preview: preview([evaluated("refunds", "enter"), evaluated("small", "approve")], {
+    const run = runFromPreview(preview([evaluated("refunds", "enter"), evaluated("small", "approve")], {
         outcome: "approve",
         reason_code: "block_outcome",
         terminal_block_id: "small",
-      }),
-    }]);
+      }));
     expect(run.terminalKey).toBe("agent/small");
     expect(settled(run, keys)).toEqual({
       "agent/refunds": "passed",
@@ -98,9 +92,7 @@ describe("replaying a branch", () => {
   });
 
   it("ends at the branch's end card when nothing inside decides", () => {
-    const run = runFromPreviews([{
-      section: "agent",
-      preview: preview([
+    const run = runFromPreview(preview([
         evaluated("refunds", "enter"),
         evaluated("small", "next"),
         evaluated("refunds", "human", { end_of_branch: true, reason: refunds.reason }),
@@ -108,8 +100,7 @@ describe("replaying a branch", () => {
         outcome: "human",
         reason_code: "end_of_branch",
         terminal_block_id: "refunds",
-      }),
-    }]);
+      }));
     expect(run.reasonCode).toBe("end_of_branch");
     expect(run.terminalKey).toBe("agent/refunds#end");
     expect(run.steps.map((step) => step.key)).toEqual(["agent/refunds", "agent/small", "agent/refunds#end"]);
@@ -122,14 +113,11 @@ describe("replaying a branch", () => {
   });
 
   it("makes the branch card terminal when its condition fails", () => {
-    const run = runFromPreviews([{
-      section: "agent",
-      preview: preview([evaluated("refunds", "human", { error_code: "evaluation_error" })], {
+    const run = runFromPreview(preview([evaluated("refunds", "human", { error_code: "evaluation_error" })], {
         outcome: "human",
         reason_code: "block_error",
         terminal_block_id: "refunds",
-      }),
-    }]);
+      }));
     expect(run.terminalKey).toBe("agent/refunds");
     expect(settled(run, keys)["agent/refunds"]).toBe("terminal");
     expect(settled(run, keys)["agent/refunds#end"]).toBe("unreached");
@@ -137,14 +125,11 @@ describe("replaying a branch", () => {
   });
 
   it("advances one step at a time, evaluating the cursor's step", () => {
-    const run = runFromPreviews([{
-      section: "agent",
-      preview: preview([evaluated("refunds", "enter"), evaluated("small", "approve")], {
+    const run = runFromPreview(preview([evaluated("refunds", "enter"), evaluated("small", "approve")], {
         outcome: "approve",
         reason_code: "block_outcome",
         terminal_block_id: "small",
-      }),
-    }]);
+      }));
     expect(statusAt(run, 0, "agent/refunds")).toBe("evaluating");
     expect(statusAt(run, 0, "agent/small")).toBe("pending");
     expect(statusAt(run, 0, "agent/later")).toBe("pending");
@@ -155,43 +140,62 @@ describe("replaying a branch", () => {
   });
 });
 
-describe("replaying the effective pipeline", () => {
-  it("keeps organization and agent blocks with the same key apart", () => {
-    const organization = preview([evaluated("shared", "next", { metadata: { score: 3 } })], {
-      outcome: "human",
-      reason_code: "end_of_pipeline",
+const toBilling: DelegateDraft = {
+  kind: "delegate",
+  id: "to-billing",
+  name: "Billing requests",
+  enabled: true,
+  when: { id: "billing-when", all: [{ id: "billing-leaf", field: "/agent/slug", operator: "equals", value: "billing" }] },
+  pipelineKey: "billing",
+};
+
+describe("replaying a delegate", () => {
+  const keys = ["entry/to-billing", "billing/small", "entry/to-billing#end", "entry/later"];
+  const step = (blockId: string, pipelineKey: string, outcome: RequestApprovalPipelinePreviewBlock["outcome"], extra: Partial<RequestApprovalPipelinePreviewBlock> = {}) =>
+    evaluated(blockId, outcome, { pipeline_key: pipelineKey, ...extra });
+
+  it("keeps blocks of the delegated pipeline under its own key", () => {
+    const run = runFromPreview(preview([
+      step("to-billing", "entry", "enter"),
+      step("small", "billing", "approve"),
+    ], { outcome: "approve", reason_code: "block_outcome", terminal_block_id: "small" }));
+    expect(run.steps.map((entry) => entry.key)).toEqual(["entry/to-billing", "billing/small"]);
+    expect(run.terminalKey).toBe("billing/small");
+    expect(settled(run, keys)).toEqual({
+      "entry/to-billing": "passed",
+      "billing/small": "terminal",
+      "entry/to-billing#end": "unreached",
+      "entry/later": "unreached",
     });
-    const agent = preview([evaluated("shared", "approve")], {
-      outcome: "approve",
-      reason_code: "block_outcome",
-      terminal_block_id: "shared",
-    });
-    expect(carriedMetadata(organization)).toEqual({ shared: { score: 3 } });
-    const run = runFromPreviews([
-      { section: "organization", preview: organization },
-      { section: "agent", preview: agent },
-    ]);
-    expect(run.steps.map((step) => step.key)).toEqual(["organization/shared", "agent/shared"]);
-    expect(settled(run, ["organization/shared", "agent/shared"])).toEqual({
-      "organization/shared": "passed",
-      "agent/shared": "terminal",
-    });
+    expect(takenExit(stepAt(run, run.steps.length, "entry/to-billing"), toBilling)).toBe("enter");
   });
 
-  it("stops in the organization section when a branch there runs out", () => {
-    const organization = preview([
-      evaluated("refunds", "enter"),
-      evaluated("refunds", "human", { end_of_branch: true }),
-    ], { outcome: "human", reason_code: "end_of_branch", terminal_block_id: "refunds" });
-    const run = runFromPreviews([{ section: "organization", preview: organization }]);
-    expect(run.terminalKey).toBe(stepKey("organization", "refunds", true));
-    expect(run.outcome).toBe("human");
+  it("ends at the delegate's end when the target runs out, keyed to the delegating pipeline", () => {
+    const run = runFromPreview(preview([
+      step("to-billing", "entry", "enter"),
+      step("small", "billing", "next"),
+      step("to-billing", "entry", "human", { end_of_branch: true }),
+    ], { outcome: "human", reason_code: "end_of_branch", terminal_block_id: "to-billing" }));
+    expect(run.terminalKey).toBe("entry/to-billing#end");
+    expect(settled(run, keys)["entry/to-billing#end"]).toBe("terminal");
   });
 
-  it("continues to the agent's pipeline from the organization's own page", () => {
-    const organization = preview([evaluated("refunds", "next")], { outcome: "human", reason_code: "end_of_pipeline" });
-    const run = runFromPreviews([{ section: "organization", preview: organization }], true);
-    expect(run).toMatchObject({ outcome: "continue", reasonCode: "end_of_section" });
-    expect(run.terminalKey).toBeUndefined();
+  it("tells two pipelines' blocks with the same key apart", () => {
+    const run = runFromPreview(preview([
+      step("shared", "entry", "next"),
+      step("to-billing", "entry", "enter"),
+      step("shared", "billing", "approve"),
+    ], { outcome: "approve", reason_code: "block_outcome", terminal_block_id: "shared" }));
+    expect(run.terminalKey).toBe("billing/shared");
+    expect(settled(run, ["entry/shared", "billing/shared"])).toEqual({ "entry/shared": "passed", "billing/shared": "terminal" });
+  });
+
+  it("skips the delegate when its condition does not match", () => {
+    const run = runFromPreview(preview([
+      step("to-billing", "entry", "next"),
+      step("later", "entry", "approve"),
+    ], { outcome: "approve", reason_code: "block_outcome", terminal_block_id: "later" }));
+    expect(takenExit(stepAt(run, run.steps.length, "entry/to-billing"), toBilling)).toBe("continue");
+    expect(settled(run, keys)["billing/small"]).toBe("unreached");
   });
 });

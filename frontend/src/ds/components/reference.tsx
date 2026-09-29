@@ -23,8 +23,9 @@ export type Reference =
   /* A team's escalation policy, as distinct from the team itself. */
   | { kind: "team_escalation_policy"; teamId: string; teamName: string }
   | { kind: "escalation_path"; key: string; name: string }
-  /* An empty agent slug addresses the organization pipeline. */
-  | { kind: "pipeline"; agentSlug: string; revision?: number }
+  /* A pipeline by key; "entry" is the one every request enters. The
+   * name, when the mention knows it, is the chip's label. */
+  | { kind: "pipeline"; pipelineKey: string; name?: string; revision?: number }
   | { kind: "webhook_endpoint"; key: string; name: string }
   /* An agent by its slug when the mention carries one; a display name
    * is enough for the app to find a live agent that is called that. */
@@ -58,9 +59,8 @@ export type Reference =
       /* Set when the block failed instead of answering, which sent the
        * request to a human. */
       errorCode?: string;
-      /* The pipeline that held the block, at the revision that ran. An
-       * empty agent slug is the organization pipeline. */
-      pipeline?: { agentSlug: string; revision: number };
+      /* The pipeline that held the block, at the revision that ran. */
+      pipeline?: { pipelineKey: string; revision: number };
     };
 
 export type ReferenceKind = Reference["kind"];

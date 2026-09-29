@@ -24,7 +24,7 @@ import (
 
 // The whole chain an agent walks through the management MCP surface,
 // against the real store and a real personal API key: a team, an
-// escalation path targeting it, the organization pipeline naming the
+// escalation path targeting it, the entry pipeline naming the
 // path, a preview through the active blocks, and the in-use refusal when
 // the path is archived underneath the pipeline.
 func TestMCPSetsUpAnApprovalFlowEndToEnd(t *testing.T) {
@@ -70,7 +70,7 @@ func TestMCPSetsUpAnApprovalFlowEndToEnd(t *testing.T) {
 	router := NewRouter(Dependencies{
 		Auth: auth, Identities: store, Roles: store, ApprovalRepo: store, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Teams:     teams.NewService(store, clock),
-		Pipelines: approvalpipeline.NewManagementService(store, compiled, clock, approvalpipeline.WithEscalationPathResolver(store)),
+		Pipelines: approvalpipeline.NewManagementService(store, compiled, clock, approvalpipeline.WithEscalationPathResolver(store), approvalpipeline.WithPipelineKeyResolver(store)),
 		Routing:   reviewrouting.NewManagementService(store, store, clock),
 		Config:    Config{PublicOrigin: "http://localhost:8080", Version: "test"},
 	})
@@ -107,6 +107,7 @@ func TestMCPSetsUpAnApprovalFlowEndToEnd(t *testing.T) {
 	// path is active.
 	condition := map[string]any{"id": uuid.NewString(), "field": "/request/tool", "operator": "equals", "value": "stripe__refund"}
 	pipeline := mcpStructured(t, h.call(t, session, "update_pipeline", map[string]any{
+		"pipeline_key": "entry",
 		"blocks": []any{
 			map[string]any{
 				"id": "refunds", "name": "Refunds need Payments", "type": "cel", "enabled": true, "timeout": "50ms", "max_attempts": 1,
@@ -125,20 +126,20 @@ func TestMCPSetsUpAnApprovalFlowEndToEnd(t *testing.T) {
 	}
 
 	preview := mcpStructured(t, h.call(t, session, "preview_pipeline", map[string]any{
-		"blocks": revision["blocks"], "default_escalation_path": "payments-review",
+		"pipeline_key": "entry", "blocks": revision["blocks"], "default_escalation_path": "payments-review",
 		"sample": map[string]any{"tool": "stripe__refund", "arguments": map[string]any{"amount": 75}},
 	}))
 	if preview["outcome"] != "human" || preview["escalation_path"] != "payments-review" {
 		t.Fatalf("preview = %v", preview)
 	}
 	passthrough := mcpStructured(t, h.call(t, session, "preview_pipeline", map[string]any{
-		"blocks": revision["blocks"], "sample": map[string]any{"tool": "Read", "arguments": map[string]any{}},
+		"pipeline_key": "entry", "blocks": revision["blocks"], "sample": map[string]any{"tool": "Read", "arguments": map[string]any{}},
 	}))
 	if passthrough["outcome"] != "approve" || passthrough["terminal_block_id"] != "rest" {
 		t.Fatalf("an unmatched request should reach the always block: %v", passthrough)
 	}
 
-	current := mcpStructured(t, h.call(t, session, "get_pipeline", nil))
+	current := mcpStructured(t, h.call(t, session, "get_pipeline", map[string]any{"pipeline_key": "entry"}))
 	if current["revision"] != float64(2) {
 		t.Fatalf("get_pipeline = %v", current)
 	}
@@ -154,7 +155,7 @@ func TestMCPSetsUpAnApprovalFlowEndToEnd(t *testing.T) {
 		t.Fatalf("archive while in use = %q", mcpText(refused))
 	}
 	// Rolling the pipeline back to its empty revision frees the path.
-	if rolled := h.call(t, session, "activate_pipeline_revision", map[string]any{"revision": 1}); rolled.IsError {
+	if rolled := h.call(t, session, "activate_pipeline_revision", map[string]any{"pipeline_key": "entry", "revision": 1}); rolled.IsError {
 		t.Fatalf("rollback: %s", mcpText(rolled))
 	}
 	if archived := h.call(t, session, "archive_escalation_path", map[string]any{"path_key": "payments-review"}); archived.IsError {

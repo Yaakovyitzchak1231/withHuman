@@ -216,19 +216,18 @@ func TestRequestApprovalPipelineRoutesAreProductAPIs(t *testing.T) {
 		path   string
 	}{
 		{method: http.MethodGet, path: "/api/v1/request-approval-pipelines"},
-		{method: http.MethodGet, path: "/api/v1/request-approval-pipelines/agents/billing"},
-		{method: http.MethodPost, path: "/api/v1/request-approval-pipelines/agents/billing/preview"},
-		{method: http.MethodPost, path: "/api/v1/request-approval-pipelines/agents/billing/revisions"},
-		{method: http.MethodGet, path: "/api/v1/request-approval-pipelines/agents/billing/revisions"},
-		{method: http.MethodGet, path: "/api/v1/request-approval-pipelines/agents/billing/revisions/1"},
-		{method: http.MethodGet, path: "/api/v1/request-approval-pipelines/agents/billing/revisions/1/references"},
-		{method: http.MethodPost, path: "/api/v1/request-approval-pipelines/agents/billing/revisions/1/activate"},
-		{method: http.MethodGet, path: "/api/v1/request-approval-pipelines/organization"},
-		{method: http.MethodPost, path: "/api/v1/request-approval-pipelines/organization/preview"},
-		{method: http.MethodPost, path: "/api/v1/request-approval-pipelines/organization/revisions"},
-		{method: http.MethodGet, path: "/api/v1/request-approval-pipelines/organization/revisions"},
-		{method: http.MethodGet, path: "/api/v1/request-approval-pipelines/organization/revisions/1"},
-		{method: http.MethodPost, path: "/api/v1/request-approval-pipelines/organization/revisions/1/activate"},
+		{method: http.MethodPost, path: "/api/v1/request-approval-pipelines"},
+		{method: http.MethodGet, path: "/api/v1/request-approval-pipelines/billing"},
+		{method: http.MethodDelete, path: "/api/v1/request-approval-pipelines/billing"},
+		{method: http.MethodGet, path: "/api/v1/request-approval-pipelines/billing/uses"},
+		{method: http.MethodPost, path: "/api/v1/request-approval-pipelines/billing/preview"},
+		{method: http.MethodPost, path: "/api/v1/request-approval-pipelines/billing/revisions"},
+		{method: http.MethodGet, path: "/api/v1/request-approval-pipelines/billing/revisions"},
+		{method: http.MethodGet, path: "/api/v1/request-approval-pipelines/billing/revisions/1"},
+		{method: http.MethodGet, path: "/api/v1/request-approval-pipelines/billing/revisions/1/references"},
+		{method: http.MethodPost, path: "/api/v1/request-approval-pipelines/billing/revisions/1/activate"},
+		{method: http.MethodGet, path: "/api/v1/request-approval-pipelines/entry"},
+		{method: http.MethodPost, path: "/api/v1/request-approval-pipelines/entry/revisions"},
 	} {
 		t.Run(test.method+" "+test.path, func(t *testing.T) {
 			response := httptest.NewRecorder()
@@ -258,7 +257,7 @@ func TestRequestApprovalPipelinePreviewRouteIsStrictAndTransient(t *testing.T) {
 		}],
 		"sample":{"request":{"tool":"stripe.refund","arguments":{"amount_cents":900}},"agent":{"slug":"billing","name":"billing-agent"}}
 	}`
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/request-approval-pipelines/agents/billing/preview", strings.NewReader(body))
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/request-approval-pipelines/billing/preview", strings.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("X-Request-ID", "preview-1")
 	response := httptest.NewRecorder()
@@ -289,7 +288,7 @@ func TestRequestApprovalPipelinePreviewRouteIsStrictAndTransient(t *testing.T) {
 	}
 
 	unknown := strings.Replace(body, `"blocks":`, `"unknown":true,"blocks":`, 1)
-	request = httptest.NewRequest(http.MethodPost, "/api/v1/request-approval-pipelines/agents/billing/preview", strings.NewReader(unknown))
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/request-approval-pipelines/billing/preview", strings.NewReader(unknown))
 	request.Header.Set("Content-Type", "application/json")
 	response = httptest.NewRecorder()
 	router.ServeHTTP(response, request)
@@ -303,14 +302,14 @@ func TestRequestApprovalPipelineActivationRequiresAndChecksIfMatch(t *testing.T)
 	repository.activateErr = domain.ErrPreconditionFailed
 	router := pipelineManagementTestRouter(repository, pipelineHTTPPrincipal())
 
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/request-approval-pipelines/agents/billing/revisions/1/activate", nil)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/request-approval-pipelines/billing/revisions/1/activate", nil)
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, request)
 	if response.Code != http.StatusPreconditionRequired || !strings.Contains(response.Body.String(), `"code":"if_match_required"`) {
 		t.Fatalf("missing If-Match: status=%d body=%s", response.Code, response.Body.String())
 	}
 
-	request = httptest.NewRequest(http.MethodPost, "/api/v1/request-approval-pipelines/agents/billing/revisions/1/activate", nil)
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/request-approval-pipelines/billing/revisions/1/activate", nil)
 	request.Header.Set("If-Match", `"1"`)
 	request.Header.Set("X-Request-ID", "activation-1")
 	response = httptest.NewRecorder()
@@ -336,7 +335,7 @@ func TestRequestApprovalPipelineActivationRequiresAndChecksIfMatch(t *testing.T)
 func TestHistoricalPipelineRevisionReturnsOrderedCanonicalBlocks(t *testing.T) {
 	repository := pipelineHTTPRepositoryWithRevision()
 	router := pipelineManagementTestRouter(repository, pipelineHTTPPrincipal())
-	request := httptest.NewRequest(http.MethodGet, "/api/v1/request-approval-pipelines/agents/billing/revisions/1", nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/request-approval-pipelines/billing/revisions/1", nil)
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
@@ -525,7 +524,7 @@ func pipelineHTTPRepositoryWithRevision() *pipelineHTTPRepository {
 	secondID := domain.ID("22222222-2222-4222-8222-222222222222")
 	return &pipelineHTTPRepository{
 		revision: domain.RequestApprovalPipelineRevision{
-			ID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", OrganizationID: "organization-1", AgentSlug: "billing",
+			ID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", OrganizationID: "organization-1", PipelineKey: "billing", Name: "Billing",
 			Revision: 1, BlockIDs: []domain.ID{firstID, secondID}, CreatedByActorID: "membership-1", CreatedAt: now,
 		},
 		blocks: []domain.RequestApprovalBlock{
@@ -544,7 +543,7 @@ func pipelineHTTPRepositoryWithRevision() *pipelineHTTPRepository {
 }
 
 func (repository *pipelineHTTPRepository) GetRequestApprovalPipelineRevision(_ context.Context, input application.GetRequestApprovalPipelineRevisionInput) (domain.RequestApprovalPipelineRevision, error) {
-	if repository.revision.OrganizationID != input.OrganizationID || repository.revision.AgentSlug != input.AgentSlug || repository.revision.Revision != input.Revision {
+	if repository.revision.OrganizationID != input.OrganizationID || repository.revision.PipelineKey != input.PipelineKey || repository.revision.Revision != input.Revision {
 		return domain.RequestApprovalPipelineRevision{}, domain.ErrNotFound
 	}
 	return repository.revision, nil

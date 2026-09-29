@@ -51,11 +51,12 @@ team=$(curl --silent --fail --cookie "$owner_jar" --header 'Content-Type: applic
   --data "{\"name\":\"Payments $unique\"}" "$app_api/teams" | jq -r .team.id)
 curl --silent --fail --cookie "$owner_jar" --request PUT --header 'Content-Type: application/json' \
   --data "{\"membership_ids\":[\"$member_id\"]}" "$app_api/teams/$team/members" >/dev/null
+# Two pipelines of their own; the team is given one of them.
 for kind in "refund-$unique" "release-$unique"; do
   curl --silent --fail --cookie "$owner_jar" --header 'Content-Type: application/json' \
-    --data "{\"slug\":\"$kind\",\"name\":\"$kind\"}" "$app_api/agents" >/dev/null
+    --data "{\"pipeline_key\":\"$kind\",\"name\":\"$kind\",\"blocks\":[]}" "$app_api/request-approval-pipelines" >/dev/null
 done
-policy=$(jq -nc --arg resource "refund-$unique" '{scope_kind:"agent",resource_ids:[$resource],permissions:["pipeline.read","pipeline.write","agent.read","agent.write"]}')
+policy=$(jq -nc --arg resource "refund-$unique" '{scope_kind:"pipeline",resource_ids:[$resource],permissions:["pipeline.read","pipeline.write"]}')
 endpoint="$app_api/teams/$team/permission_policies"
 saved=$(curl --silent --fail --cookie "$owner_jar" --header 'Content-Type: application/json' \
   --header "Idempotency-Key: scoped-$unique" --data "$policy" "$endpoint")
@@ -66,9 +67,9 @@ curl --silent --fail --cookie "$member_jar" "$app_api/members/$member_id/permiss
   | jq -e --arg team "$team" 'any(.policies[]; .via_team_id == $team and .can_edit == false)' >/dev/null
 revision='{"blocks":[]}'
 test "$(status_of --cookie "$member_jar" --header 'Content-Type: application/json' --data "$revision" \
-  "$app_api/request-approval-pipelines/agents/refund-$unique/revisions")" = "201"
+  "$app_api/request-approval-pipelines/refund-$unique/revisions")" = "201"
 test "$(status_of --cookie "$member_jar" --header 'Content-Type: application/json' --data "$revision" \
-  "$app_api/request-approval-pipelines/agents/release-$unique/revisions")" = "403"
+  "$app_api/request-approval-pipelines/release-$unique/revisions")" = "403"
 test "$(status_of --cookie "$member_jar" --header 'Content-Type: application/json' --data "$policy" \
   --header "Idempotency-Key: forbidden-$unique" "$endpoint")" = "403"
 updated=$(printf '%s' "$policy" | jq -c --arg second "release-$unique" '. + {revision:1} | .resource_ids += [$second]')
@@ -82,7 +83,7 @@ for retry in 1 2; do
     "$endpoint/$policy_id?revision=2")" = "204"
 done
 test "$(status_of --cookie "$member_jar" --header 'Content-Type: application/json' --data "$revision" \
-  "$app_api/request-approval-pipelines/agents/refund-$unique/revisions")" = "403"
+  "$app_api/request-approval-pipelines/refund-$unique/revisions")" = "403"
 curl --silent --fail --cookie "$owner_jar" "$endpoint" \
   | jq -e --arg id "$policy_id" 'all(.policies[]; .id != $id)' >/dev/null
 echo "permission policy smoke passed"

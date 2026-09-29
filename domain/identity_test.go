@@ -67,14 +67,18 @@ func TestRegisterPermissionsRefusesBadKeys(t *testing.T) {
 }
 
 func TestResourceCoveringScopes(t *testing.T) {
-	if got := AgentResource(""); got.Kind != ResourceOrganization {
-		t.Fatalf("empty agent slug must be the organization resource, got %#v", got)
-	}
 	scopes := AgentResource("refund-bot").CoveringScopes()
 	if len(scopes) != 2 || scopes[1] != (Scope{Kind: ScopeAgent, ID: "refund-bot"}) {
 		t.Fatalf("unexpected covering scopes %#v", scopes)
 	}
 	if got := RequestResource("r").CoveringScopes(); len(got) != 1 || got[0].Kind != ScopeOrganization {
 		t.Fatalf("requests are covered by organization scope only, got %#v", got)
+	}
+	pipeline := PipelineResource("payments").CoveringScopes()
+	if len(pipeline) != 2 || pipeline[1] != (Scope{Kind: ScopePipeline, ID: "payments"}) {
+		t.Fatalf("unexpected pipeline covering scopes %#v", pipeline)
+	}
+	if got := (Scope{Kind: ScopePipeline, ID: "payments"}).Resource(); got != PipelineResource("payments") {
+		t.Fatalf("pipeline scope must map back to the pipeline resource, got %#v", got)
 	}
 }

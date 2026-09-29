@@ -8,8 +8,10 @@ import (
 )
 
 func TestCheckScopeLadder(t *testing.T) {
-	org := domain.Grant{Permission: domain.PermissionPipelineWrite, ScopeKind: domain.ScopeOrganization}
-	refund := domain.Grant{Permission: domain.PermissionPipelineWrite, ScopeKind: domain.ScopeAgent, ScopeID: "refund-bot"}
+	org := domain.Grant{Permission: domain.PermissionAgentWrite, ScopeKind: domain.ScopeOrganization}
+	refund := domain.Grant{Permission: domain.PermissionAgentWrite, ScopeKind: domain.ScopeAgent, ScopeID: "refund-bot"}
+	pipelines := domain.Grant{Permission: domain.PermissionPipelineWrite, ScopeKind: domain.ScopeOrganization}
+	billing := domain.Grant{Permission: domain.PermissionPipelineWrite, ScopeKind: domain.ScopePipeline, ScopeID: "billing"}
 	payments := domain.Grant{Permission: domain.PermissionTeamWrite, ScopeKind: domain.ScopeTeam, ScopeID: "payments"}
 	decide := domain.Grant{Permission: domain.PermissionRequestDecide, ScopeKind: domain.ScopeOrganization}
 
@@ -20,11 +22,13 @@ func TestCheckScopeLadder(t *testing.T) {
 		resource   domain.Resource
 		allowed    bool
 	}{
-		{"organization grant covers an agent type", []domain.Grant{org}, domain.PermissionPipelineWrite, domain.AgentResource("refund-bot"), true},
-		{"organization grant covers the organization pipeline", []domain.Grant{org}, domain.PermissionPipelineWrite, domain.AgentResource(""), true},
-		{"agent type grant covers its own type", []domain.Grant{refund}, domain.PermissionPipelineWrite, domain.AgentResource("refund-bot"), true},
-		{"agent type grant does not cover another type", []domain.Grant{refund}, domain.PermissionPipelineWrite, domain.AgentResource("release-bot"), false},
-		{"agent type grant does not cover the organization pipeline", []domain.Grant{refund}, domain.PermissionPipelineWrite, domain.AgentResource(""), false},
+		{"organization grant covers an agent", []domain.Grant{org}, domain.PermissionAgentWrite, domain.AgentResource("refund-bot"), true},
+		{"organization grant covers the entry pipeline", []domain.Grant{pipelines}, domain.PermissionPipelineWrite, domain.PipelineResource(domain.EntryPipelineKey), true},
+		{"agent grant covers its own agent", []domain.Grant{refund}, domain.PermissionAgentWrite, domain.AgentResource("refund-bot"), true},
+		{"agent grant does not cover another agent", []domain.Grant{refund}, domain.PermissionAgentWrite, domain.AgentResource("release-bot"), false},
+		{"pipeline grant covers its own pipeline", []domain.Grant{billing}, domain.PermissionPipelineWrite, domain.PipelineResource("billing"), true},
+		{"pipeline grant does not cover the entry pipeline", []domain.Grant{billing}, domain.PermissionPipelineWrite, domain.PipelineResource(domain.EntryPipelineKey), false},
+		{"pipeline grant does not cover creating a pipeline", []domain.Grant{billing}, domain.PermissionPipelineWrite, domain.OrganizationResource(), false},
 		{"team grant covers its team", []domain.Grant{payments}, domain.PermissionTeamWrite, domain.TeamResource("payments"), true},
 		{"team grant does not cover another team", []domain.Grant{payments}, domain.PermissionTeamWrite, domain.TeamResource("legal"), false},
 		{"team grant does not cover creating a team", []domain.Grant{payments}, domain.PermissionTeamWrite, domain.OrganizationResource(), false},

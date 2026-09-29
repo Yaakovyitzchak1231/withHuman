@@ -161,7 +161,7 @@ func (block *CompiledWebhookBlock) Evaluate(ctx context.Context, input RequestAp
 
 	idempotencyKey := "preview:" + uuid.NewString()
 	if !input.Preview && input.Request.ID != "" {
-		idempotencyKey = string(input.Request.ID) + ":" + block.definition.ID
+		idempotencyKey = string(input.Request.ID) + ":" + input.PipelineKey + ":" + block.definition.ID
 	}
 	var last webhookAttempt
 	attempts := 0

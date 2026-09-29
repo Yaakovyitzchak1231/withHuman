@@ -33,19 +33,27 @@ type mcpStatusInput struct {
 	Status string `json:"status,omitempty" jsonschema:"Which to list: live (the default), archived, or all."`
 }
 
-type mcpPipelineScopeInput struct {
-	AgentSlug string `json:"agent_slug,omitempty" jsonschema:"Agent slug whose pipeline this addresses. Omit for the organization pipeline, which runs before every agent's own."`
+type mcpPipelineKeyInput struct {
+	PipelineKey string `json:"pipeline_key" jsonschema:"The pipeline's key. 'entry' is the entry pipeline every request starts in; any other key is a pipeline a delegate block hands requests to."`
 }
 
 type mcpPipelineRevisionInput struct {
-	AgentSlug string `json:"agent_slug,omitempty" jsonschema:"Agent slug whose pipeline this addresses. Omit for the organization pipeline."`
-	Revision  int64  `json:"revision" jsonschema:"The revision number, from list_pipeline_revisions."`
+	PipelineKey string `json:"pipeline_key" jsonschema:"The pipeline's key ('entry' for the entry pipeline)."`
+	Revision    int64  `json:"revision" jsonschema:"The revision number, from list_pipeline_revisions."`
+}
+
+type mcpCreatePipelineInput struct {
+	PipelineKey           string           `json:"pipeline_key" jsonschema:"The new pipeline's key: lowercase letters, digits, dots, underscores and hyphens, up to 63 characters. It is taken for good, archived pipelines included, and can never be 'entry'."`
+	Name                  string           `json:"name" jsonschema:"The pipeline's display name, for example Payments."`
+	Blocks                []map[string]any `json:"blocks,omitempty" jsonschema:"The first revision's blocks, in the shape update_pipeline takes. Omit or pass an empty list for a pipeline that passes every request that enters it to human review until it is edited."`
+	DefaultEscalationPath string           `json:"default_escalation_path,omitempty" jsonschema:"Escalation path key for requests this pipeline hands to a person without a block naming a path, including requests that run out of it. Omit to inherit the defaults of the pipelines that delegate into it."`
 }
 
 type mcpUpdatePipelineInput struct {
-	AgentSlug             string           `json:"agent_slug,omitempty" jsonschema:"Agent slug whose pipeline to replace. Omit for the organization pipeline."`
-	Blocks                []map[string]any `json:"blocks" jsonschema:"The complete ordered block list for the new revision (it replaces the current blocks, so include the ones to keep). Each block: id (key-shaped, unique across the whole pipeline including blocks inside branches), name, type (always | cel | webhook | branch, or a kind this deployment adds; see read_reference), enabled: true, timeout (for example 50ms), max_attempts (1 for always, cel and branch), and config for its type; a branch holds its own ordered blocks in config.blocks. See read_reference topic pipeline_blocks. An empty list sends every request to human review."`
-	DefaultEscalationPath string           `json:"default_escalation_path,omitempty" jsonschema:"Escalation path key that takes human exits which name no path of their own, and requests the pipeline hands to a person by falling through. Omit to leave them to any authorized reviewer."`
+	PipelineKey           string           `json:"pipeline_key" jsonschema:"The pipeline to replace ('entry' for the entry pipeline)."`
+	Name                  string           `json:"name,omitempty" jsonschema:"A new display name for the pipeline. Omit to keep the current one."`
+	Blocks                []map[string]any `json:"blocks" jsonschema:"The complete ordered block list for the new revision (it replaces the current blocks, so include the ones to keep). Each block: id (key-shaped, unique across the whole pipeline including blocks inside branches), name, type (always | cel | webhook | branch | delegate, or a kind this deployment adds; see read_reference), enabled: true, timeout (for example 50ms), max_attempts (1 for always, cel, branch and delegate), and config for its type; a branch holds its own ordered blocks in config.blocks, a delegate names the pipeline it hands matching requests to in config.pipeline_key. See read_reference topic pipeline_blocks. An empty list sends every request to human review."`
+	DefaultEscalationPath string           `json:"default_escalation_path,omitempty" jsonschema:"Escalation path key that takes human exits which name no path of their own, and requests the pipeline hands to a person by running out of blocks. Omit to inherit the defaults of the pipelines that delegate into this one, or, for the entry pipeline, to leave them to any authorized reviewer."`
 	DefaultAskAgentOwner  bool             `json:"default_ask_agent_owner,omitempty" jsonschema:"Send those requests to the person who owns the agent instance that made them instead, with default_escalation_path as the fallback for requests from agents without an owner (service agents). Requires default_escalation_path."`
 	Activate              *bool            `json:"activate,omitempty" jsonschema:"Activate the new revision right away so new requests use it. Defaults to true. False saves a draft revision you can activate later with activate_pipeline_revision."`
 }
@@ -55,12 +63,12 @@ type mcpPreviewSample struct {
 	Arguments      map[string]any `json:"arguments,omitempty" jsonschema:"The tool call's arguments as the agent would send them."`
 	AgentReasoning string         `json:"agent_reasoning,omitempty" jsonschema:"What the agent said it was trying to do, for blocks that include the agent's reasoning."`
 	Context        map[string]any `json:"context,omitempty" jsonschema:"Extra request context, if the adapter would send any."`
-	AgentSlug      string         `json:"agent_slug,omitempty" jsonschema:"The requesting agent's slug for the sample. Defaults to the pipeline's agent, or the slug 'agent' for the organization pipeline."`
+	AgentSlug      string         `json:"agent_slug,omitempty" jsonschema:"The requesting agent's slug for the sample. Defaults to 'agent'."`
 	AgentName      string         `json:"agent_name,omitempty" jsonschema:"The requesting agent's display name for the sample. Defaults to the slug."`
 }
 
 type mcpPreviewPipelineInput struct {
-	AgentSlug             string           `json:"agent_slug,omitempty" jsonschema:"Agent slug whose pipeline scope to preview in. Omit for the organization pipeline."`
+	PipelineKey           string           `json:"pipeline_key" jsonschema:"The pipeline the blocks stand in for ('entry' for the entry pipeline). Delegate blocks expand to their targets' current active revisions."`
 	Blocks                []map[string]any `json:"blocks" jsonschema:"The blocks to run the sample through, in order; the same shape update_pipeline takes. Pass the current blocks from get_pipeline to test what is active."`
 	DefaultEscalationPath string           `json:"default_escalation_path,omitempty" jsonschema:"The default escalation path to assume, as update_pipeline takes it."`
 	DefaultAskAgentOwner  bool             `json:"default_ask_agent_owner,omitempty" jsonschema:"Whether the default asks the agent's owner first, as update_pipeline takes it."`
@@ -229,7 +237,7 @@ func (a *API) registerMCPTools(server *mcp.Server) {
 	// Approval pipelines.
 	addMCPTool(a, server, &mcp.Tool{
 		Name:        "list_pipelines",
-		Description: "List every approval pipeline scope: the organization's and one per agent, each with its active revision number and block count.",
+		Description: "List every approval pipeline: the entry pipeline every request starts in, then every pipeline a delegate block can hand requests to, each with its key, name, active revision number and history.",
 		Annotations: mcpReadOnly,
 	}, func(call *mcpCall, input mcpStatusInput) (*mcp.CallToolResult, any, error) {
 		response, err := call.get(mcpPipelinesPath, statusQuery(input.Status))
@@ -242,19 +250,45 @@ func (a *API) registerMCPTools(server *mcp.Server) {
 		Name:        "get_pipeline",
 		Description: "Read a pipeline's active revision with its blocks in order and its default escalation path. Blocks come back in the shape update_pipeline accepts, so you can edit and resubmit them.",
 		Annotations: mcpReadOnly,
-	}, func(call *mcpCall, input mcpPipelineScopeInput) (*mcp.CallToolResult, any, error) {
-		response, err := call.get(pipelineScopePath(input.AgentSlug), nil)
+	}, func(call *mcpCall, input mcpPipelineKeyInput) (*mcp.CallToolResult, any, error) {
+		response, err := call.get(pipelinePath(input.PipelineKey), nil)
 		if err != nil {
 			return nil, nil, err
 		}
 		return mcpResult(response.Body)
 	})
 	addMCPTool(a, server, &mcp.Tool{
+		Name: "create_pipeline",
+		Description: "Create a pipeline that a delegate block in another pipeline can hand matching requests to, with its first revision active at once. " +
+			"Use it to give one team its own part of the approval flow: the entry pipeline decides which requests reach it, the new pipeline decides what happens to them. Grant the team pipeline.read, pipeline.write and pipeline.activate at pipeline:<key> so they can edit it and nothing else.",
+		Annotations: mcpAdditive,
+	}, func(call *mcpCall, input mcpCreatePipelineInput) (*mcp.CallToolResult, any, error) {
+		body := map[string]any{"pipeline_key": input.PipelineKey, "name": input.Name, "blocks": writableBlocks(input.Blocks)}
+		if input.DefaultEscalationPath != "" {
+			body["default_escalation_path"] = input.DefaultEscalationPath
+		}
+		response, err := call.post(mcpPipelinesPath, body, nil)
+		if err != nil {
+			return nil, nil, err
+		}
+		return mcpResult(response.Body)
+	})
+	addMCPTool(a, server, &mcp.Tool{
+		Name:        "archive_pipeline",
+		Description: "Archive a pipeline: its revisions stay readable but none is active, its key is taken for good, and no request can reach it. Refused for the entry pipeline and while any active revision still delegates to it (remove those delegate blocks first).",
+		Annotations: mcpReplacing,
+	}, func(call *mcpCall, input mcpPipelineKeyInput) (*mcp.CallToolResult, any, error) {
+		if _, err := call.do(http.MethodDelete, pipelinePath(input.PipelineKey), nil, nil, nil); err != nil {
+			return nil, nil, err
+		}
+		return mcpObject(map[string]any{"pipeline_key": input.PipelineKey, "archived": true})
+	})
+	addMCPTool(a, server, &mcp.Tool{
 		Name:        "list_pipeline_revisions",
 		Description: "List a pipeline's revisions, newest first, with which one is active. Use it to find a revision to roll back to.",
 		Annotations: mcpReadOnly,
-	}, func(call *mcpCall, input mcpPipelineScopeInput) (*mcp.CallToolResult, any, error) {
-		response, err := call.get(pipelineScopePath(input.AgentSlug)+"/revisions", nil)
+	}, func(call *mcpCall, input mcpPipelineKeyInput) (*mcp.CallToolResult, any, error) {
+		response, err := call.get(pipelinePath(input.PipelineKey)+"/revisions", nil)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -265,7 +299,7 @@ func (a *API) registerMCPTools(server *mcp.Server) {
 		Description: "Read one pipeline revision, active or not, with its blocks.",
 		Annotations: mcpReadOnly,
 	}, func(call *mcpCall, input mcpPipelineRevisionInput) (*mcp.CallToolResult, any, error) {
-		response, err := call.get(pipelineScopePath(input.AgentSlug)+"/revisions/"+strconv.FormatInt(input.Revision, 10), nil)
+		response, err := call.get(pipelinePath(input.PipelineKey)+"/revisions/"+strconv.FormatInt(input.Revision, 10), nil)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -273,15 +307,18 @@ func (a *API) registerMCPTools(server *mcp.Server) {
 	})
 	addMCPTool(a, server, &mcp.Tool{
 		Name: "update_pipeline",
-		Description: "Save a new revision of the organization's or one agent's approval pipeline and activate it (unless activate is false). " +
+		Description: "Save a new revision of a pipeline (the entry pipeline, or one a delegate hands requests to) and activate it (unless activate is false). " +
 			"Blocks run in order and the first to decide wins: always blocks decide every request, cel blocks decide when their condition matches, webhook blocks ask a service of yours (and a kind this deployment adds may ask a model), " +
-			"and branch blocks run their own blocks only for requests their condition matches; a request that enters a branch is decided inside it or goes to a human, and nothing after the branch runs for it. " +
+			"branch blocks run their own blocks only for requests their condition matches, and delegate blocks hand matching requests to another pipeline by key; a request that enters a branch or a delegated pipeline is decided inside it or goes to a human, and nothing after the block runs for it. " +
 			"A request no block decides falls through to human review, so end with an always block whose outcome is approve when the rest should be automatic. " +
-			"Every escalation path a block or the default names must exist; activation additionally requires each to be active. Call read_reference (pipeline_blocks) first.",
+			"Every escalation path a block or the default names, and every pipeline a delegate names, must exist; activation additionally requires each to be active and refuses a delegation cycle. Call read_reference (pipeline_blocks) first.",
 		Annotations: mcpAdditive,
 	}, func(call *mcpCall, input mcpUpdatePipelineInput) (*mcp.CallToolResult, any, error) {
-		base := pipelineScopePath(input.AgentSlug)
+		base := pipelinePath(input.PipelineKey)
 		body := map[string]any{"blocks": writableBlocks(input.Blocks)}
+		if input.Name != "" {
+			body["name"] = input.Name
+		}
 		if input.DefaultEscalationPath != "" {
 			body["default_escalation_path"] = input.DefaultEscalationPath
 		}
@@ -310,7 +347,7 @@ func (a *API) registerMCPTools(server *mcp.Server) {
 		Description: "Make an existing pipeline revision the active one (a rollback, or activating a draft). New requests use it immediately; requests already in flight keep the revision they started on.",
 		Annotations: mcpReplacing,
 	}, func(call *mcpCall, input mcpPipelineRevisionInput) (*mcp.CallToolResult, any, error) {
-		activated, err := call.activatePipeline(pipelineScopePath(input.AgentSlug), input.Revision)
+		activated, err := call.activatePipeline(pipelinePath(input.PipelineKey), input.Revision)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -319,8 +356,8 @@ func (a *API) registerMCPTools(server *mcp.Server) {
 	addMCPTool(a, server, &mcp.Tool{
 		Name: "preview_pipeline",
 		Description: "Run a sample request through a set of blocks and report the outcome (approve, deny, human, or next), which block decided, its reason, and the escalation path a human exit would take. " +
-			"Each step lists a block the request reached; a branch reports enter or next for its condition, and end_of_branch when the request ran out of its blocks. " +
-			"Nothing is saved and no approval request is created. webhook blocks and other asynchronous kinds really call the endpoint or the model.",
+			"Each step lists a block the request reached, with the pipeline it belongs to; a branch or delegate reports enter or next for its condition, and end_of_branch when the request ran out of its blocks (for a delegate, out of the target pipeline). " +
+			"Delegate blocks expand to their targets' current active revisions, so the preview walks what a request would. Nothing is saved and no approval request is created. webhook blocks and other asynchronous kinds really call the endpoint or the model.",
 		Annotations: mcpReadOnly,
 	}, func(call *mcpCall, input mcpPreviewPipelineInput) (*mcp.CallToolResult, any, error) {
 		arguments := input.Sample.Arguments
@@ -328,9 +365,6 @@ func (a *API) registerMCPTools(server *mcp.Server) {
 			arguments = map[string]any{}
 		}
 		slug := input.Sample.AgentSlug
-		if slug == "" {
-			slug = input.AgentSlug
-		}
 		if slug == "" {
 			slug = "agent"
 		}
@@ -355,7 +389,7 @@ func (a *API) registerMCPTools(server *mcp.Server) {
 		if input.DefaultAskAgentOwner {
 			body["default_ask_agent_owner"] = true
 		}
-		response, err := call.post(pipelineScopePath(input.AgentSlug)+"/preview", body, nil)
+		response, err := call.post(pipelinePath(input.PipelineKey)+"/preview", body, nil)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -529,11 +563,8 @@ func statusQuery(status string) url.Values {
 	return url.Values{"status": {status}}
 }
 
-func pipelineScopePath(agentSlug string) string {
-	if agentSlug == "" {
-		return mcpPipelinesPath + "/organization"
-	}
-	return mcpPipelinesPath + "/agents/" + url.PathEscape(agentSlug)
+func pipelinePath(pipelineKey string) string {
+	return mcpPipelinesPath + "/" + url.PathEscape(pipelineKey)
 }
 
 func activateWanted(activate *bool) bool { return activate == nil || *activate }

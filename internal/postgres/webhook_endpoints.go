@@ -331,23 +331,23 @@ func (s *Store) ListWebhookEndpointUses(ctx context.Context, input application.L
 	if len(input.EndpointKeys) == 0 {
 		return uses, nil
 	}
-	rows, err := s.pool.Query(ctx, `SELECT b.config->>'endpoint_key', p.id::text, COALESCE(p.agent_slug, ''), p.revision, b.block_key
+	rows, err := s.pool.Query(ctx, `SELECT b.config->>'endpoint_key', p.id::text, p.pipeline_key, p.revision, b.block_key
 		FROM request_approval_pipelines p
 		JOIN request_approval_blocks b ON b.organization_id = p.organization_id AND b.id = ANY(p.block_ids)
 		WHERE p.organization_id = $1 AND p.is_active
 		  AND b.block_type = 'webhook' AND b.config->>'endpoint_key' = ANY($2)
-		ORDER BY p.agent_slug NULLS FIRST, p.revision, b.block_key`, input.OrganizationID, input.EndpointKeys)
+		ORDER BY (p.pipeline_key <> $3), p.pipeline_key, p.revision, b.block_key`, input.OrganizationID, input.EndpointKeys, domain.EntryPipelineKey)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var endpointKey, pipelineID, agentSlug string
+		var endpointKey, pipelineID string
 		var use domain.PipelineUse
-		if err := rows.Scan(&endpointKey, &pipelineID, &agentSlug, &use.Revision, &use.BlockKey); err != nil {
+		if err := rows.Scan(&endpointKey, &pipelineID, &use.PipelineKey, &use.Revision, &use.BlockKey); err != nil {
 			return nil, err
 		}
-		use.PipelineID, use.AgentSlug = domain.ID(pipelineID), domain.AgentSlug(agentSlug)
+		use.PipelineID = domain.ID(pipelineID)
 		uses[endpointKey] = append(uses[endpointKey], use)
 	}
 	return uses, rows.Err()
@@ -358,15 +358,15 @@ func (s *Store) ListWebhookEndpointUses(ctx context.Context, input application.L
 // in its immutable config. Later uses (event subscriptions) add their
 // own query here.
 func listWebhookEndpointUses(ctx context.Context, q querier, organizationID domain.ID, endpointKey string) ([]domain.PipelineUse, error) {
-	return scanPipelineUses(q.Query(ctx, `SELECT p.id::text, COALESCE(p.agent_slug, ''), p.revision, b.block_key
+	return scanPipelineUses(q.Query(ctx, `SELECT p.id::text, p.pipeline_key, p.revision, b.block_key
 		FROM request_approval_pipelines p
 		JOIN request_approval_blocks b ON b.organization_id = p.organization_id AND b.id = ANY(p.block_ids)
 		WHERE p.organization_id = $1 AND p.is_active
 		  AND b.block_type = 'webhook' AND b.config->>'endpoint_key' = $2
-		ORDER BY p.agent_slug NULLS FIRST, b.block_key`, organizationID, endpointKey))
+		ORDER BY (p.pipeline_key <> $3), p.pipeline_key, b.block_key`, organizationID, endpointKey, domain.EntryPipelineKey))
 }
 
-// scanPipelineUses reads (pipeline id, agent type, revision, block key)
+// scanPipelineUses reads (pipeline id, pipeline key, revision, block key)
 // rows; an empty block key is a pipeline-level reference.
 func scanPipelineUses(rows pgx.Rows, err error) ([]domain.PipelineUse, error) {
 	if err != nil {
@@ -376,11 +376,11 @@ func scanPipelineUses(rows pgx.Rows, err error) ([]domain.PipelineUse, error) {
 	uses := make([]domain.PipelineUse, 0)
 	for rows.Next() {
 		var use domain.PipelineUse
-		var pipelineID, agentSlug string
-		if err := rows.Scan(&pipelineID, &agentSlug, &use.Revision, &use.BlockKey); err != nil {
+		var pipelineID string
+		if err := rows.Scan(&pipelineID, &use.PipelineKey, &use.Revision, &use.BlockKey); err != nil {
 			return nil, err
 		}
-		use.PipelineID, use.AgentSlug = domain.ID(pipelineID), domain.AgentSlug(agentSlug)
+		use.PipelineID = domain.ID(pipelineID)
 		uses = append(uses, use)
 	}
 	return uses, rows.Err()

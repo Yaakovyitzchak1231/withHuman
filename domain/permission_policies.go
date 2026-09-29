@@ -13,7 +13,8 @@ type PermissionPolicySpec struct {
 func (d PermissionDefinition) AppliesAt(kind ScopeKind) bool {
 	return kind == ScopeOrganization || d.Resource == ResourceScope ||
 		(kind == ScopeTeam && d.Resource == ResourceTeam) ||
-		(kind == ScopeAgent && d.Resource == ResourceAgent)
+		(kind == ScopeAgent && d.Resource == ResourceAgent) ||
+		(kind == ScopePipeline && d.Resource == ResourcePipeline)
 }
 
 func (s PermissionPolicySpec) Validate() error {
@@ -23,13 +24,13 @@ func (s PermissionPolicySpec) Validate() error {
 func (s PermissionPolicySpec) ValidateFor(holder PermissionHolder) error {
 	invalid := func(message string) error { return fmt.Errorf("%s: %w", message, ErrInvalid) }
 	if !ValidScopeKind(s.ScopeKind) {
-		return invalid("select an organization, team, or agent scope")
+		return invalid("select an organization, team, agent, or pipeline scope")
 	}
 	if len(s.Permissions) == 0 || len(s.Permissions) > len(Permissions()) {
 		return invalid("select at least one permission")
 	}
 	if (s.ScopeKind == ScopeOrganization) != (len(s.ResourceIDs) == 0) {
-		return invalid("select resources only for team or agent scope")
+		return invalid("select resources only for team, agent, or pipeline scope")
 	}
 	if len(s.ResourceIDs) > 200 {
 		return invalid("select at most 200 resources")

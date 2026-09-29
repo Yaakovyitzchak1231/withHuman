@@ -299,7 +299,7 @@ func TestWebhookEndpointUsesExplainAndRefuseArchive(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	repository := webhookHTTPRepositoryWithRevision()
 	repository.uses = []domain.PipelineUse{
-		{PipelineID: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", AgentSlug: "billing", Revision: 3, BlockKey: "fraud-check"},
+		{PipelineID: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", PipelineKey: "billing", Revision: 3, BlockKey: "fraud-check"},
 	}
 	router := webhookManagementTestRouter(t, repository, webhookHTTPPrincipal())
 
@@ -309,7 +309,7 @@ func TestWebhookEndpointUsesExplainAndRefuseArchive(t *testing.T) {
 		Uses []map[string]any `json:"uses"`
 	}
 	_ = json.Unmarshal(response.Body.Bytes(), &listed)
-	if response.Code != http.StatusOK || len(listed.Uses) != 1 || listed.Uses[0]["scope"] != "agent" || listed.Uses[0]["block_key"] != "fraud-check" {
+	if response.Code != http.StatusOK || len(listed.Uses) != 1 || listed.Uses[0]["pipeline_key"] != "billing" || listed.Uses[0]["block_key"] != "fraud-check" {
 		t.Fatalf("uses = %d %s", response.Code, response.Body.String())
 	}
 

@@ -1,15 +1,22 @@
 # Pipeline blocks
 
-A pipeline revision is `blocks` (an ordered list) plus an optional
-`default_escalation_path`. Blocks run in order. The first block whose
-outcome is `approve`, `deny`, or `human` ends the pipeline; a block whose
-outcome is `next` passes the request on. A `branch` block holds blocks of
-its own that run only for the requests its condition matches (see
-`branch`). A request no block decides falls through to human review: the
-revision's `default_escalation_path` names who, or any authorized
-reviewer when there is none. The organization's pipeline runs before the
-agent's own; if the organization pipeline decides, the agent pipeline
-never runs.
+A pipeline revision is `name`, `blocks` (an ordered list) plus an
+optional `default_escalation_path`. Blocks run in order. The first block
+whose outcome is `approve`, `deny`, or `human` ends the pipeline; a block
+whose outcome is `next` passes the request on. A `branch` block holds
+blocks of its own that run only for the requests its condition matches
+(see `branch`); a `delegate` block hands the requests its condition
+matches to another pipeline, named by key (see `delegate`). A request no
+block decides falls through to human review: the revision's
+`default_escalation_path` names who, else the delegating pipeline's
+default, outward to the entry pipeline, else any authorized reviewer.
+
+Every organization has one entry pipeline, key `entry`, which every
+request runs. Other pipelines are created with `create_pipeline` (a key
+matching `^[a-z0-9][a-z0-9._-]{0,62}$`, never reused, never `entry`) and
+reached only through delegate blocks; each is owned through grants at
+`pipeline:<key>`, so one team can route (the delegate's condition in the
+entry pipeline) while another owns what happens after the match.
 
 Unknown fields are refused everywhere. Every block has this envelope:
 
@@ -28,17 +35,18 @@ Unknown fields are refused everywhere. Every block has this envelope:
 - `id`: key-shaped (`^[a-z0-9][a-z0-9._-]{0,62}$`), unique within the
   revision, blocks inside branches included. Metadata a block returns is
   readable by later blocks at
-  `/previous_metadata/<scope>/<id>/...` where scope is `organization` or
-  `agent`.
+  `/previous_metadata/<pipeline key>/<id>/...`, the pipeline key being
+  the one that holds the block (`entry`, or a delegated pipeline's).
 - `name`: shown to reviewers and in the audit log.
-- `type`: `always`, `cel`, `webhook`, or `branch`, plus any kind this
-  deployment adds (listed after the core grammar below).
+- `type`: `always`, `cel`, `webhook`, `branch`, or `delegate`, plus any
+  kind this deployment adds (listed after the core grammar below).
 - `enabled`: must be `true` (omit or set true).
-- `timeout` and `max_attempts`: per type. `always`, `cel`, and `branch`:
-  timeout up to `1s` (use `50ms`), exactly 1 attempt. `webhook`: default
-  `5s`, up to `30s`, 1 to 3 attempts. An added kind states its own.
-- Every config carries a `reason`: the sentence reviewers and the audit
-  log see for the block's decision.
+- `timeout` and `max_attempts`: per type. `always`, `cel`, `branch`, and
+  `delegate`: timeout up to `1s` (use `50ms`), exactly 1 attempt.
+  `webhook`: default `5s`, up to `30s`, 1 to 3 attempts. An added kind
+  states its own.
+- Every config but `delegate` carries a `reason`: the sentence reviewers
+  and the audit log see for the block's decision.
 - A config may carry `escalation_path` (a path key) only where the block
   can hand the request to a person; it overrides the revision's
   `default_escalation_path` for that block.
@@ -141,12 +149,47 @@ request to a person on the pipeline default.
 - An `always` block inside a branch ends every request that reaches it,
   so the branch's later blocks and its own end are never reached.
 
+## delegate
+
+Hands the requests its condition matches (the same condition tree as
+`cel`) to another pipeline: matching requests continue in that
+pipeline's active revision, and every other request skips the block and
+passes to the next one. It is a branch whose body is another pipeline,
+owned by whoever holds `pipeline.write` at `pipeline:<key>`.
+
+A request that enters the target is decided inside it: `approve`,
+`deny`, or `human` ends the pipeline, `next` moves to the target's next
+block. If the target runs out of blocks, the request goes to a person on
+the target's `default_escalation_path`, else the delegating pipeline's,
+and nothing after the delegate runs for it. A condition that cannot be
+evaluated sends the request to a person on the delegating pipeline's
+default.
+
+```json
+{
+  "when": { "id": "<uuid>", "field": "/request/server", "operator": "equals", "value": "stripe" },
+  "pipeline_key": "payments"
+}
+```
+
+- `pipeline_key`: a live pipeline other than `entry` and other than the
+  pipeline holding the block. Saving a revision requires the key to
+  exist; activating requires it to be active, refuses a cycle
+  (`request_approval_pipeline_delegation_cycle`), a chain deeper than 8
+  (`request_approval_pipeline_delegation_too_deep`), and an entry
+  pipeline whose delegations together exceed 10,000 blocks
+  (`request_approval_pipeline_too_large`).
+- No `reason` and no `escalation_path`: the target pipeline owns its end.
+- Archiving a pipeline (`archive_pipeline`) is refused while an active
+  revision delegates to it (`request_approval_pipeline_in_use`).
+
 ## Worked example
 
-Deny refunds over $500 for every agent, let the support agent refund up to
-$20 on its own, and send the rest to Payments review:
+Deny refunds over $500 for every agent in the entry pipeline, and hand
+every Stripe call to a `payments` pipeline the Payments team owns, which
+approves refunds up to $20 and asks Payments about the rest:
 
-Organization pipeline:
+Entry pipeline (`update_pipeline` with `pipeline_key: "entry"`):
 
 ```json
 {
@@ -160,10 +203,19 @@ Organization pipeline:
 }
 ```
 
-Support agent pipeline:
+Add the delegate after `big-refunds` in the entry pipeline:
+
+```json
+{ "id": "stripe", "name": "Stripe calls go to Payments", "type": "delegate", "enabled": true, "timeout": "50ms", "max_attempts": 1,
+  "config": { "when": { "id": "<uuid>", "field": "/request/server", "operator": "equals", "value": "stripe" },
+    "pipeline_key": "payments" } }
+```
+
+The `payments` pipeline (`create_pipeline` with `pipeline_key: "payments"`, then `update_pipeline`):
 
 ```json
 {
+  "name": "Payments",
   "blocks": [
     { "id": "small-refunds", "name": "Approve refunds up to $20", "type": "cel", "enabled": true, "timeout": "50ms", "max_attempts": 1,
       "config": { "when": { "id": "<uuid>", "all": [
@@ -178,9 +230,11 @@ Support agent pipeline:
 }
 ```
 
-Every other tool call falls through to a person on the `on-call` path.
-Add a final `always` block with `outcome: approve` to the agent pipeline
-to approve the rest automatically.
+A Stripe call the `payments` blocks do not decide falls through to a
+person on the `on-call` path, the pipeline's own default; every other
+tool call falls through the entry pipeline to its default reviewers. Add
+a final `always` block with `outcome: approve` to the entry pipeline to
+approve the rest automatically.
 
 ## Worked example with a branch
 

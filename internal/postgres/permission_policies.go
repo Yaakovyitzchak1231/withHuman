@@ -68,11 +68,13 @@ func policyState(ctx context.Context, q querier, input application.ReadPermissio
 	rows, err := q.Query(ctx, `SELECT COALESCE(ra.permission_policy_id,ra.id)::text, COALESCE(pp.revision,1),
         ra.scope_kind,ra.scope_id,r.permissions,ra.source,
         CASE WHEN ra.principal_kind='team' AND $2='membership' THEN ra.principal_id::text ELSE '' END,
-        COALESCE(via.name,''),COALESCE(target.name,ra.scope_id),r.key
+        COALESCE(via.name,''),COALESCE(target.name,agent.name,pipeline.name,ra.scope_id),r.key
         FROM role_assignments ra JOIN roles r ON r.id=ra.role_id
         LEFT JOIN permission_policies pp ON pp.id=ra.permission_policy_id
         LEFT JOIN teams via ON via.id=ra.principal_id AND $2='membership' AND ra.principal_kind='team'
         LEFT JOIN teams target ON ra.scope_kind='team' AND target.id::text=ra.scope_id AND target.organization_id=ra.organization_id
+        LEFT JOIN agents agent ON ra.scope_kind='agent' AND agent.slug=ra.scope_id AND agent.organization_id=ra.organization_id
+        LEFT JOIN request_approval_pipelines pipeline ON ra.scope_kind='pipeline' AND pipeline.pipeline_key=ra.scope_id AND pipeline.organization_id=ra.organization_id AND pipeline.is_active
         WHERE ra.organization_id=$1 AND (`+predicate+`) ORDER BY ra.created_at,ra.id`, input.Actor.OrganizationID, string(input.PrincipalKind), input.PrincipalID)
 	if err != nil {
 		return page, err
@@ -172,7 +174,8 @@ func (s *Store) ReadPermissionPolicies(ctx context.Context, input application.Re
 	}
 	page.CanCreate = page.ReadOnlyReason == "" && authorization.HoldsAnywhere(input.Actor, domain.PermissionPolicyWrite)
 	rows, err := s.pool.Query(ctx, `SELECT 'team',id::text,name FROM teams WHERE organization_id=$1 AND archived_at IS NULL
-        UNION ALL SELECT DISTINCT 'agent',slug,name FROM agents WHERE organization_id=$1 AND archived_at IS NULL ORDER BY 1,3`, input.Actor.OrganizationID)
+        UNION ALL SELECT DISTINCT 'agent',slug,name FROM agents WHERE organization_id=$1 AND archived_at IS NULL
+        UNION ALL SELECT 'pipeline',pipeline_key,name FROM request_approval_pipelines WHERE organization_id=$1 AND is_active ORDER BY 1,3`, input.Actor.OrganizationID)
 	if err != nil {
 		return page, err
 	}
@@ -469,7 +472,7 @@ func (s *Store) CompilePermissionPolicies(ctx context.Context, input application
 	assignments := []domain.AssignmentSpec{}
 	for _, policy := range input.Policies {
 		roleID := domain.ID(uuid.NewString())
-		if _, err := tx.Exec(ctx, `INSERT INTO roles(id,organization_id,key,name,permissions,bindable_scope_kinds,built_in,created_at,updated_at) VALUES($1,$2,$3,'Permission policy',$4,$5,false,$6,$6)`, roleID, org, "policy."+string(roleID), permissionStrings(policy.Permissions), []string{"organization", "team", "agent"}, input.Now); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO roles(id,organization_id,key,name,permissions,bindable_scope_kinds,built_in,created_at,updated_at) VALUES($1,$2,$3,'Permission policy',$4,$5,false,$6,$6)`, roleID, org, "policy."+string(roleID), permissionStrings(policy.Permissions), []string{"organization", "team", "agent", "pipeline"}, input.Now); err != nil {
 			return nil, err
 		}
 		for _, scope := range policy.Scopes() {
@@ -488,8 +491,11 @@ func validatePolicyResource(ctx context.Context, q querier, org domain.ID, scope
 	}
 	var exists bool
 	query := `SELECT EXISTS(SELECT 1 FROM teams WHERE organization_id=$1 AND id::text=$2 AND archived_at IS NULL)`
-	if scope.Kind == domain.ScopeAgent {
+	switch scope.Kind {
+	case domain.ScopeAgent:
 		query = `SELECT EXISTS(SELECT 1 FROM agents WHERE organization_id=$1 AND slug=$2 AND archived_at IS NULL)`
+	case domain.ScopePipeline:
+		query = `SELECT EXISTS(SELECT 1 FROM request_approval_pipelines WHERE organization_id=$1 AND pipeline_key=$2 AND archived_at IS NULL)`
 	}
 	if err := q.QueryRow(ctx, query, org, scope.ID).Scan(&exists); err != nil {
 		return err
@@ -513,7 +519,7 @@ func insertPolicyBindings(ctx context.Context, tx pgx.Tx, target application.Rea
 	roleID := uuid.NewString()
 	permissions := slices.Clone(spec.Permissions)
 	slices.Sort(permissions)
-	if _, err := tx.Exec(ctx, `INSERT INTO roles(id,organization_id,key,name,permissions,bindable_scope_kinds,built_in,created_at,updated_at) VALUES($1,$2,$3,'Permission policy',$4,$5,false,$6,$6)`, roleID, target.Actor.OrganizationID, "policy."+roleID, permissionStrings(permissions), []string{"organization", "team", "agent"}, now); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO roles(id,organization_id,key,name,permissions,bindable_scope_kinds,built_in,created_at,updated_at) VALUES($1,$2,$3,'Permission policy',$4,$5,false,$6,$6)`, roleID, target.Actor.OrganizationID, "policy."+roleID, permissionStrings(permissions), []string{"organization", "team", "agent", "pipeline"}, now); err != nil {
 		return err
 	}
 	for _, scope := range spec.Scopes() {

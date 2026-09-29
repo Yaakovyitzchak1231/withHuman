@@ -40,6 +40,7 @@ const (
 	ResourceOrganization ResourceKind = "organization"
 	ResourceTeam         ResourceKind = "team"
 	ResourceAgent        ResourceKind = "agent"
+	ResourcePipeline     ResourceKind = "pipeline"
 	ResourceRequest      ResourceKind = "request"
 	// ResourceScope is for permissions that act on a scope itself, such
 	// as assigning roles at it: a check may pass any scope kind's resource
@@ -57,16 +58,19 @@ const (
 	ScopeOrganization ScopeKind = "organization"
 	ScopeTeam         ScopeKind = "team"
 	ScopeAgent        ScopeKind = "agent"
+	// ScopePipeline is one request approval pipeline, keyed by its
+	// pipeline key: what a team that owns a delegated pipeline holds.
+	ScopePipeline ScopeKind = "pipeline"
 )
 
 // ValidScopeKind reports whether the kind is one an assignment may carry.
 func ValidScopeKind(kind ScopeKind) bool {
-	return kind == ScopeOrganization || kind == ScopeTeam || kind == ScopeAgent
+	return kind == ScopeOrganization || kind == ScopeTeam || kind == ScopeAgent || kind == ScopePipeline
 }
 
 // ScopeKinds lists every scope kind, widest first.
 func ScopeKinds() []ScopeKind {
-	return []ScopeKind{ScopeOrganization, ScopeTeam, ScopeAgent}
+	return []ScopeKind{ScopeOrganization, ScopeTeam, ScopeAgent, ScopePipeline}
 }
 
 // PermissionDefinition is one registry entry: the key, what it means, who
@@ -170,9 +174,9 @@ var corePermissions = []PermissionDefinition{
 	{Key: PermissionAgentWrite, Description: "Create agents, rename agents and instances, and change their status", Holders: managementHolders, Resource: ResourceAgent},
 	{Key: PermissionAgentCredentialIssue, Description: "Issue instance credentials and provisioner tokens", Holders: managementHolders, Resource: ResourceAgent, Dangerous: true},
 	{Key: PermissionAgentCredentialRevoke, Description: "Revoke instance credentials and provisioner tokens", Holders: managementHolders, Resource: ResourceAgent},
-	{Key: PermissionPipelineRead, Description: "Read request approval pipelines and their revisions", Holders: managementHolders, Resource: ResourceAgent},
-	{Key: PermissionPipelineWrite, Description: "Create and preview request approval pipeline revisions", Holders: managementHolders, Resource: ResourceAgent},
-	{Key: PermissionPipelineActivate, Description: "Activate and roll back pipeline revisions", Holders: managementHolders, Resource: ResourceAgent},
+	{Key: PermissionPipelineRead, Description: "Read request approval pipelines and their revisions", Holders: managementHolders, Resource: ResourcePipeline},
+	{Key: PermissionPipelineWrite, Description: "Create pipelines and preview and create their revisions", Holders: managementHolders, Resource: ResourcePipeline},
+	{Key: PermissionPipelineActivate, Description: "Activate, roll back, and archive pipelines", Holders: managementHolders, Resource: ResourcePipeline},
 	{Key: PermissionEscalationPathRead, Description: "Read escalation paths and their revisions", Holders: managementHolders, Resource: ResourceOrganization},
 	{Key: PermissionEscalationPathWrite, Description: "Create escalation paths and their revisions", Holders: managementHolders, Resource: ResourceOrganization},
 	{Key: PermissionEscalationPathActivate, Description: "Activate, roll back, and archive escalation paths", Holders: managementHolders, Resource: ResourceOrganization},
@@ -231,7 +235,7 @@ func RegisterPermissions(defs ...PermissionDefinition) error {
 			}
 		}
 		switch def.Resource {
-		case ResourceOrganization, ResourceTeam, ResourceAgent, ResourceRequest, ResourceScope:
+		case ResourceOrganization, ResourceTeam, ResourceAgent, ResourcePipeline, ResourceRequest, ResourceScope:
 		default:
 			return fmt.Errorf("permission %q: unknown resource kind %q", def.Key, def.Resource)
 		}
@@ -301,16 +305,16 @@ func PermissionIsDangerous(key Permission) bool {
 	return !ok || def.Dangerous
 }
 
-// Scope is one place a grant applies: the organization, one team, or one
-// agent.
+// Scope is one place a grant applies: the organization, one team, one
+// agent, or one pipeline.
 type Scope struct {
 	Kind ScopeKind `json:"kind"`
 	ID   string    `json:"id,omitempty"`
 }
 
 // Resource is what a check is evaluated against. The kind comes from the
-// permission's registry entry; the ID names the instance for team and
-// agent_slug resources.
+// permission's registry entry; the ID names the instance for team,
+// agent, and pipeline resources.
 type Resource struct {
 	Kind ResourceKind
 	ID   string
@@ -320,19 +324,19 @@ func OrganizationResource() Resource { return Resource{Kind: ResourceOrganizatio
 func TeamResource(id ID) Resource    { return Resource{Kind: ResourceTeam, ID: string(id)} }
 func RequestResource(id ID) Resource { return Resource{Kind: ResourceRequest, ID: string(id)} }
 
-// AgentResource names one agent by slug. The empty slug is the
-// organization pipeline, an organization resource, so an agent grant can
-// never reach it.
+// AgentResource names one agent by slug.
 func AgentResource(agentSlug AgentSlug) Resource {
-	if agentSlug == "" {
-		return OrganizationResource()
-	}
 	return Resource{Kind: ResourceAgent, ID: string(agentSlug)}
+}
+
+// PipelineResource names one request approval pipeline by key.
+func PipelineResource(pipelineKey string) Resource {
+	return Resource{Kind: ResourcePipeline, ID: pipelineKey}
 }
 
 // CoveringScopes lists the scopes a grant may carry to satisfy a check on
 // this resource: the organization always, plus the resource's own scope
-// for team and agent_slug resources. A request is an organization
+// for team, agent, and pipeline resources. A request is an organization
 // resource for grants; routing selects who decides a particular one.
 func (r Resource) CoveringScopes() []Scope {
 	scopes := []Scope{{Kind: ScopeOrganization}}
@@ -341,18 +345,23 @@ func (r Resource) CoveringScopes() []Scope {
 		scopes = append(scopes, Scope{Kind: ScopeTeam, ID: r.ID})
 	case ResourceAgent:
 		scopes = append(scopes, Scope{Kind: ScopeAgent, ID: r.ID})
+	case ResourcePipeline:
+		scopes = append(scopes, Scope{Kind: ScopePipeline, ID: r.ID})
 	}
 	return scopes
 }
 
-// ScopeForKind maps a scope back to the resource a check at that scope
-// evaluates: the organization, the team, or the agent itself.
+// Resource maps a scope back to the resource a check at that scope
+// evaluates: the organization, the team, the agent, or the pipeline
+// itself.
 func (s Scope) Resource() Resource {
 	switch s.Kind {
 	case ScopeTeam:
 		return Resource{Kind: ResourceTeam, ID: s.ID}
 	case ScopeAgent:
 		return Resource{Kind: ResourceAgent, ID: s.ID}
+	case ScopePipeline:
+		return Resource{Kind: ResourcePipeline, ID: s.ID}
 	}
 	return OrganizationResource()
 }

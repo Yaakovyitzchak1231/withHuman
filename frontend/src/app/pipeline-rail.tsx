@@ -13,6 +13,7 @@ import type { ToolSchema } from "@/ds/lib/tool-schema";
 import { cn } from "@/ds/lib/cn";
 import { Badge } from "@/ds/components/badge";
 import { BranchBlockCard, BranchBlockSummaryCard } from "@/ds/components/branch-block";
+import { DelegateBlockCard, DelegateBlockSummaryCard, type PipelineOption } from "@/ds/components/delegate-block";
 import type { ConditionNode, ConditionValueDetails, ConditionValueSuggestions } from "@/ds/components/condition-builder";
 import { ConfirmDialog } from "@/ds/components/confirm-dialog";
 import {
@@ -39,6 +40,7 @@ import {
 } from "@/ds/components/webhook-block";
 import {
   AlertIcon,
+  ArrowUpRightIcon,
   BranchIcon,
   ChevronDownIcon,
   CornerDownRightIcon,
@@ -46,7 +48,7 @@ import {
 } from "@/ds/icons";
 import { blockErrorLabel } from "./block-errors";
 import { blockKind, extensions, requireBlockKind } from "./extensions";
-import { duplicateDraft, newDraftBlock, type BlockDraft, type BranchDraft } from "./pipeline-blocks";
+import { duplicateDraft, newDraftBlock, type BlockDraft, type BranchDraft, type DelegateDraft } from "./pipeline-blocks";
 import {
   statusAt,
   stepAt,
@@ -64,6 +66,7 @@ import {
   insertAfter,
   moveIntoBranchAbove,
   moveOutOfBranch,
+  pipelineReachability,
   positionLabel,
   removeDraft,
   reorderRail,
@@ -73,13 +76,25 @@ import {
 } from "./pipeline-tree";
 
 /*
- * One pipeline section drawn down its rail, in viewing and editing
- * alike: each block's card, what a test replay found there, and its
- * exits. A branch's blocks sit in an indented well under the branch,
- * drawn by the same rail one level down, and end in the branch's end
- * card. The screen's state (mode, section, replay, edits) reaches every
- * level through RailContext rather than props.
+ * One pipeline drawn down its rail, in viewing and editing alike: each
+ * block's card, what a test replay found there, and its exits. A
+ * branch's blocks sit in an indented well under the branch, drawn by
+ * the same rail one level down, and end in the branch's end card. A
+ * delegate's well holds the target pipeline's active blocks, read only,
+ * drawn by the same rail under the target's own key. The screen's state
+ * (mode, section, replay, edits) reaches every level through
+ * RailContext rather than props.
  */
+
+/* A delegated pipeline's active revision, as the rail draws it inside
+ * the delegate's well. */
+export interface DelegateTarget {
+  name: string;
+  blocks: BlockDraft[];
+  /* The target's own default escalation path, which its end uses before
+   * falling back to the delegating pipeline's. */
+  defaultTarget: ReviewerTarget | null;
+}
 
 export interface RailDragSource {
   /* The rail the drag started in: a branch's id, or null for the
@@ -104,13 +119,22 @@ export interface RailEditor {
 
 export interface RailState {
   mode: "view" | "edit";
+  /* The key of the pipeline this rail draws. */
   section: RailSection;
-  /* The top-level blocks of the sections that run before this one, so
-   * positions run across the effective pipeline. */
-  offset: number;
+  /* The keys of the pipelines this rail is drawn inside, outermost
+   * first: a delegate whose target is one of them (or the section
+   * itself) would draw forever, so it draws a notice instead. */
+  enclosing?: string[];
   reachability: Reachability;
   directory: ReviewerTarget[];
   endpoints: WebhookEndpointOption[];
+  /* The pipelines a delegate may hand to, for its picker and labels. */
+  pipelines?: PipelineOption[];
+  /* The active revisions of the pipelines delegates here hand to, by
+   * key, for the wells under them; a key not present draws as a mention
+   * alone (not loaded, or not readable). */
+  delegates?: Record<string, DelegateTarget>;
+  onOpenPipeline?: (pipelineKey: string) => void;
   tools?: ToolSchema[];
   suggestions?: string[];
   valueSuggestions?: ConditionValueSuggestions;
@@ -158,8 +182,9 @@ export function testRing(status: TestStatus, outcome: TestOutcome | undefined): 
 
 /* The kinds of block an add slot offers, at any depth: core's own, then
  * the kinds the edition registered, then Branch, which holds any of
- * them. A kind this deployment cannot run stays listed, disabled, so
- * the choice explains itself. */
+ * them, and Delegate, which hands to another pipeline. A kind this
+ * deployment cannot run stays listed, disabled, so the choice explains
+ * itself. */
 export function addChoices(availability: Record<string, boolean> = {}): PipelineAddChoice[] {
   const enabled = (type: string) => availability[type] ?? true;
   return [
@@ -183,6 +208,12 @@ export function addChoices(availability: Record<string, boolean> = {}): Pipeline
       label: "Branch",
       icon: <CornerDownRightIcon width={14} height={14} />,
       info: "Runs its own blocks only for requests that match its conditions. If none of them decides, the request goes to a human and the pipeline stops.",
+    },
+    {
+      id: "delegate",
+      label: "Delegate to pipeline",
+      icon: <ArrowUpRightIcon width={14} height={14} />,
+      info: "Hands requests that match its conditions to another pipeline, whose owners decide what happens next. If that pipeline runs out of blocks, the request goes to a human and the pipeline stops.",
     },
   ];
 }
@@ -301,6 +332,20 @@ function BranchEndUnreachableNotice() {
   );
 }
 
+/* A delegate whose target is this pipeline or one it is drawn inside:
+ * the server refuses the cycle at activation; the rail says so instead
+ * of drawing forever. */
+function DelegateCycleNotice({ pipelineKey }: { pipelineKey: string }) {
+  return (
+    <div className="my-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-micro text-ink-muted">
+      <Badge tone="deny" icon={<AlertIcon width={12} height={12} />}>Cycle</Badge>
+      <span>
+        <span className="font-mono text-[11px]">{pipelineKey}</span> is already part of this pipeline's chain. A revision delegating back to it cannot be activated.
+      </span>
+    </div>
+  );
+}
+
 /* What a replayed step of a registered kind shows under its card: the
  * kind's own evidence, read next to the exit it took. */
 function KindEvidenceRow({ step, block }: { step?: TestStep; block: BlockDraft }) {
@@ -385,6 +430,7 @@ function BlockExits({
         />
       );
     case "branch":
+    case "delegate":
       return null;
   }
 }
@@ -519,7 +565,7 @@ function RailRow({
           block={block}
           index={index}
           siblings={siblings}
-          position={positionLabel(here, rail.offset)}
+          position={positionLabel(here)}
           level={level}
           listRef={listRef}
         />
@@ -533,6 +579,15 @@ function RailRow({
           step={step}
           blocked={blockedBy !== undefined}
           path={here}
+          level={level}
+          continueLabel={last ? level.lastLabel : undefined}
+          dimmed={level.dimmed || status === "unreached"}
+        />
+      ) : block.kind === "delegate" ? (
+        <DelegateContents
+          delegate={block}
+          step={step}
+          blocked={blockedBy !== undefined}
           level={level}
           continueLabel={last ? level.lastLabel : undefined}
           dimmed={level.dimmed || status === "unreached"}
@@ -611,6 +666,103 @@ function BranchContents({
   );
 }
 
+/* The well under a delegate: the target pipeline's active blocks, read
+ * only under the target's own key, and where the target's end sends a
+ * request nothing decided. Without the target (not loaded, or not
+ * readable) the well names it and no more. */
+function DelegateContents({
+  delegate,
+  step,
+  blocked,
+  level,
+  continueLabel,
+  dimmed,
+}: {
+  delegate: DelegateDraft;
+  step?: TestStep;
+  blocked: boolean;
+  level: RailLevel;
+  continueLabel?: ReactNode;
+  dimmed: boolean;
+}) {
+  const rail = useRail();
+  const exit = takenExit(step, delegate);
+  const endStatus = statusAt(rail.run, rail.cursor, stepKey(rail.section, delegate.id, true));
+  const key = delegate.pipelineKey;
+  const option = rail.pipelines?.find((pipeline) => pipeline.key === key);
+  const target = key ? rail.delegates?.[key] : undefined;
+  const name = target?.name ?? option?.name ?? key;
+  const chain = [...(rail.enclosing ?? []), rail.section];
+  const cycle = key !== "" && chain.includes(key);
+  const mention = (
+    <Referenced reference={{ kind: "pipeline", pipelineKey: key, name: target?.name ?? option?.name }} inline>
+      {name ? <span className="text-ink">{name}</span> : <span className="text-ink-muted">a pipeline</span>}
+    </Referenced>
+  );
+  /* The target draws under its own key, read only, with its own
+   * reachability; its default reviewers come before this pipeline's. */
+  const targetRail: RailState | null = target && !cycle
+    ? {
+        ...rail,
+        mode: "view",
+        section: key,
+        enclosing: chain,
+        reachability: pipelineReachability(target.blocks),
+        defaultTarget: target.defaultTarget ?? rail.defaultTarget,
+        describeRoute: (chosen) => chosen ? "" : `Uses pipeline default: ${(target.defaultTarget ?? rail.defaultTarget)?.name ?? "Any authorized reviewer"}.`,
+        highlight: undefined,
+        editor: undefined,
+      }
+    : null;
+  return (
+    <PipelineBranchWell
+      name={name || "Untitled pipeline"}
+      depth={level.depth + 1}
+      taken={exit === "enter" ? "enter" : exit === "continue" ? "skip" : undefined}
+      blocked={blocked}
+      badge={<>Continue in {mention}</>}
+      continueLabel={continueLabel ?? "Otherwise, skip this pipeline and check the next block"}
+    >
+      {cycle ? (
+        <DelegateCycleNotice pipelineKey={key} />
+      ) : targetRail ? (
+        <RailProvider value={targetRail}>
+          <PipelineRail
+            blocks={target!.blocks}
+            lastLabel="Otherwise"
+            emptyText="No blocks in this pipeline yet."
+            dimmed={dimmed}
+          />
+        </RailProvider>
+      ) : (
+        <p className="rounded-lg border-hairline border-dashed border-edge px-4 py-3 text-body text-ink-muted">
+          {key
+            ? <>The blocks of {mention} run here. {option ? "Open the pipeline to see them." : "You cannot view that pipeline."}</>
+            : "Choose the pipeline matching requests continue in."}
+        </p>
+      )}
+      {key && !cycle ? (
+        <>
+          {target && target.blocks.length === 0 ? <PipelineConnector /> : null}
+          <div
+            className={cn(
+              "rounded-lg transition-[box-shadow,opacity] duration-200",
+              testRing(endStatus, rail.run?.outcome),
+              endStatus === "unreached" && !dimmed && "opacity-40",
+            )}
+          >
+            <PipelineBranchEndCard
+              branchName={name}
+              target={target?.defaultTarget ?? null}
+              defaultTarget={rail.defaultTarget}
+            />
+          </div>
+        </>
+      ) : null}
+    </PipelineBranchWell>
+  );
+}
+
 /* The block's card: its read-only face while viewing, its editor while
  * editing, with the menu's structural moves wired to the tree. */
 function RailCard({
@@ -647,6 +799,8 @@ function RailCard({
         return <WebhookBlockSummaryCard {...expansion} block={block} endpoints={rail.endpoints} />;
       case "branch":
         return <BranchBlockSummaryCard {...expansion} block={block} />;
+      case "delegate":
+        return <DelegateBlockSummaryCard {...expansion} block={block} pipelines={rail.pipelines ?? []} />;
       case "edition": {
         const SummaryCard = requireBlockKind(block.type).summaryCard;
         return <SummaryCard {...expansion} block={block} />;
@@ -716,6 +870,24 @@ function RailCard({
     }
     case "unknown":
       return <UnknownBlockCard {...shared} block={block} />;
+    case "delegate": {
+      /* A delegate has no reviewer of its own to pick. */
+      const { directory: _directory, ...delegateShared } = shared;
+      return (
+        <DelegateBlockCard
+          {...delegateShared}
+          block={block}
+          pipelines={(rail.pipelines ?? []).filter((pipeline) => pipeline.key !== rail.section)}
+          onChange={(next) => replace({ ...next, kind: "delegate" })}
+          onOpenPipeline={rail.onOpenPipeline}
+          tools={rail.tools}
+          suggestions={rail.suggestions}
+          valueSuggestions={rail.valueSuggestions}
+          valueDetails={rail.valueDetails}
+          scope={level.scope}
+        />
+      );
+    }
     case "branch":
       return (
         <BranchBlockCard

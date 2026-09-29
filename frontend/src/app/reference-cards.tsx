@@ -31,6 +31,7 @@ import type {
   Team,
   WebhookEndpointSummary,
 } from "../types";
+import { ENTRY_PIPELINE_KEY } from "../types";
 import { cn } from "@/ds/lib/cn";
 import { CONNECTION_LABEL, CONNECTION_TONE, detailConnection } from "./agent-state";
 import { STATUS_LABEL, STATUS_TONE } from "./approval-status";
@@ -99,7 +100,7 @@ export function ReferenceCards({ children }: { children: ReactNode }) {
         case "escalation_path":
           return <EscalationPathCard pathKey={reference.key} name={reference.name} />;
         case "pipeline":
-          return <PipelineCard agentSlug={reference.agentSlug} revisionNumber={reference.revision} />;
+          return <PipelineCard pipelineKey={reference.pipelineKey} name={reference.name} revisionNumber={reference.revision} />;
         case "webhook_endpoint":
           return <WebhookEndpointCard endpointKey={reference.key} name={reference.name} />;
         case "agent":
@@ -553,6 +554,7 @@ const CORE_BLOCK_KIND: Record<string, string> = {
   cel: "Condition",
   webhook: "Webhook",
   branch: "Branch",
+  delegate: "Delegate",
 };
 
 /* A block type as a noun: core's, a registered kind's, or the raw type
@@ -576,24 +578,27 @@ const OUTCOME_TONE: Record<PolicyBlockDraft["outcome"], Tone> = {
 /* A pipeline drawn the way the path card draws a path: its blocks in
  * order down a rail, each with what it tests and where its human exit
  * goes, and the terminus saying what happens when nothing matched. */
-function PipelineCard({ agentSlug, revisionNumber }: { agentSlug: string; revisionNumber?: number }) {
+function PipelineCard({ pipelineKey, name, revisionNumber }: { pipelineKey: string; name?: string; revisionNumber?: number }) {
   const revision = useShared(
-    revisionNumber === undefined ? `pipeline:${agentSlug}` : `pipeline:${agentSlug}@${revisionNumber}`,
+    revisionNumber === undefined ? `pipeline:${pipelineKey}` : `pipeline:${pipelineKey}@${revisionNumber}`,
     () => revisionNumber === undefined
-      ? api.activeRequestApprovalPipeline(agentSlug)
-      : api.requestApprovalPipelineRevision(agentSlug, revisionNumber),
+      ? api.activeRequestApprovalPipeline(pipelineKey)
+      : api.requestApprovalPipelineRevision(pipelineKey, revisionNumber),
   );
-  const organization = agentSlug === "";
+  const shown = revision.status === "ready" ? revision.value.name : name;
   return (
     <>
-      <Title kind="Approval pipeline" name={organization ? "Organization" : <span className="font-mono text-[12px]">{agentSlug}</span>} link={pipelineLink(agentSlug, { revision: revisionNumber })}>
-        {revisionNumber !== undefined ? <HoverCardMeta>Revision {revisionNumber}, as it ran</HoverCardMeta> : null}
+      <Title kind="Approval pipeline" name={shown ?? <span className="font-mono text-[12px]">{pipelineKey}</span>} link={pipelineLink(pipelineKey, { revision: revisionNumber })}>
+        <HoverCardMeta>
+          <span className="font-mono">{pipelineKey}</span>
+          {revisionNumber !== undefined ? <> · Revision {revisionNumber}, as it ran</> : null}
+        </HoverCardMeta>
       </Title>
       <HoverCardBody>
         {revision.status === "ready" ? (
-          <PipelineRail revision={revision.value} organization={organization} />
+          <PipelineRail revision={revision.value} entry={pipelineKey === ENTRY_PIPELINE_KEY} />
         ) : (
-          <Unready loaded={revision} missing="No pipeline exists for this agent." />
+          <Unready loaded={revision} missing="No pipeline has this key, or it is archived." />
         )}
       </HoverCardBody>
     </>
@@ -614,11 +619,13 @@ export interface RailHighlight {
  * the others step back. */
 function PipelineRail({
   revision,
-  organization,
+  entry,
   highlight,
 }: {
   revision: RequestApprovalPipelineRevision;
-  organization: boolean;
+  /* The entry pipeline's fall-through is the queue; any other
+   * pipeline's is the delegating pipeline's default. */
+  entry: boolean;
   highlight?: RailHighlight;
 }) {
   const access = useAccess();
@@ -649,7 +656,7 @@ function PipelineRail({
                 <TargetBadge className="-my-1" target={fallback} />
               </>
             ) : (
-              <span>: {organization ? "any authorized reviewer" : <Referenced reference={{ kind: "pipeline", agentSlug: "" }} inline>the organization pipeline's default</Referenced>}</span>
+              <span>: {entry ? "any authorized reviewer" : "the delegating pipeline's default"}</span>
             )}
           </p>
         </TimelineItem>
@@ -755,8 +762,8 @@ function PipelineBlockCard({ block }: { block: Extract<Reference, { kind: "pipel
   const readable = pipeline !== undefined && access.holdsAnywhere("pipeline.read");
   const revision = useSharedIf(
     readable,
-    pipeline ? `pipeline:${pipeline.agentSlug}@${pipeline.revision}` : "pipeline:none",
-    () => api.requestApprovalPipelineRevision(pipeline?.agentSlug ?? "", pipeline?.revision ?? 0),
+    pipeline ? `pipeline:${pipeline.pipelineKey}@${pipeline.revision}` : "pipeline:none",
+    () => api.requestApprovalPipelineRevision(pipeline?.pipelineKey ?? "", pipeline?.revision ?? 0),
     null as RequestApprovalPipelineRevision | null,
   );
   const note = (
@@ -775,7 +782,7 @@ function PipelineBlockCard({ block }: { block: Extract<Reference, { kind: "pipel
       {block.endpointReason ? <p className="text-body text-ink-secondary">The endpoint said: {block.endpointReason}</p> : null}
       {readable ? (
         <Link
-          {...pipelineLink(pipeline.agentSlug, { revision: pipeline.revision, block: block.key })}
+          {...pipelineLink(pipeline.pipelineKey, { revision: pipeline.revision, block: block.key })}
           target="_blank"
           rel="noopener noreferrer"
           className="inline-flex items-center gap-1 text-label text-accent hover:underline"
@@ -802,11 +809,11 @@ function PipelineBlockCard({ block }: { block: Extract<Reference, { kind: "pipel
       </>
     );
   }
-  const organization = pipeline.agentSlug === "";
+  const entry = pipeline.pipelineKey === ENTRY_PIPELINE_KEY;
   return (
     <>
-      <Title kind="Approval pipeline" name={organization ? "Organization" : <span className="font-mono text-[12px]">{pipeline.agentSlug}</span>} link={pipelineLink(pipeline.agentSlug, { revision: pipeline.revision })}>
-        <HoverCardMeta>Revision {pipeline.revision}, as it ran</HoverCardMeta>
+      <Title kind="Approval pipeline" name={revision.status === "ready" && revision.value ? revision.value.name : <span className="font-mono text-[12px]">{pipeline.pipelineKey}</span>} link={pipelineLink(pipeline.pipelineKey, { revision: pipeline.revision })}>
+        <HoverCardMeta><span className="font-mono">{pipeline.pipelineKey}</span> · Revision {pipeline.revision}, as it ran</HoverCardMeta>
       </Title>
       {/* The picked block's box reaches 6px above its row; the extra top
         * padding keeps it clear of the hairline when it is the first. */}
@@ -814,7 +821,7 @@ function PipelineBlockCard({ block }: { block: Extract<Reference, { kind: "pipel
         {revision.status === "ready" && revision.value ? (
           <PipelineRail
             revision={revision.value}
-            organization={organization}
+            entry={entry}
             highlight={{ key: block.key, note, end: block.endOfBranch }}
           />
         ) : (
@@ -836,6 +843,8 @@ function BlockSummary({ block }: { block: BlockDraft }) {
       return <>Condition · <ConditionSummary node={block.when} /></>;
     case "branch":
       return <>Branch · <ConditionSummary node={block.when} /></>;
+    case "delegate":
+      return <>Delegate · <ConditionSummary node={block.when} /></>;
     case "edition":
       return requireBlockKind(block.type).summarize(block);
     case "unknown":
@@ -857,6 +866,16 @@ function BlockSummary({ block }: { block: BlockDraft }) {
  * human exit's path is worth a line. A branch's blocks and end nest
  * beneath it instead. */
 function BlockExit({ block }: { block: BlockDraft }) {
+  if (block.kind === "delegate") {
+    return (
+      <p className="flex flex-wrap items-center gap-y-1 text-body text-ink-secondary">
+        <span className="mr-1">On match, continue in</span>
+        <Referenced reference={{ kind: "pipeline", pipelineKey: block.pipelineKey }} inline>
+          <span className="font-mono text-[12px] text-ink">{block.pipelineKey}</span>
+        </Referenced>
+      </p>
+    );
+  }
   const target = block.target;
   switch (block.kind) {
     case "cel":

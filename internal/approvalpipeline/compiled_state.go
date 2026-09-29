@@ -127,7 +127,8 @@ func (state *CompiledPipelineState) loadRaw(ctx context.Context, revision domain
 	}
 	if compiled == nil || compiled.Revision.ID != revision.ID ||
 		compiled.Revision.OrganizationID != revision.OrganizationID ||
-		compiled.Revision.AgentSlug != revision.AgentSlug ||
+		compiled.Revision.PipelineKey != revision.PipelineKey ||
+		compiled.Revision.Name != revision.Name ||
 		compiled.Revision.Revision != revision.Revision ||
 		!slices.Equal(compiled.Revision.BlockIDs, revision.BlockIDs) {
 		state.cache.remove(key)
@@ -167,6 +168,25 @@ func (state *CompiledPipelineState) compileRevision(ctx context.Context, revisio
 	}
 }
 
+// Effective builds a run's flattened program from cached per-revision
+// compilations: root's blocks with every delegate's target spliced in,
+// transitively. load fetches each target's revision, active or pinned; a
+// revision that belongs to another key is refused, and any failure to
+// resolve or compile a target refuses the whole effective pipeline.
+func (state *CompiledPipelineState) Effective(ctx context.Context, root *compiledPipeline, load func(ctx context.Context, key string) (domain.RequestApprovalPipelineRevision, error)) (*effectivePipeline, error) {
+	resolve := func(ctx context.Context, key string) (*compiledPipeline, error) {
+		revision, err := load(ctx, key)
+		if err != nil {
+			return nil, err
+		}
+		if revision.PipelineKey != key {
+			return nil, fmt.Errorf("revision %s belongs to pipeline %q, not %q: %w", revision.ID, revision.PipelineKey, key, errCompiledPipelineCacheUnavailable)
+		}
+		return state.Get(ctx, revision)
+	}
+	return flattenEffective(ctx, root, resolve)
+}
+
 func (state *CompiledPipelineState) key(revisionID domain.ID) compiledPipelineKey {
 	return compiledPipelineKey{RevisionID: revisionID, RuntimeFingerprint: state.runtimeFingerprint}
 }
@@ -194,7 +214,19 @@ func (registry *BlockRegistry) compileStoredPipeline(revision domain.RequestAppr
 			return nil, invalidPipelineDocument("stored blocks do not match the revision's tree", nil)
 		}
 	}
-	return &compiledPipeline{Revision: revision, Blocks: compiled, Snapshots: snapshots}, nil
+	return &compiledPipeline{Revision: revision, Blocks: compiled, Snapshots: snapshots, Delegates: delegateKeys(compiled)}, nil
+}
+
+// delegateKeys lists the distinct pipeline keys the compiled blocks
+// delegate to, in block order.
+func delegateKeys(blocks []compiledBlock) []string {
+	keys := make([]string, 0)
+	for _, block := range blocks {
+		if block.Delegate && !slices.Contains(keys, block.PipelineKey) {
+			keys = append(keys, block.PipelineKey)
+		}
+	}
+	return keys
 }
 
 type compiledPipelineKey struct {
@@ -202,10 +234,11 @@ type compiledPipelineKey struct {
 	RuntimeFingerprint string
 }
 
-// compiledBlock is one block of a compiled section in pre-order: a branch
-// comes before the blocks it holds. Parent is the index of the branch that
-// holds the block, -1 at the top; End is one past the last block inside a
-// branch, the next index for any other block.
+// compiledBlock is one block of a compiled revision in pre-order: a branch
+// comes before the blocks it holds. Parent is the index of the branch (or,
+// once flattened, the delegate) that holds the block, -1 at the top; End
+// is one past the last block inside a branch or a delegate's target, the
+// next index for any other block.
 type compiledBlock struct {
 	Key          string
 	Executor     RequestApprovalBlock
@@ -220,16 +253,27 @@ type compiledBlock struct {
 	Branch        bool
 	// Reason is a branch's reason, recorded when nothing inside decides.
 	Reason string
-	Parent int
-	End    int
+	// Delegate marks a delegate block; PipelineKey is the pipeline it
+	// hands matching requests to.
+	Delegate    bool
+	PipelineKey string
+	Parent      int
+	End         int
 }
 
+// container reports whether the cursor enters or skips the block: a
+// branch, or a delegate whose target is spliced in after it.
+func (block compiledBlock) container() bool { return block.Branch || block.Delegate }
+
 // compiledPipeline is one revision compiled; Blocks and Snapshots share one
-// pre-order index, the order of the revision's block_ids.
+// pre-order index, the order of the revision's block_ids. Delegates lists
+// the distinct pipeline keys its delegate blocks name, so the effective
+// pipeline resolves the closure without reading block configs.
 type compiledPipeline struct {
 	Revision  domain.RequestApprovalPipelineRevision
 	Blocks    []compiledBlock
 	Snapshots []domain.RequestApprovalBlock
+	Delegates []string
 }
 
 type compiledPipelineCacheEntry struct {

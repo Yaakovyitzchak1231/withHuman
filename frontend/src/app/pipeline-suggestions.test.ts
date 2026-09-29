@@ -51,30 +51,22 @@ describe("condition value suggestions", () => {
     vi.spyOn(api, "toolCatalog").mockResolvedValue({ tools: [{ id: "merge", name: "merge", agent_slug: "support", runtime: "claude-code", source: "mcp", server: "github", available: true, stale: false, discovery_context: "project", schema_fingerprint: "schema", last_seen_at: "2026-09-22T09:00:00Z", last_attempt_at: "2026-09-22T09:00:00Z", input_schema: { type: "object", properties: { branch: { type: "string" } } } }] as ToolCatalogEntry[], sources: [], total: 1, next_offset: null });
   }
 
-  it("uses scoped catalogues and histories with actual approval-request names", async () => {
+  it("uses every agent's catalogue and history with actual approval-request names", async () => {
     mockDirectory();
-    const page = await loadPipelineSuggestions("support");
-    expect(page.sourceAgents.map((agent) => agent.slug)).toEqual(["support"]);
-    expect(vi.mocked(api.agentApprovals).mock.calls.map(([agentSlug]) => agentSlug)).toEqual(["support"]);
+    const page = await loadPipelineSuggestions();
+    expect(vi.mocked(api.agentApprovals).mock.calls.map(([agentSlug]) => agentSlug)).toEqual(["support", "release"]);
     expect(api.approvals).not.toHaveBeenCalled();
     expect(page.toolSchemas.find((tool) => tool.name === "merge")?.inputSchema).toEqual({ type: "object", properties: { branch: { type: "string" } } });
-    expect(page.valueSuggestions).toEqual({
-      "/agent/slug": ["support"], "/agent/name": ["Support agent"],
-      "/request/tool": ["merge", "refund"],
-      "/request/server": ["github"],
-      "/request/arguments/currency": ["GBP", "EUR"],
-      "/request/arguments/order/id": ["o-2"],
-      "/request/arguments/note": ["late"],
-    });
-    const organization = await loadPipelineSuggestions("");
-    expect(organization.valueSuggestions["/agent/slug"]).toEqual(["support", "release"]);
-    expect(organization.valueSuggestions["/request/tool"]).toContain("deploy");
-    expect(organization.sourceAgents).toEqual([]);
+    expect(page.valueSuggestions["/agent/slug"]).toEqual(["support", "release"]);
+    expect(page.valueSuggestions["/agent/name"]).toEqual(["Support agent", "Release agent"]);
+    expect(page.valueSuggestions["/request/tool"]).toEqual(["merge", "refund", "deploy"]);
+    expect(page.valueSuggestions["/request/server"]).toEqual(["github"]);
+    expect(page.valueSuggestions["/request/arguments/currency"]).toEqual(["GBP", "EUR"]);
   });
 
   it("learns argument fields from the histories, most common first, and seeds the sample from the newest request", async () => {
     mockDirectory();
-    const page = await loadPipelineSuggestions("");
+    const page = await loadPipelineSuggestions();
     expect(page.argumentPaths).toEqual([
       "/request/arguments/currency",
       "/request/arguments/order",
@@ -86,22 +78,19 @@ describe("condition value suggestions", () => {
       request: { tool: "refund", arguments: { currency: "GBP", order: { id: "o-2" } }, agent_reasoning: "Duplicate charge." },
       agent: { slug: "support", name: "Support agent" },
     });
-    const scoped = await loadPipelineSuggestions("release");
-    expect(scoped.argumentPaths).toEqual(["/request/arguments/environment"]);
-    expect(scoped.sample?.agent).toEqual({ slug: "release", name: "Release agent" });
   });
 
   it("falls back to the review queue without agents and leaves the sample to the placeholder without requests", async () => {
     mockDirectory();
     vi.mocked(api.agents).mockRejectedValue(new Error("Forbidden"));
     vi.mocked(api.approvals).mockResolvedValue({ requests: history.release as ApprovalRequest[] });
-    const page = await loadPipelineSuggestions("");
+    const page = await loadPipelineSuggestions();
     expect(api.agentApprovals).not.toHaveBeenCalled();
     expect(page.argumentPaths).toEqual(["/request/arguments/environment"]);
     expect(page.sample?.agent).toEqual({ slug: "release", name: "Release agent" });
 
     vi.mocked(api.approvals).mockResolvedValue({ requests: [] });
-    const empty = await loadPipelineSuggestions("");
+    const empty = await loadPipelineSuggestions();
     expect(empty.argumentPaths).toEqual([]);
     expect(empty.sample).toBeNull();
   });
@@ -109,9 +98,9 @@ describe("condition value suggestions", () => {
   it("keeps available choices when optional directories are forbidden or unavailable", async () => {
     mockDirectory();
     vi.mocked(api.toolCatalog).mockRejectedValue(new Error("Forbidden"));
-    const page = await loadPipelineSuggestions("support");
-    expect(page.valueSuggestions["/request/tool"]).toEqual(["refund"]);
-    expect(page.valueSuggestions["/agent/name"]).toEqual(["Support agent"]);
+    const page = await loadPipelineSuggestions();
+    expect(page.valueSuggestions["/request/tool"]).toEqual(["refund", "deploy"]);
+    expect(page.valueSuggestions["/agent/name"]).toEqual(["Support agent", "Release agent"]);
   });
 
   it("offers the edition's registered servers first, named by their source, and catalogue sources without tools", async () => {
@@ -126,7 +115,7 @@ describe("condition value suggestions", () => {
       toolSources: [{ source: "gateway", label: "Gateway", external: true }],
       serverDirectory: async () => [{ server: "github-prod", name: "GitHub production", source: "gateway" }],
     });
-    const page = await loadPipelineSuggestions("support");
+    const page = await loadPipelineSuggestions();
     expect(page.valueSuggestions["/request/server"]).toEqual(["github-prod", "linear"]);
     expect(page.valueDetails).toEqual({ "/request/server": { "github-prod": "Gateway: GitHub production" } });
   });
@@ -139,7 +128,7 @@ describe("condition value suggestions", () => {
         { server: "linear", name: "Linear", source: "gateway" },
       ],
     });
-    const page = await loadPipelineSuggestions("support");
+    const page = await loadPipelineSuggestions();
     const schema = page.toolSchemas.find((tool) => tool.everyTool);
     expect(schema).toEqual({
       name: "Cloudflare",
@@ -153,7 +142,7 @@ describe("condition value suggestions", () => {
   it("keeps the observed servers when the edition's directory refuses the reader", async () => {
     mockDirectory();
     registerExtensions({ serverDirectory: () => Promise.reject(new Error("Forbidden")) });
-    const page = await loadPipelineSuggestions("support");
+    const page = await loadPipelineSuggestions();
     expect(page.valueSuggestions["/request/server"]).toEqual(["github"]);
     expect(page.valueDetails).toEqual({ "/request/server": {} });
   });

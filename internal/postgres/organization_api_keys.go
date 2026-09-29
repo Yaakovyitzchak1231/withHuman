@@ -125,7 +125,7 @@ func (s *Store) ListAPIKeyScopes(ctx context.Context, input application.ListAPIK
 	if err := input.Validate(); err != nil {
 		return nil, err
 	}
-	rows, err := s.pool.Query(ctx, `SELECT 'team',id::text,name FROM teams WHERE organization_id=$1 AND archived_at IS NULL UNION SELECT 'agent',slug,name FROM agents WHERE organization_id=$1 AND status <> 'archived' ORDER BY 1,2`, input.OrganizationID)
+	rows, err := s.pool.Query(ctx, `SELECT 'team',id::text,name FROM teams WHERE organization_id=$1 AND archived_at IS NULL UNION SELECT 'agent',slug,name FROM agents WHERE organization_id=$1 AND status <> 'archived' UNION SELECT 'pipeline',pipeline_key,name FROM request_approval_pipelines WHERE organization_id=$1 AND is_active ORDER BY 1,2`, input.OrganizationID)
 	if err != nil {
 		return nil, err
 	}

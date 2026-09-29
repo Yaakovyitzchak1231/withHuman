@@ -177,9 +177,10 @@ export interface ToolPresentationsPage {
 }
 
 /* The kinds of scope a grant can bind at, widest first. An organization
- * grant covers every team and agent; a team or agent grant covers only
- * that one resource. An agent scope's id is the agent's slug. */
-export type ScopeKind = "organization" | "team" | "agent";
+ * grant covers every team, agent and pipeline; a team, agent or pipeline
+ * grant covers only that one resource. An agent scope's id is the
+ * agent's slug, a pipeline scope's id its key. */
+export type ScopeKind = "organization" | "team" | "agent" | "pipeline";
 
 /* One permission held at one scope: the flattening of the principal's
  * role assignments, direct and inherited through teams. */
@@ -190,7 +191,7 @@ export interface Grant {
 }
 
 /* What an action is about, for can(): the organization itself, one
- * team by id, or one agent by slug. */
+ * team by id, one agent by slug, or one pipeline by key. */
 export interface Resource {
   kind: ScopeKind;
   id?: string;
@@ -741,6 +742,30 @@ export interface BranchBlockDefinition {
   config: BranchBlockConfig<RequestApprovalBlockDefinition>;
 }
 
+/* A delegate hands requests its condition matches to another pipeline,
+ * named by key: a branch whose body is that pipeline's active revision.
+ * A request that does not match continues down the rail. Inside the
+ * target, blocks run under the usual contract; when the target runs out
+ * of blocks the request goes to a human with the target's default
+ * escalation path, else the delegating pipeline's, and the pipeline
+ * stops there. The block itself has no reason and no path: the target
+ * pipeline owns its end. */
+export interface DelegateBlockConfig {
+  when: Record<string, unknown>;
+  /* The key of a live pipeline other than the entry pipeline. */
+  pipeline_key: string;
+}
+
+export interface DelegateBlockDefinition {
+  id: string;
+  name: string;
+  type: "delegate";
+  enabled: true;
+  timeout: string;
+  max_attempts: 1;
+  config: DelegateBlockConfig;
+}
+
 /* Core's own block kinds. A kind an edition adds (EditionBlockDefinition
  * in app/extensions.tsx) arrives in the same array as JSON like any
  * other; the pipeline editor reads it through the block-kind registry,
@@ -749,7 +774,8 @@ export type RequestApprovalBlockDefinition =
   | AlwaysBlockDefinition
   | CELBlockDefinition
   | WebhookBlockDefinition
-  | BranchBlockDefinition;
+  | BranchBlockDefinition
+  | DelegateBlockDefinition;
 
 export type RequestApprovalBlockType = RequestApprovalBlockDefinition["type"];
 
@@ -780,11 +806,18 @@ export interface StoredBranchBlock extends BranchBlockDefinition {
   config: BranchBlockConfig<StoredRequestApprovalBlock>;
 }
 
+export interface StoredDelegateBlock extends DelegateBlockDefinition {
+  snapshot_id: string;
+  config_version: 1;
+  content_hash: string;
+}
+
 export type StoredRequestApprovalBlock =
   | StoredAlwaysBlock
   | StoredCELBlock
   | StoredWebhookBlock
-  | StoredBranchBlock;
+  | StoredBranchBlock
+  | StoredDelegateBlock;
 
 /* One webhook endpoint key's revision lineage. name and url come from the
  * latest revision; active_revision is absent while none is active, and
@@ -828,12 +861,11 @@ export interface WebhookEndpointSecret {
 }
 
 /* One active pipeline revision's reference to a shared object (a webhook
- * endpoint or an escalation path). block_key is absent when the revision
- * names an escalation path as its default. */
+ * endpoint, an escalation path, or another pipeline). block_key is
+ * absent when the revision names an escalation path as its default. */
 export interface PipelineUse {
   pipeline_id: string;
-  scope: PipelineScope;
-  agent_slug?: string;
+  pipeline_key: string;
   revision: number;
   block_key?: string;
 }
@@ -861,42 +893,55 @@ export interface DeliveryEvidence {
   reason?: string;
 }
 
+/* A new revision of a pipeline. name is the pipeline's name as of this
+ * revision (renaming is a revision); absent keeps the active revision's
+ * name. default_escalation_path is where a fall-through request and every
+ * human exit that names no path go; a delegated pipeline without one
+ * inherits the delegating pipeline's, outward to the entry pipeline. */
 export interface RequestApprovalPipelineDocument {
+  name?: string;
   blocks: RequestApprovalBlockDefinition[];
-  /* The escalation path a fall-through request and every human exit
-   * that names no path go to. The agent section's default wins over the
-   * organization's. */
   default_escalation_path?: string;
   /* Ask the agent's owner instead, with default_escalation_path as the
    * fallback for a request without one. */
   default_ask_agent_owner?: boolean;
 }
 
-/* "organization" is the scope whose blocks run before the agent section
- * for every request; agent_slug is present only for the agent scope. */
-export type PipelineScope = "organization" | "agent";
+/* A new pipeline with its first revision, active at once. The key is
+ * chosen once and never reused; "entry" is reserved for the entry
+ * pipeline every organization has. */
+export interface RequestApprovalPipelineCreate {
+  pipeline_key: string;
+  name: string;
+  blocks: RequestApprovalBlockDefinition[];
+  default_escalation_path?: string;
+}
+
+/* The key of the pipeline every request enters. */
+export const ENTRY_PIPELINE_KEY = "entry";
 
 /* Which pipelines a listing returns: live (with an active revision),
- * archived with their agent, or both. */
+ * archived, or both. */
 export type PipelineListStatus = "live" | "archived" | "all";
 
 export interface RequestApprovalPipelineSummary {
-  scope: PipelineScope;
-  agent_slug?: string;
+  pipeline_key: string;
+  /* The active revision's name, else the latest revision's. */
+  name: string;
   /* Absent only for an archived pipeline. */
   active_revision?: number;
   latest_revision: number;
   revision_count: number;
   latest_created_at: string;
-  /* Present when the pipeline was archived with its agent: readable,
-   * never active again until the agent is restored. */
+  /* Present when the pipeline was archived: readable, never active
+   * again, its key never reused. */
   archived_at?: string;
 }
 
 export interface RequestApprovalPipelineRevisionSummary {
   id: string;
-  scope: PipelineScope;
-  agent_slug?: string;
+  pipeline_key: string;
+  name: string;
   revision: number;
   is_active: boolean;
   /* Every block, including the blocks inside branches. */
@@ -905,8 +950,8 @@ export interface RequestApprovalPipelineRevisionSummary {
   default_ask_agent_owner?: boolean;
   created_by_actor_id: string;
   created_at: string;
-  /* Present when the revision was archived with its agent; it can be
-   * read but never activated while the agent stays archived. */
+  /* Present when the pipeline was archived; the revision can be read but
+   * never activated. */
   archived_at?: string;
 }
 
@@ -933,6 +978,14 @@ export interface PipelineReferences {
     exists: boolean;
     active: boolean;
   }[];
+  /* The pipelines the revision's delegate blocks hand requests to. */
+  pipelines: {
+    pipeline_key: string;
+    name?: string;
+    block_keys: string[];
+    exists: boolean;
+    active: boolean;
+  }[];
   blocks: {
     block_key: string;
     type: string;
@@ -953,13 +1006,10 @@ export interface RequestApprovalPipelinePreviewSample {
     context?: Record<string, unknown>;
   };
   agent: { slug: string; name: string };
-  /* Metadata earlier blocks returned, nested by scope then block key, so a
-   * stitched effective test can carry the organization preview's
-   * metadata into the agent preview. */
-  previous_metadata?: {
-    organization?: Record<string, Record<string, unknown>>;
-    agent?: Record<string, Record<string, unknown>>;
-  };
+  /* Metadata earlier blocks returned, nested by pipeline key then block
+   * key, the way conditions read it at /previous_metadata/<pipeline
+   * key>/<block key>. */
+  previous_metadata?: Record<string, Record<string, Record<string, unknown>>>;
 }
 
 /* What one evaluation in a preview produced. enter is evidence only: a
@@ -967,13 +1017,18 @@ export interface RequestApprovalPipelinePreviewSample {
  * block's answer, so no block's outcome mapping may name it. */
 export type PreviewBlockOutcome = PipelineOutcome | "enter";
 
-/* Blocks run in execution order as one flat list, whatever their depth.
- * A branch appears when its condition is checked (next when it did not
- * match, enter when it did) and, when a request runs out of it with no
- * decision, once more at the end: outcome human, end_of_branch set. */
+/* Blocks run in execution order as one flat list, whatever their depth
+ * or pipeline. A branch or delegate appears when its condition is
+ * checked (next when it did not match, enter when it did) and, when a
+ * request runs out of it with no decision, once more at the end:
+ * outcome human, end_of_branch set. A block inside a delegated pipeline
+ * carries that pipeline's key. */
 export interface RequestApprovalPipelinePreviewBlock {
   block_id: string;
-  /* The pre-order index within the previewed document. */
+  /* The pipeline that holds the block: the previewed one, or a pipeline
+   * a delegate handed the request to. */
+  pipeline_key: string;
+  /* The pre-order index within the effective pipeline. */
   position: number;
   delivery?: DeliveryEvidence;
   outcome: PreviewBlockOutcome;
@@ -993,9 +1048,11 @@ export interface RequestApprovalPipelinePreview {
   reason_code: "block_outcome" | "block_error" | "end_of_pipeline" | "end_of_branch";
   terminal_block_id?: string;
   blocks: RequestApprovalPipelinePreviewBlock[];
-  /* The path a human outcome is handed to within this scope alone. */
+  /* The path a human outcome is handed to, and, for a pipeline default,
+   * the pipeline whose default it is. */
   escalation_path?: string;
   escalation_path_reason?: "block_escalation" | "pipeline_default" | "no_escalation";
+  escalation_path_pipeline_key?: string;
   /* The route asks the agent's owner, with escalation_path as the
    * fallback. A preview names the route, never a person. */
   ask_agent_owner?: boolean;
@@ -1339,7 +1396,10 @@ export interface OnboardingDiscoveryError {
   message: string;
 }
 
+/* One runtime's rules, written as a branch of the entry pipeline. */
 export interface OnboardingGeneratedPipeline {
+  pipeline_key: string;
+  branch_key: string;
   revision: number;
   replaced_active_revision: number;
 }
@@ -1350,7 +1410,6 @@ export interface OnboardingGenerated {
   escalation_path_name: string;
   escalation_path_revision: number;
   pipelines: Record<string, OnboardingGeneratedPipeline>;
-  policy_tools: string[];
 }
 
 /* The agent, instance, and credential id minted for one runtime. The

@@ -174,7 +174,7 @@ func newFixture(t *testing.T) *fixture {
 	if _, err = store.ActivateOrganization(ctx, application.ActivateOrganizationInput{OrganizationID: f.org, OrganizationSlug: "async", OrganizationName: "Async", UserID: f.user, MembershipID: f.member, DisplayName: "Owner", Email: "async@example.com", PasswordHash: "test", AdmissionSource: domain.AdmissionManual, Now: now}); err != nil {
 		t.Fatal(err)
 	}
-	agent, err := store.CreateAgent(ctx, application.CreateAgentInput{Kind: domain.AgentService, OrganizationID: f.org, ActorID: f.member, Name: "harness", AgentSlug: "harness", AgentQuota: application.UnlimitedQuota(), Now: now})
+	agent, err := store.CreateAgent(ctx, application.CreateAgentInput{OrganizationID: f.org, ActorID: f.member, Name: "harness", AgentSlug: "harness", Kind: domain.AgentService, AgentQuota: application.UnlimitedQuota(), Now: now})
 	if err != nil {
 		t.Fatal(err)
 	}

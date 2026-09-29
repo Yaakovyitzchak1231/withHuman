@@ -74,6 +74,8 @@ func definitionCondition(definition approvalblock.Definition) (approvalblock.Con
 		return definition.CEL.When, true
 	case definition.Branch != nil:
 		return definition.Branch.When, true
+	case definition.Delegate != nil:
+		return definition.Delegate.When, true
 	default:
 		return approvalblock.Condition{}, false
 	}
@@ -147,10 +149,11 @@ const (
 	stepDone
 )
 
-// branchCursor walks one compiled section in pre-order. A branch whose
-// condition matched is entered and its blocks come next; one that did not
-// is skipped whole. When an entered branch runs out of blocks the cursor
-// reports its end, which finishes the run: entering a branch commits to it.
+// branchCursor walks one effective pipeline in pre-order. A branch or
+// delegate whose condition matched is entered and its blocks (for a
+// delegate, the target pipeline's) come next; one that did not is skipped
+// whole. When an entered container runs out of blocks the cursor reports
+// its end, which finishes the run: entering commits to it.
 type branchCursor struct {
 	blocks  []compiledBlock
 	index   int

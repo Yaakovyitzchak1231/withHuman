@@ -244,7 +244,7 @@ function demoCard(reference: Reference): ReactNode | null {
           <HoverCardTitle>
             <span className="min-w-0">
               <span className="flex min-w-0 items-center gap-1">
-                <span className="truncate underline-offset-[3px] hover:underline">Organization</span>
+                <span className="truncate underline-offset-[3px] hover:underline">Entry pipeline</span>
                 <ArrowUpRightIcon width={12} height={12} className="text-ink-faint" />
               </span>
               <HoverCardMeta>Revision {reference.pipeline?.revision ?? 1}, as it ran</HoverCardMeta>
@@ -366,7 +366,7 @@ export function HoverCardsSection() {
                 type: "cel",
                 outcome: "human",
                 reason: "Selected during onboarding",
-                pipeline: { agentSlug: "", revision: 2 },
+                pipeline: { pipelineKey: "entry", revision: 2 },
               }}
             >
               <Badge className="gap-1" icon={<ShieldIcon width={13} height={13} />}>

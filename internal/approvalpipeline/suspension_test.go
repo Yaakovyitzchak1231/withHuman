@@ -11,7 +11,7 @@ import (
 	"github.com/withHumanAI/withHuman/domain"
 )
 
-// suspensionFixture activates an organization pipeline of a non-matching
+// suspensionFixture activates an entry pipeline of a non-matching
 // CEL block, an asynchronous scripted block, and a trailing CEL approve,
 // and returns an execution service whose scripted block answers from the
 // replies.
@@ -25,11 +25,11 @@ func suspensionFixture(t *testing.T, now time.Time, check *scriptedModel) (*Exec
 		scriptedDefinition(),
 		pipelineDefinition("approve-rest", approvalblock.Approve, approvalblock.Field("/request/tool").Equals("deploy")),
 	}
-	created, err := management.CreateRevision(context.Background(), pipelineManagerPrincipal("organization-1"), "", definitions, Route{})
+	created, err := management.CreateRevision(context.Background(), pipelineManagerPrincipal("organization-1"), "entry", pipelineName("entry"), definitions, Route{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := management.Activate(context.Background(), pipelineManagerPrincipal("organization-1"), "", created.Revision.Revision, 1); err != nil {
+	if _, err := management.Activate(context.Background(), pipelineManagerPrincipal("organization-1"), "entry", created.Revision.Revision, 1); err != nil {
 		t.Fatal(err)
 	}
 	compiled := NewCompiledPipelineState(repository, registry)
@@ -68,7 +68,7 @@ func TestEvaluateSuspendsInFrontOfTheFirstAsynchronousBlock(t *testing.T) {
 		t.Fatalf("got events %v, want %v", got, want)
 	}
 	suspension := *input.Suspension
-	if suspension.ResumePosition != 1 || suspension.AttemptedBlockCount != 1 || suspension.OrganizationPipelineID != repository.revisions[""][1].ID || suspension.AgentPipelineID != "" {
+	if suspension.ResumePosition != 1 || suspension.AttemptedBlockCount != 1 || suspension.EntryPipelineID() != repository.revisions["entry"][1].ID || len(suspension.PinnedRevisions) != 1 {
 		t.Fatalf("unexpected suspension: %#v", suspension)
 	}
 	suspended := auditData(t, input.AuditEvents[3])

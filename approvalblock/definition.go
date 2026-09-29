@@ -93,6 +93,7 @@ type Definition struct {
 	CEL         *CELConfig
 	Webhook     *WebhookConfig
 	Branch      *BranchConfig
+	Delegate    *DelegateConfig
 	// Config is the configuration of a registered kind (RegisterKind).
 	Config Config
 }
@@ -119,10 +120,11 @@ type TypeLimits struct {
 
 // typeLimits are core's own kinds; RegisterKind adds an edition's.
 var typeLimits = map[BlockType]TypeLimits{
-	TypeAlways:  {DefaultTimeout: DefaultTimeout, MaximumTimeout: MaximumTimeout, MinimumAttempts: 1, MaximumAttempts: 1},
-	TypeCEL:     {DefaultTimeout: DefaultTimeout, MaximumTimeout: MaximumTimeout, MinimumAttempts: 1, MaximumAttempts: 1},
-	TypeWebhook: {DefaultTimeout: DefaultWebhookTimeout, MaximumTimeout: MaximumWebhookTimeout, MinimumAttempts: 1, MaximumAttempts: MaximumWebhookAttempts},
-	TypeBranch:  {DefaultTimeout: DefaultTimeout, MaximumTimeout: MaximumTimeout, MinimumAttempts: 1, MaximumAttempts: 1},
+	TypeAlways:   {DefaultTimeout: DefaultTimeout, MaximumTimeout: MaximumTimeout, MinimumAttempts: 1, MaximumAttempts: 1},
+	TypeCEL:      {DefaultTimeout: DefaultTimeout, MaximumTimeout: MaximumTimeout, MinimumAttempts: 1, MaximumAttempts: 1},
+	TypeWebhook:  {DefaultTimeout: DefaultWebhookTimeout, MaximumTimeout: MaximumWebhookTimeout, MinimumAttempts: 1, MaximumAttempts: MaximumWebhookAttempts},
+	TypeBranch:   {DefaultTimeout: DefaultTimeout, MaximumTimeout: MaximumTimeout, MinimumAttempts: 1, MaximumAttempts: 1},
+	TypeDelegate: {DefaultTimeout: DefaultTimeout, MaximumTimeout: MaximumTimeout, MinimumAttempts: 1, MaximumAttempts: 1},
 }
 
 // LimitsFor returns the envelope limits for a known block type, core's
@@ -278,6 +280,11 @@ func (definition Definition) configWire() (any, error) {
 			return nil, errors.New("branch block requires a branch configuration")
 		}
 		return definition.Branch.wire()
+	case TypeDelegate:
+		if definition.Delegate == nil {
+			return nil, errors.New("delegate block requires a delegate configuration")
+		}
+		return definition.Delegate, nil
 	default:
 		if _, known := registeredKind(definition.Type); !known {
 			return nil, fmt.Errorf("unknown block type %q", definition.Type)
@@ -323,6 +330,13 @@ func (definition *Definition) SetConfigJSON(config json.RawMessage) error {
 			return fmt.Errorf("decode webhook block config: %w", err)
 		}
 		definition.Webhook = &decoded
+		return nil
+	case TypeDelegate:
+		var decoded DelegateConfig
+		if err := decodeStrict(config, &decoded); err != nil {
+			return fmt.Errorf("decode delegate block config: %w", err)
+		}
+		definition.Delegate = &decoded
 		return nil
 	default:
 		kind, known := registeredKind(definition.Type)
@@ -500,6 +514,11 @@ func (definition Definition) validateConfig() error {
 			return errors.New("branch block requires a branch configuration")
 		}
 		return definition.Branch.Validate()
+	case TypeDelegate:
+		if definition.Delegate == nil {
+			return errors.New("delegate block requires a delegate configuration")
+		}
+		return definition.Delegate.Validate()
 	default:
 		if _, known := registeredKind(definition.Type); !known {
 			return fmt.Errorf("unknown block type %q", definition.Type)
@@ -660,9 +679,9 @@ func validateField(path string, relative bool) (knownFieldType, error) {
 	if len(tokens) == 2 && tokens[0] == "agent" && (tokens[1] == "slug" || tokens[1] == "name") {
 		return fieldString, nil
 	}
-	// Metadata an earlier block returned, nested by pipeline scope and
-	// block key: /previous_metadata/organization/fraud-check/risk_score.
-	if len(tokens) >= 3 && tokens[0] == "previous_metadata" && (tokens[1] == "organization" || tokens[1] == "agent") {
+	// Metadata an earlier block returned, nested by pipeline key and
+	// block key: /previous_metadata/entry/fraud-check/risk_score.
+	if len(tokens) >= 3 && tokens[0] == "previous_metadata" && ValidPipelineKey(tokens[1]) && tokens[2] != "" {
 		return fieldDynamic, nil
 	}
 	return fieldDynamic, fmt.Errorf("field %q is not available to CEL blocks", path)

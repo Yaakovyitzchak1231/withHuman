@@ -32,10 +32,12 @@ func ValidateRoute(escalationPath string, askAgentOwner bool) error {
 
 // EscalationPath returns the escalation path key the block's configuration
 // names for its human outcome, or "" when the block inherits the pipeline
-// default. A branch's path is the one its own end hands a request to. With
-// AskAgentOwner the path is the fallback.
+// default. A branch's path is the one its own end hands a request to. A
+// delegate names none: the target pipeline owns its end.
 func (definition Definition) EscalationPath() string {
 	switch definition.Type {
+	case TypeDelegate:
+		return ""
 	case TypeBranch:
 		if definition.Branch != nil {
 			return definition.Branch.EscalationPath
