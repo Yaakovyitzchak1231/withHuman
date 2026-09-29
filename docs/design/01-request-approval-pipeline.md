@@ -2,6 +2,8 @@
 
 Status: draft · Last updated: 2026-09-23
 
+> **Amended 2026-09-29.** The organization and agent scopes described below are gone: every request runs the keyed entry pipeline, and `delegate` blocks hand matching requests to other keyed pipelines. See [16-pipeline-delegation.md](16-pipeline-delegation.md); the execution model, evidence and decision semantics below otherwise stand.
+
 ## Summary
 
 The request approval lifecycle is the provider-side path from an incoming

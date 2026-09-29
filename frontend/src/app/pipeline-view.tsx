@@ -4,18 +4,17 @@ import {
   useMemo,
   useRef,
   useState,
-  type ReactNode,
 } from "react";
 import { useNavigate, useRouter } from "@tanstack/react-router";
 import { cn } from "@/ds/lib/cn";
 import { Badge } from "@/ds/components/badge";
 import { IconButton } from "@/ds/components/icon-button";
 import { Menu, MenuContent, MenuTrigger } from "@/ds/components/menu";
-import { useAccess } from "./authorization";
 import { Button } from "@/ds/components/button";
 import { Callout } from "@/ds/components/callout";
 import { Card } from "@/ds/components/card";
 import { ConfirmDialog } from "@/ds/components/confirm-dialog";
+import type { PipelineOption } from "@/ds/components/delegate-block";
 import {
   Dialog,
   DialogBody,
@@ -28,37 +27,39 @@ import {
 import {
   PipelineConnector,
   PipelineEntryCard,
-  PipelineFoldedSection,
   PipelineTerminusCard,
 } from "@/ds/components/policy-block";
-import { Referenced } from "@/ds/components/reference";
 import { ReferenceChip } from "./reference-chip";
-import { TargetBadge, TargetSelect, type ReviewerTarget } from "@/ds/components/reviewer-target";
+import { TargetBadge, type ReviewerTarget } from "@/ds/components/reviewer-target";
 import type { WebhookEndpointOption } from "@/ds/components/webhook-block";
 import { SaveBar } from "@/ds/components/save-bar";
 import { TextArea } from "@/ds/components/text-area";
+import { TextField } from "@/ds/components/text-field";
 import { ToggleGroup, ToggleGroupItem } from "@/ds/components/toggle-group";
 import { useToast } from "@/ds/components/toast";
 import { Page } from "@/ds/components/page";
 import { PageHeader, PageBackLink, PageBackButton } from "@/ds/components/page-header";
 import { RevisionHistory } from "@/ds/components/revision-history";
-import { AlertIcon, ChevronDownIcon, EllipsisIcon } from "@/ds/icons";
+import { AlertIcon, EllipsisIcon } from "@/ds/icons";
 import { api, RequestError } from "../api";
-import type {
-  AgentSummary,
-  PipelineReferences,
-  RequestApprovalBlockDefinition,
-  RequestApprovalPipelinePreview,
-  RequestApprovalPipelinePreviewSample,
-  RequestApprovalPipelineRevision,
-  RequestApprovalPipelineRevisionSummary,
-  RevisionPage,
+import {
+  ENTRY_PIPELINE_KEY,
+  type PipelineReferences,
+  type PipelineUse,
+  type RequestApprovalBlockDefinition,
+  type RequestApprovalPipelinePreviewSample,
+  type RequestApprovalPipelineRevision,
+  type RequestApprovalPipelineRevisionSummary,
+  type RequestApprovalPipelineSummary,
+  type RevisionPage,
+  type StoredRequestApprovalBlock,
 } from "../types";
 import { emptyRevisionPage, useRevisionPages } from "./revision-pages";
 import { blockProblemLabel } from "./block-errors";
 import { blockKind, extensions } from "./extensions";
 import {
   defaultSample,
+  delegatedKeys,
   documentFromDrafts,
   draftsFromBlocks,
   knownBlockTypes,
@@ -73,40 +74,41 @@ import {
 import {
   allConditions,
   changedBlockCount,
-  countDrafts,
   findDraft,
   pipelineReachability,
   positionLabel,
   walkDrafts,
 } from "./pipeline-tree";
-import {
-  carriedMetadata,
-  runFromPreviews,
-  type RailSection,
-  type TestRun,
-} from "./pipeline-replay";
+import { pipelineLink } from "./pipeline-link";
+import { PipelineUseList } from "./pipeline-uses";
+import { runFromPreview, type TestRun } from "./pipeline-replay";
 import {
   PipelineRail,
   RailProvider,
   UnreachableNotice,
   useRailEditor,
+  type DelegateTarget,
   type RailState,
 } from "./pipeline-rail";
 import { useTitle } from "./use-title";
 import { useRevisionActivation } from "./use-revision-activation";
 import { conditionFieldPaths, conditionValueSuggestions, loadPipelineSuggestions, mergeValueSuggestions, sampleValueSuggestions } from "./pipeline-suggestions";
 import { FIXED_FIELDS, type ConditionValueDetails, type ConditionValueSuggestions } from "@/ds/components/condition-builder";
+import { TestRequestDialog } from "./test-request-dialog";
+
+export { TestRequestDialog } from "./test-request-dialog";
 
 const FIXED_FIELD_PATHS = new Set(FIXED_FIELDS.map((field) => field.path));
 
 /*
  * One pipeline, viewed or edited in place. The rail keeps the same
- * scaffolding in both modes: entry, the folded organization section
- * (agent scope only), this pipeline's blocks with their exits and
- * branches, and the terminus. Edit swaps the read-only rows for
- * editable cards where they stand; Create revision commits a new
- * immutable revision, which stays inactive until activated from the
- * history below.
+ * scaffolding in both modes: entry, this pipeline's blocks with their
+ * exits, branches and delegate wells, and the terminus that owns the
+ * pipeline default. Edit swaps the read-only rows for editable cards
+ * where they stand; Create revision commits a new immutable revision,
+ * which stays inactive until activated from the history below. Every
+ * pipeline is keyed; "entry" is the one every request enters, and the
+ * others take what delegate blocks hand them.
  */
 
 const REVISIONS_INFO =
@@ -114,156 +116,16 @@ const REVISIONS_INFO =
 
 type PendingAction = { kind: "activate"; revision: RequestApprovalPipelineRevisionSummary } | null;
 
-/* The agent's display name when the inventory knows it, else the slug
- * in mono; the header shows the slug beside a named title. */
-function PipelineTitle({ agentSlug, agentName }: { agentSlug: string; agentName?: string }) {
-  if (agentSlug === "") return <>Organization pipeline</>;
-  if (agentName) return <>{agentName} pipeline</>;
-  return (
-    <>
-      <span className="font-mono text-[19px]">{agentSlug}</span> pipeline
-    </>
-  );
-}
-
-/* The organization pipeline's tail: no match does not decide, execution
- * continues to the agent's own pipeline, and this is where the
- * organization default lives. It covers every agent without a default of
- * its own. */
-function ContinueCard({
-  target,
-  directory,
-  onTargetChange,
-  route,
-}: {
-  target: ReviewerTarget | null;
-  directory?: ReviewerTarget[];
-  onTargetChange?: (next: ReviewerTarget | null) => void;
-  route?: ReactNode;
-}) {
-  const editing = Boolean(directory && onTargetChange);
-  return (
-    <div className="flex items-center gap-3 rounded-lg border-hairline border-edge bg-surface px-4 py-2.5 shadow-sm">
-      <span className="flex text-ink-muted">
-        <ChevronDownIcon width={14} height={14} />
-      </span>
-      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <p className="text-body text-ink-secondary">Next: check the agent's pipeline</p>
-        <p className="text-micro text-ink-muted">
-          If those blocks still leave the request undecided, ask these reviewers unless the
-          agent has its own reviewers.
-        </p>
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-          <span className="text-micro text-ink-muted">Default reviewers</span>
-          {editing ? (
-            <TargetSelect
-              directory={directory ?? []}
-              value={target}
-              onChange={(next) => onTargetChange?.(next)}
-              fallbackLabel="Any authorized reviewer"
-              aria-label="Organization default reviewers"
-              className="w-56"
-            />
-          ) : (
-            <TargetBadge target={target} fallbackLabel="Any authorized reviewer" />
-          )}
-        </div>
-        {route ? <div className="mt-1.5">{route}</div> : null}
-      </div>
-    </div>
-  );
-}
-
-/* The test entry point: a dialog with the sample request. Running it
- * closes the dialog and replays the evaluation on the rail itself. The
- * overview reuses it with its own description, since there the run
- * opens the agent's pipeline first. */
-export function TestRequestDialog({
-  open,
-  onOpenChange,
-  sampleText,
-  onSampleTextChange,
-  onRun,
-  description = "See what would happen to a sample request, one block at a time. This does not create a real approval request.",
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  sampleText: string;
-  onSampleTextChange: (next: string) => void;
-  /* Resolves to an error message to show, or null when the run
-   * started and the dialog should close. */
-  onRun: () => Promise<string | null>;
-  description?: string;
-}) {
-  const [error, setError] = useState("");
-  const [running, setRunning] = useState(false);
-  return (
-    <Dialog
-      open={open}
-      onOpenChange={(next) => {
-        if (!next) setError("");
-        onOpenChange(next);
-      }}
-    >
-      <DialogContent className="w-[min(560px,calc(100vw-32px))]">
-        <DialogTitle>Test a request</DialogTitle>
-        <DialogDescription>{description}</DialogDescription>
-        <DialogBody className="flex flex-col gap-3">
-          {error ? (
-            <Callout tone="warn" icon={<AlertIcon width={15} height={15} />}>
-              {error}
-            </Callout>
-          ) : null}
-          <TextArea
-            aria-label="Test request"
-            spellCheck={false}
-            className="min-h-[260px] resize-y bg-canvas font-mono text-[11px] leading-[18px] shadow-none"
-            value={sampleText}
-            onChange={(event) => {
-              onSampleTextChange(event.target.value);
-              setError("");
-            }}
-          />
-        </DialogBody>
-        <DialogFooter>
-          <Button variant="ghost" disabled={running} onClick={() => onOpenChange(false)}>
-            Cancel
-          </Button>
-          <Button
-            variant="primary"
-            loading={running}
-            onClick={() => {
-              try {
-                JSON.parse(sampleText);
-              } catch {
-                setError("The sample is not valid JSON.");
-                return;
-              }
-              setRunning(true);
-              void onRun()
-                .then((problem) => {
-                  if (problem) setError(problem);
-                })
-                .finally(() => setRunning(false));
-            }}
-          >
-            Run test
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
 /* What the pipeline view route loaders deliver: this pipeline's history
  * with its active (or, failing that, latest) revision in full, the
- * organization's active revision for the folded section, the
- * escalation paths a human exit may name with each path's active tree,
- * and which block types this deployment can run. A failed pipeline load
- * is reported by the screen rather than thrown, so an expired session
- * reaches the sign-in gate, not the router's error boundary. */
+ * escalation paths a human exit may name, the pipelines a delegate may
+ * hand to with the active revisions of the ones this pipeline hands to,
+ * who hands to this one, and which block types this deployment can run.
+ * A failed pipeline load is reported by the screen rather than thrown,
+ * so an expired session reaches the sign-in gate, not the router's
+ * error boundary. */
 export interface PipelineViewPage {
-  /* The first page of the scope's history, newest first; the screen
+  /* The first page of the pipeline's history, newest first; the screen
    * fetches the rest on demand. */
   history: RevisionPage<RequestApprovalPipelineRevisionSummary>;
   /* The active revision in full: what the read-only view shows. */
@@ -271,23 +133,27 @@ export interface PipelineViewPage {
   /* The immutable revision named by an incoming review link. */
   linkedRevision: RequestApprovalPipelineRevision | null;
   latest: RequestApprovalPipelineRevision | null;
-  orgActive: RequestApprovalPipelineRevision | null;
-  /* Every agent has a pipeline with at least its first revision, so an
-   * empty history (or a 404) means no agent has this slug. */
+  /* An empty history (or a 404) means no pipeline has this key. */
   missing: boolean;
-  /* When the pipeline was archived with its agent: read only, no active
-   * revision, until the agent is restored. */
+  /* When the pipeline was archived: read only, no active revision, for
+   * good. */
   archivedAt: string | null;
   error: string;
   /* The organization's escalation paths, the choices for a human exit
    * and for the pipeline default. */
   roster: ReviewerTarget[];
-  /* The agent this pipeline belongs to, when the inventory lists it, so
-   * the title can show its name. Empty for the organization scope. */
-  sourceAgents: Pick<AgentSummary, "slug" | "name">[];
+  /* Every pipeline the viewer may read, live or archived, for the
+   * delegate picker and for naming targets. */
+  pipelines: PipelineOption[];
+  /* The active revisions of the pipelines this one's delegate blocks
+   * hand to, by key, for the wells under them. */
+  delegates: Record<string, DelegateTarget>;
+  /* The active pipeline revisions whose delegate blocks hand requests
+   * here. Empty for the entry pipeline. */
+  uses: PipelineUse[];
   valueSuggestions: ConditionValueSuggestions;
   valueDetails: ConditionValueDetails;
-  /* Argument fields the scope's agents have sent, most common first. */
+  /* Argument fields the agents have sent, most common first. */
   argumentPaths: string[];
   toolSchemas?: ToolSchema[];
   /* The newest real request, seeding the test sample; null before the
@@ -301,16 +167,16 @@ export interface PipelineViewPage {
   endpointOptions: WebhookEndpointOption[];
 }
 
-/* The scope's active revision comes from its own read rather than from
- * the history, so a rollback far down the list still shows the right
- * document; the latest revision is fetched in full only when it differs.
- * A scope archived with its agent has no active revision (the read is a
+/* The pipeline's active revision comes from its own read rather than
+ * from the history, so a rollback far down the list still shows the
+ * right document; the latest revision is fetched in full only when it
+ * differs. An archived pipeline has no active revision (the read is a
  * 404): its latest revision stands in, read only, and archivedAt says
  * when. */
-async function loadPipelineRevisions(agentSlug: string) {
+async function loadPipelineRevisions(pipelineKey: string) {
   const [history, active] = await Promise.all([
-    api.requestApprovalPipelineRevisions(agentSlug),
-    api.activeRequestApprovalPipeline(agentSlug).catch((reason: unknown) => {
+    api.requestApprovalPipelineRevisions(pipelineKey),
+    api.activeRequestApprovalPipeline(pipelineKey).catch((reason: unknown) => {
       if (reason instanceof RequestError && reason.status === 404) return null;
       throw reason;
     }),
@@ -321,7 +187,7 @@ async function loadPipelineRevisions(agentSlug: string) {
       ? null
       : active !== null && latestSummary.revision === active.revision
         ? active
-        : await api.requestApprovalPipelineRevision(agentSlug, latestSummary.revision);
+        : await api.requestApprovalPipelineRevision(pipelineKey, latestSummary.revision);
   const archivedAt = active === null ? (latestSummary?.archived_at ?? null) : null;
   return { history, displayed: active ?? latest, latest, active, archivedAt };
 }
@@ -356,28 +222,68 @@ async function loadBlockAvailability(): Promise<Pick<PipelineViewPage, "availabi
   }
 }
 
-export async function loadPipelineView(agentSlug: string, revision?: number): Promise<PipelineViewPage> {
-  const [pipeline, vocabulary, availability, suggestions] = await Promise.all([
-    Promise.all([
-      loadPipelineRevisions(agentSlug).then(async (own) => ({
-        ...own,
-        linkedRevision: revision === undefined ? null
-          : own.active?.revision === revision ? own.active
-          : own.latest?.revision === revision ? own.latest
-          : await api.requestApprovalPipelineRevision(agentSlug, revision),
-      })),
-      /* The organization section folds above an agent pipeline; it is
-       * decoration there, so its failure is not the page's. */
-      agentSlug === ""
-        ? Promise.resolve(null)
-        : loadPipelineRevisions("").then((result) => result.active, () => null),
-    ]).then(
-      ([own, orgActive]) => ({
+/* Every pipeline the viewer may read, as picker options. The entry
+ * pipeline is never a target, so it is left out. */
+export function pipelineOptions(summaries: RequestApprovalPipelineSummary[]): PipelineOption[] {
+  return summaries
+    .filter((summary) => summary.pipeline_key !== ENTRY_PIPELINE_KEY)
+    .map((summary) => ({
+      key: summary.pipeline_key,
+      name: summary.name,
+      active: summary.active_revision !== undefined,
+    }));
+}
+
+/* A delegated pipeline's active revision as the rail draws it. */
+export function delegateTarget(revision: RequestApprovalPipelineRevision, roster: ReviewerTarget[]): DelegateTarget {
+  return {
+    name: revision.name,
+    blocks: draftsFromBlocks(revision.blocks, roster),
+    defaultTarget: pathTarget(revision.default_escalation_path, roster),
+  };
+}
+
+/* The active revisions of the given pipelines, by key; a key the
+ * viewer cannot read, or that has no active revision, is left out. */
+export async function loadDelegateTargets(keys: string[], roster: ReviewerTarget[]): Promise<Record<string, DelegateTarget>> {
+  const entries = await Promise.all(
+    keys.map((key) =>
+      api.activeRequestApprovalPipeline(key).then(
+        (revision) => [key, delegateTarget(revision, roster)] as const,
+        () => null,
+      ),
+    ),
+  );
+  return Object.fromEntries(entries.filter((entry): entry is readonly [string, DelegateTarget] => entry !== null));
+}
+
+/* The keys every delegate block in the given revisions names. */
+function delegatedKeysOf(revisions: (RequestApprovalPipelineRevision | null)[]): string[] {
+  const keys = new Set<string>();
+  const walk = (blocks: StoredRequestApprovalBlock[]) => {
+    for (const block of blocks) {
+      if (block.type === "delegate") keys.add(block.config.pipeline_key);
+      if (block.type === "branch") walk(block.config.blocks);
+    }
+  };
+  for (const revision of revisions) if (revision) walk(revision.blocks);
+  return [...keys];
+}
+
+export async function loadPipelineView(pipelineKey: string, revision?: number): Promise<PipelineViewPage> {
+  const [pipeline, roster, summaries, uses, availability, suggestions] = await Promise.all([
+    loadPipelineRevisions(pipelineKey).then(async (own) => ({
+      ...own,
+      linkedRevision: revision === undefined ? null
+        : own.active?.revision === revision ? own.active
+        : own.latest?.revision === revision ? own.latest
+        : await api.requestApprovalPipelineRevision(pipelineKey, revision),
+    })).then(
+      (own) => ({
         history: own.history,
         displayed: own.displayed,
         linkedRevision: own.linkedRevision,
         latest: own.latest,
-        orgActive,
         missing: own.history.revisions.length === 0,
         archivedAt: own.archivedAt,
         error: "",
@@ -387,7 +293,6 @@ export async function loadPipelineView(agentSlug: string, revision?: number): Pr
         displayed: null,
         linkedRevision: null,
         latest: null,
-        orgActive: null,
         missing: revision === undefined && reason instanceof RequestError && reason.status === 404,
         archivedAt: null,
         error:
@@ -400,25 +305,41 @@ export async function loadPipelineView(agentSlug: string, revision?: number): Pr
               : "Unable to load the pipeline.",
       }),
     ),
-    loadPathDirectory().then((roster) => ({ roster })),
+    loadPathDirectory(),
+    api.requestApprovalPipelines("all").then((result) => result.request_approval_pipelines, () => []),
+    pipelineKey === ENTRY_PIPELINE_KEY
+      ? Promise.resolve([] as PipelineUse[])
+      : api.requestApprovalPipelineUses(pipelineKey).then((result) => result.uses, () => [] as PipelineUse[]),
     loadBlockAvailability(),
-    loadPipelineSuggestions(agentSlug),
+    loadPipelineSuggestions(),
   ]);
-  return { ...pipeline, ...vocabulary, ...availability, ...suggestions };
+  const delegates = await loadDelegateTargets(
+    delegatedKeysOf([pipeline.displayed, pipeline.latest, pipeline.linkedRevision]),
+    roster,
+  );
+  return {
+    ...pipeline,
+    roster,
+    pipelines: pipelineOptions(summaries),
+    delegates,
+    uses,
+    ...availability,
+    ...suggestions,
+  };
 }
 
 /* canWrite covers drafting, saving, and previewing a revision; canActivate
- * covers activating and rolling back. The routes compute both against
- * the pipeline's own resource (the organization or the agent). */
+ * covers activating, rolling back, and archiving. The route computes both
+ * against the pipeline's own resource. */
 export function PipelineViewScreen({
-  agentSlug,
+  pipelineKey,
   page,
   canWrite,
   canActivate,
   initiallyEditing = false,
   focusedBlock,
 }: {
-  agentSlug: string;
+  pipelineKey: string;
   page: PipelineViewPage;
   canWrite: boolean;
   canActivate: boolean;
@@ -426,31 +347,30 @@ export function PipelineViewScreen({
   focusedBlock?: string;
 }) {
   const navigate = useNavigate();
-  const { can } = useAccess();
   const router = useRouter();
   const toast = useToast();
   const revisionActivation = useRevisionActivation();
-  const organization = agentSlug === "";
+  const entry = pipelineKey === ENTRY_PIPELINE_KEY;
   const {
     displayed: activeRevision,
     linkedRevision,
     latest,
-    orgActive,
     missing,
     archivedAt,
     error,
     roster,
-    sourceAgents,
+    pipelines,
+    uses,
     availability,
     endpointOptions,
   } = page;
-  const agentName = sourceAgents.find((agent) => agent.slug === agentSlug)?.name;
-  useTitle(organization ? "Organization pipeline" : `${agentName ?? agentSlug} pipeline`);
+  const pipelineName = (latest ?? activeRevision)?.name ?? pipelineKey;
+  useTitle(pipelineName);
   const history = useRevisionPages(page.history, (cursor) =>
-    api.requestApprovalPipelineRevisions(agentSlug, cursor),
+    api.requestApprovalPipelineRevisions(pipelineKey, cursor),
   );
   const [conflict, setConflict] = useState("");
-  const [archiveOpen, setArchiveOpen] = useState(false);
+  const [archiving, setArchiving] = useState(false);
   const [pendingAction, setPendingAction] = useState<PendingAction>(null);
   /* What the revision about to be activated depends on, fetched when the
    * action is chosen; "unavailable" when the check itself failed, in
@@ -475,7 +395,7 @@ export function PipelineViewScreen({
     let stale = false;
     const revision = pendingAction.revision.revision;
     api
-      .requestApprovalPipelineRevisionReferences(agentSlug, revision)
+      .requestApprovalPipelineRevisionReferences(pipelineKey, revision)
       .then((result) => {
         if (!stale) setReferences(result);
       })
@@ -485,7 +405,7 @@ export function PipelineViewScreen({
     return () => {
       stale = true;
     };
-  }, [pendingAction, agentSlug]);
+  }, [pendingAction, pipelineKey]);
 
   /* Editing state: draft accumulates changes against a baseline
    * snapshot taken when editing starts. */
@@ -505,22 +425,25 @@ export function PipelineViewScreen({
     editing ? pathTarget((latest ?? displayed)?.default_escalation_path, roster) : null,
   );
   const [baselineDefault, setBaselineDefault] = useState<ReviewerTarget | null>(draftDefault);
-  /* The one expanded card, as `${section}/${block id}`, so the folded
-   * organization section and this one never open each other's cards. */
+  /* The pipeline's name under edit: renaming is a revision too. */
+  const [draftName, setDraftName] = useState(pipelineName);
+  const [baselineName, setBaselineName] = useState(pipelineName);
+  /* The one expanded card, as `${pipeline key}/${block id}`, so a
+   * delegated pipeline's well and this one never open each other's
+   * cards. */
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
-  const [orgFoldOpen, setOrgFoldOpen] = useState(false);
   const [mode, setMode] = useState<"blocks" | "json">("blocks");
   const [jsonText, setJsonText] = useState("");
   const [jsonError, setJsonError] = useState("");
   const [saving, setSaving] = useState(false);
 
   /* Testing: a dialog collects the sample, then the rail replays the
-   * evaluation block by block. */
+   * evaluation block by block, delegated pipelines included. */
   const [testOpen, setTestOpen] = useState(false);
   const [test, setTest] = useState<TestRun | null>(null);
   const [cursor, setCursor] = useState(0);
   const [sampleText, setSampleText] = useState(() =>
-    JSON.stringify(page.sample ?? defaultSample(organization ? "example" : agentSlug), null, 2),
+    JSON.stringify(page.sample ?? defaultSample(), null, 2),
   );
   const settled = test !== null && cursor >= test.steps.length;
 
@@ -529,25 +452,15 @@ export function PipelineViewScreen({
   const railEditor = useRailEditor(setDraft, () => setExpandedKey(null));
 
   const directory = roster;
-  /* This page's own section: the organization's, or an agent's. */
-  const ownSection: RailSection = organization ? "organization" : "agent";
 
   /* An archived pipeline remains readable, but has no active revision. */
   const archived = archivedAt !== null;
   const editable = canWrite && !archived;
   const activeNumber = archived ? null : (activeRevision?.revision ?? null);
   const viewingInactive = displayed !== null && displayed.revision !== activeNumber;
-  const orgBlocks = useMemo(
-    () => draftsFromBlocks(orgActive?.blocks ?? [], directory),
-    [orgActive, directory],
-  );
   const viewBlocks = useMemo(
     () => draftsFromBlocks(displayed?.blocks ?? [], directory),
     [displayed, directory],
-  );
-  const orgDefault = useMemo(
-    () => pathTarget(orgActive?.default_escalation_path, directory),
-    [orgActive, directory],
   );
   const viewDefault = useMemo(
     () => pathTarget(displayed?.default_escalation_path, directory),
@@ -564,20 +477,19 @@ export function PipelineViewScreen({
   }, [editing, mode, jsonText, directory]);
   const currentDefault = editing ? (jsonDraft ? jsonDraft.target : draftDefault) : viewDefault;
 
-  const effectiveDefault = currentDefault ?? orgDefault;
+  /* What no default means here: the queue for the entry pipeline, and
+   * the delegating pipeline's own default for any other. */
+  const inheritedLabel = entry ? "Any authorized reviewer" : "The delegating pipeline's default";
   const describeTargetRoute = (target: ReviewerTarget | null) =>
-    target ? "" : `Uses pipeline default: ${effectiveDefault?.name ?? "Any authorized reviewer"}.`;
-  const defaultRoute = editing && effectiveDefault ? (
+    target ? "" : `Uses pipeline default: ${currentDefault?.name ?? inheritedLabel}.`;
+  const defaultRoute = editing && currentDefault ? (
     <div className="flex flex-wrap items-center gap-1 text-micro text-ink-muted">
-      {!currentDefault ? <span>Uses organization default:</span> : null}
-      <TargetBadge target={effectiveDefault} />
+      <TargetBadge target={currentDefault} />
     </div>
   ) : undefined;
-  /* Every condition the saved pipelines test, branches' included. */
-  const savedConditions = useMemo(
-    () => [...allConditions(viewBlocks), ...allConditions(orgBlocks)],
-    [viewBlocks, orgBlocks],
-  );
+  /* Every condition the saved pipeline tests, branches' and delegates'
+   * included. */
+  const savedConditions = useMemo(() => allConditions(viewBlocks), [viewBlocks]);
   /* Fields to pick from: the fixed ones, then what the agents have
    * actually sent, then what saved conditions compare, then whatever the
    * current sample holds. */
@@ -592,16 +504,25 @@ export function PipelineViewScreen({
     conditionValueSuggestions(savedConditions),
   ), [page.valueSuggestions, sampleText, savedConditions]);
   const railBlocks = editing ? (jsonDraft?.blocks ?? draft) : viewBlocks;
-  const orgReachability = pipelineReachability(orgBlocks);
-  const reachability = pipelineReachability(railBlocks, organization ? undefined : orgReachability.stoppedBy);
-  const organizationStop = organization ? reachability.stoppedBy : orgReachability.stoppedBy;
-  /* Positions run across the effective pipeline: an agent's section
-   * starts after the organization's top-level blocks. */
-  const offset = organization ? 0 : orgBlocks.length;
-  const orgBlockCount = countDrafts(orgBlocks);
-  const finalContinuation = organization
-    ? "Otherwise, continue to the agent's pipeline"
-    : "Otherwise";
+  const reachability = pipelineReachability(railBlocks);
+
+  /* The wells under delegate blocks draw the targets' active revisions.
+   * The loader brought the saved ones; a target first named while
+   * editing is fetched here, once. */
+  const [delegates, setDelegates] = useState(page.delegates);
+  useEffect(() => setDelegates(page.delegates), [page]);
+  const wanted = delegatedKeys(railBlocks).filter((key) => !(key in delegates) && key !== pipelineKey);
+  const wantedKey = wanted.join("\n");
+  useEffect(() => {
+    if (!wantedKey) return;
+    let stale = false;
+    void loadDelegateTargets(wantedKey.split("\n"), roster).then((loaded) => {
+      if (!stale) setDelegates((current) => ({ ...loaded, ...current }));
+    });
+    return () => {
+      stale = true;
+    };
+  }, [wantedKey, roster]);
 
   /* A sample handed over by the overview's Test request replays as soon
    * as the pipeline is on screen. The ref keeps StrictMode's doubled
@@ -609,7 +530,7 @@ export function PipelineViewScreen({
   const handedOff = useRef(false);
   useEffect(() => {
     if (handedOff.current) return;
-    const text = takeTestSample(agentSlug);
+    const text = takeTestSample(pipelineKey);
     if (text === null) return;
     handedOff.current = true;
     setSampleText(text);
@@ -642,6 +563,7 @@ export function PipelineViewScreen({
     if (count === 0 && (pathKeyOf(draftDefault) ?? "") !== (pathKeyOf(baselineDefault) ?? "")) {
       count = 1;
     }
+    if (count === 0 && draftName.trim() !== baselineName.trim()) count = 1;
     if (
       count === 0 &&
       mode === "json" &&
@@ -650,7 +572,7 @@ export function PipelineViewScreen({
       count = 1;
     }
     return count;
-  }, [editing, draft, baseline, draftDefault, baselineDefault, mode, jsonText]);
+  }, [editing, draft, baseline, draftDefault, baselineDefault, draftName, baselineName, mode, jsonText]);
 
   /* Editing starts from the latest revision, which is also the baseline
    * the unsaved count is measured against. Starting from an earlier
@@ -665,6 +587,8 @@ export function PipelineViewScreen({
     setBaseline(baselineDrafts);
     setDraftDefault(from ? pathTarget(origin?.default_escalation_path, directory) : baselineTarget);
     setBaselineDefault(baselineTarget);
+    setDraftName(revision?.name ?? pipelineName);
+    setBaselineName(revision?.name ?? pipelineName);
     setMode("blocks");
     setJsonError("");
     setExpandedKey(null);
@@ -675,7 +599,7 @@ export function PipelineViewScreen({
    * before the editor opens on them. */
   async function startEditFrom(summary: RequestApprovalPipelineRevisionSummary) {
     try {
-      const revision = await api.requestApprovalPipelineRevision(agentSlug, summary.revision);
+      const revision = await api.requestApprovalPipelineRevision(pipelineKey, summary.revision);
       startEdit(revision);
       toast.add({
         title: `Editing from revision ${summary.revision}`,
@@ -701,6 +625,7 @@ export function PipelineViewScreen({
   function discard() {
     setDraft(baseline);
     setDraftDefault(baselineDefault);
+    setDraftName(baselineName);
     setJsonText(JSON.stringify(documentFromDrafts(baseline, baselineDefault), null, 2));
     setJsonError("");
   }
@@ -719,7 +644,11 @@ export function PipelineViewScreen({
         return;
       }
     }
-    const problem = validateDrafts(next, { offset });
+    if (!draftName.trim()) {
+      toast.add({ type: "deny", title: "The revision is not ready", description: "The pipeline needs a name." });
+      return;
+    }
+    const problem = validateDrafts(next, { pipelineKey });
     if (problem) {
       toast.add({ type: "deny", title: "The revision is not ready", description: problem });
       return;
@@ -727,19 +656,27 @@ export function PipelineViewScreen({
     setSaving(true);
     try {
       const revision = await api.createRequestApprovalPipelineRevision(
-        agentSlug,
-        documentFromDrafts(next, nextDefault),
+        pipelineKey,
+        { name: draftName.trim(), ...documentFromDrafts(next, nextDefault) },
       );
       await revisionActivation.offer({
         revision: revision.revision,
         activeRevision: activeRevision?.revision ?? null,
         canActivate,
         activationDescription: "Once active, new requests use this pipeline revision.",
-        activate: () => api.activateRequestApprovalPipelineRevision(agentSlug, revision.revision, activeRevision.revision),
+        activate: () => api.activateRequestApprovalPipelineRevision(pipelineKey, revision.revision, activeRevision.revision),
       });
       setEditing(false);
       await router.invalidate();
     } catch (reason) {
+      if (reason instanceof RequestError && reason.code === "request_approval_pipeline_not_found") {
+        toast.add({
+          type: "deny",
+          title: "The revision could not be created",
+          description: "A delegate block names a pipeline that does not exist or is archived. Choose another pipeline.",
+        });
+        return;
+      }
       toast.add({
         type: "deny",
         title: "The revision could not be created",
@@ -754,51 +691,24 @@ export function PipelineViewScreen({
     return runTestWith(sampleText);
   }
 
+  /* One preview runs the whole effective pipeline: this document, and the
+   * active revision of every pipeline its delegates hand to. */
   async function runTestWith(text: string): Promise<string | null> {
     try {
       const sample = JSON.parse(text) as ReturnType<typeof defaultSample>;
-      const selfBlocks = editing ? draft : viewBlocks;
-      const previews: { section: RailSection; preview: RequestApprovalPipelinePreview }[] = [];
-      if (!organization && orgBlocks.length) {
-        const orgPreview = await api.previewRequestApprovalPipeline(
-          "",
-          documentFromDrafts(orgBlocks, orgDefault),
-          sample,
-        );
-        previews.push({ section: "organization", preview: orgPreview });
-        /* Anything but running through ends the run in the organization
-         * section: a decision, a failure, or the end of a branch. */
-        if (orgPreview.reason_code !== "end_of_pipeline") {
-          setRun(runFromPreviews(previews));
-          return null;
-        }
-        /* What the organization blocks returned is visible to the
-         * agent's blocks, exactly as at runtime. */
-        const carried = carriedMetadata(orgPreview);
-        if (Object.keys(carried).length) {
-          sample.previous_metadata = { ...sample.previous_metadata, organization: carried };
-        }
-      }
+      const blocks = editing ? draft : viewBlocks;
       const preview = await api.previewRequestApprovalPipeline(
-        agentSlug,
-        documentFromDrafts(selfBlocks, currentDefault),
+        pipelineKey,
+        documentFromDrafts(blocks, currentDefault),
         sample,
       );
-      previews.push({ section: ownSection, preview });
-      setRun(runFromPreviews(previews, organization));
+      setTestOpen(false);
+      setTest(runFromPreview(preview));
+      setCursor(0);
       return null;
     } catch (reason) {
       return reason instanceof Error ? reason.message : "The test could not be run.";
     }
-  }
-
-  function setRun(run: TestRun) {
-    setTestOpen(false);
-    if (!organization && run.steps.some((step) => step.section === "organization")) {
-      setOrgFoldOpen(true);
-    }
-    setTest(run);
-    setCursor(0);
   }
 
   function switchMode(next: string) {
@@ -823,7 +733,7 @@ export function PipelineViewScreen({
   async function activate(revision: RequestApprovalPipelineRevisionSummary) {
     if (activeNumber === null) return;
     try {
-      await api.activateRequestApprovalPipelineRevision(agentSlug, revision.revision, activeNumber);
+      await api.activateRequestApprovalPipelineRevision(pipelineKey, revision.revision, activeNumber);
       setConflict("");
       toast.add({
         type: "approve",
@@ -846,23 +756,12 @@ export function PipelineViewScreen({
       await router.invalidate();
       return;
     }
-    if (reason instanceof RequestError && reason.code === "escalation_path_inactive") {
-      const keys = (reason.details?.escalation_paths as string[] | undefined) ?? [];
-      toast.add({
-        type: "deny",
-        title: "Activation refused",
-        description: `${keys.length === 1 ? "Escalation path" : "Escalation paths"} ${keys.join(", ")} ${keys.length === 1 ? "has" : "have"} no active revision. Activate one, then try again.`,
-      });
-      return;
-    }
-    if (reason instanceof RequestError && reason.code === "webhook_endpoint_inactive") {
-      const keys = (reason.details?.webhook_endpoints as string[] | undefined) ?? [];
-      toast.add({
-        type: "deny",
-        title: "Activation refused",
-        description: `${keys.length === 1 ? "Webhook endpoint" : "Webhook endpoints"} ${keys.join(", ")} ${keys.length === 1 ? "has" : "have"} no active revision. Activate one, then try again.`,
-      });
-      return;
+    if (reason instanceof RequestError) {
+      const refused = activationRefusal(reason);
+      if (refused) {
+        toast.add({ type: "deny", title: "Activation refused", description: refused });
+        return;
+      }
     }
     toast.add({
       type: "deny",
@@ -871,12 +770,41 @@ export function PipelineViewScreen({
     });
   }
 
+  async function archive() {
+    try {
+      await api.archiveRequestApprovalPipeline(pipelineKey);
+      setArchiving(false);
+      toast.add({
+        title: "Pipeline archived",
+        description: "It stays readable, but no revision can be activated and no pipeline can delegate to it.",
+      });
+      await navigate({ to: "/pipelines" });
+    } catch (reason) {
+      if (reason instanceof RequestError && reason.code === "request_approval_pipeline_in_use") {
+        /* Another administrator activated a revision delegating here
+         * after the page loaded; reload so the dialog lists it. */
+        await router.invalidate();
+        toast.add({
+          type: "deny",
+          title: "Archive refused",
+          description: "An active pipeline revision delegates to this pipeline. The pipelines using it are listed.",
+        });
+        return;
+      }
+      toast.add({
+        type: "deny",
+        title: "Archive failed",
+        description: reason instanceof Error ? reason.message : undefined,
+      });
+    }
+  }
+
   async function openRevision(summary: RequestApprovalPipelineRevisionSummary) {
     const request = ++revisionRequest.current;
     try {
       const revision = summary.revision === activeNumber && activeRevision
         ? activeRevision
-        : await api.requestApprovalPipelineRevision(agentSlug, summary.revision);
+        : await api.requestApprovalPipelineRevision(pipelineKey, summary.revision);
       if (request !== revisionRequest.current) return;
       setSelection({ page, revision });
       setTest(null);
@@ -901,15 +829,21 @@ export function PipelineViewScreen({
     return names;
   }, [roster]);
 
-  /* What every rail on the page shares; each section adds its own. */
-  const railShared = {
+  /* The rail's state: viewed or edited, under this pipeline's key. */
+  const rail: RailState = {
+    mode: editing ? "edit" : "view",
+    section: pipelineKey,
+    reachability,
     directory,
     endpoints: endpointOptions,
+    pipelines,
+    delegates,
+    onOpenPipeline: (key) => void navigate(pipelineLink(key)),
     tools: page.toolSchemas,
     suggestions,
     valueSuggestions,
     valueDetails: page.valueDetails,
-    defaultTarget: effectiveDefault,
+    defaultTarget: currentDefault,
     describeRoute: describeTargetRoute,
     expandedKey,
     onExpandedKeyChange: setExpandedKey,
@@ -917,38 +851,28 @@ export function PipelineViewScreen({
     cursor,
     availability,
     onManageEndpoints: () => window.open("/webhooks", "_blank", "noopener,noreferrer"),
-  } satisfies Omit<RailState, "mode" | "section" | "offset" | "reachability">;
-  /* This page's own section, viewed or edited. */
-  const ownRail: RailState = {
-    ...railShared,
-    mode: editing ? "edit" : "view",
-    section: ownSection,
-    offset,
-    reachability,
     highlight: highlightedBlock ? { id: highlightedBlock, ref: blockRef } : undefined,
     editor: editing ? railEditor.editor : undefined,
   };
-  /* The organization section folded above an agent's pipeline: always
-   * read only, whatever this page is doing. */
-  const orgRail: RailState = {
-    ...railShared,
-    mode: "view",
-    section: "organization",
-    offset: 0,
-    reachability: orgReachability,
-  };
+
+  /* Who hands requests to this pipeline, one chip per delegating
+   * pipeline. */
+  const delegatingKeys = useMemo(
+    () => [...new Set(uses.map((use) => use.pipeline_key))],
+    [uses],
+  );
 
   if (missing) {
     return (
       <Page width="wide">
         <PageHeader back={<PageBackLink to="/pipelines">Approval pipelines</PageBackLink>}>
           <h1 className="text-title-lg text-ink">
-            <PipelineTitle agentSlug={agentSlug} />
+            <span className="font-mono text-[19px]">{pipelineKey}</span>
           </h1>
         </PageHeader>
-        <Callout tone="warn" icon={<AlertIcon width={15} height={15} />} title="No agent has this slug">
-          A pipeline appears here when an agent with this slug is created. Check the slug on the
-          agent, or open one of the pipelines on the overview.
+        <Callout tone="warn" icon={<AlertIcon width={15} height={15} />} title="No pipeline has this key">
+          A pipeline appears here once it is created on the overview. Check the key, or open one of
+          the pipelines listed there.
         </Callout>
       </Page>
     );
@@ -966,7 +890,7 @@ export function PipelineViewScreen({
           const blocker = reachability.blockedBy.get(block.id);
           return blocker ? (
             <UnreachableNotice key={block.id} block={blocker}>
-              Block {positionLabel(path, offset)} “{block.name || block.id}” cannot run.
+              Block {positionLabel(path)} “{block.name || block.id}” cannot run.
             </UnreachableNotice>
           ) : null;
         }) : null}
@@ -982,14 +906,14 @@ export function PipelineViewScreen({
         />
       </div>
     ) : (
-      <RailProvider value={ownRail}>
+      <RailProvider value={rail}>
         <div className="flex flex-col">
           <PipelineRail
             blocks={railBlocks}
-            lastLabel={finalContinuation}
-            emptyText={organization
-              ? "No checks here yet. Requests continue to their agent's pipeline."
-              : "No pipeline for this agent yet. Add steps by editing."}
+            lastLabel="Otherwise"
+            emptyText={entry
+              ? "No checks here yet. Every request goes to the default reviewers below."
+              : "No blocks in this pipeline yet. Add steps by editing."}
           />
         </div>
       </RailProvider>
@@ -1008,13 +932,11 @@ export function PipelineViewScreen({
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <h1 ref={headingRef} tabIndex={-1} className="scroll-mt-8 text-title-lg text-ink">
-                <PipelineTitle agentSlug={agentSlug} agentName={agentName} />
+                {editing ? draftName.trim() || pipelineName : displayed?.name ?? pipelineName}
               </h1>
-              {agentName ? (
-                <Badge>
-                  <span className="font-mono text-[12px]">{agentSlug}</span>
-                </Badge>
-              ) : null}
+              <Badge>
+                <span className="font-mono text-[12px]">{pipelineKey}</span>
+              </Badge>
               {editing ? (
                 <Badge tone="accent">
                   Draft revision {(latest?.revision ?? 0) + 1}
@@ -1028,9 +950,9 @@ export function PipelineViewScreen({
               ) : null}
             </div>
             <p className="mt-1.5 max-w-[620px] text-body text-ink-muted">
-              {organization
-                ? "Every request starts here. Blocks are checked from top to bottom until one approves, denies, or asks a human. Otherwise, the request continues to its agent's pipeline."
-                : <>After the <Referenced reference={{ kind: "pipeline", agentSlug: "" }} inline>organization pipeline</Referenced> runs without an action, this pipeline then runs. Define rules that automatically approve, deny or route requests to a human.</>}
+              {entry
+                ? "Every request starts here. Blocks are checked from top to bottom until one approves, denies, or asks a human. A delegate block hands matching requests to another pipeline."
+                : "Requests reach this pipeline through delegate blocks in other pipelines. Blocks are checked from top to bottom until one approves, denies, or asks a human."}
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-2 self-end sm:self-auto">
@@ -1056,7 +978,7 @@ export function PipelineViewScreen({
                 </Button>
               ) : null
             )}
-            {editable || (!organization && !archived && !editing) ? (
+            {editable || (!entry && !archived && !editing && canActivate) ? (
               <Menu
                 actions={[
                   ...(editable
@@ -1066,12 +988,12 @@ export function PipelineViewScreen({
                         action: () => setTestOpen(true),
                       }]
                     : []),
-                  ...(!organization && !archived && !editing
+                  ...(!entry && !archived && !editing && canActivate
                     ? [{
                         id: "archive",
                         label: "Archive pipeline",
                         danger: true,
-                        action: () => setArchiveOpen(true),
+                        action: () => setArchiving(true),
                       }]
                     : []),
                 ]}
@@ -1092,12 +1014,8 @@ export function PipelineViewScreen({
 
       {archived ? (
         <Callout tone="warn" title="This pipeline is archived">
-          The agent{" "}
-          <Referenced reference={{ kind: "agent", slug: agentSlug, name: agentName ?? agentSlug }} inline>
-            <span className="font-mono text-[12px]">{agentSlug}</span>
-          </Referenced>{" "}
-          was archived, and its pipeline went with it. Its revisions can still be viewed, but none
-          can be activated. Restoring the agent brings the pipeline back.
+          Its revisions can still be viewed, but none can be activated, no pipeline can delegate
+          to it, and its key cannot be reused.
         </Callout>
       ) : null}
       {conflict ? (
@@ -1121,72 +1039,35 @@ export function PipelineViewScreen({
         </Callout>
       ) : null}
 
+      {editing ? (
+        <TextField
+          label="Pipeline name"
+          value={draftName}
+          onChange={(event) => setDraftName(event.target.value)}
+          className="max-w-[380px]"
+          info="Shown wherever this pipeline is named. Renaming creates a revision like any other change."
+        />
+      ) : null}
+
       <div className="flex min-w-0 flex-col">
-        <PipelineEntryCard agentSlug={organization ? undefined : agentSlug} />
-        <PipelineConnector label="First, check organization rules" />
-
-        {!organization ? (
-          <>
-            <PipelineFoldedSection
-              title={
-                <span onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}>
-                  <Referenced reference={{ kind: "pipeline", agentSlug: "" }} inline>
-                    Organization pipeline
-                  </Referenced>
-                </span>
-              }
-              positionLabel={orgBlocks.length ? (orgBlocks.length === 1 ? "1" : `1–${orgBlocks.length}`) : undefined}
-              summary={
-                orgBlockCount
-                  ? `${orgBlockCount} ${orgBlockCount === 1 ? "block applies" : "blocks apply"} to every agent. Expand to see the checks.`
-                  : "No checks configured. Requests continue to the blocks below."
-              }
-              action={
-                <Menu
-                  actions={[
-                    {
-                      id: "edit",
-                      label: "Edit",
-                      disabled: !can("pipeline.write", { kind: "organization" }),
-                      action: () => void navigate({ to: "/pipelines/organization", search: { edit: true } }),
-                    },
-                    {
-                      id: "view",
-                      label: "View",
-                      action: () => void navigate({ to: "/pipelines/organization" }),
-                    },
-                  ]}
-                >
-                  <MenuTrigger
-                    render={
-                      <IconButton aria-label="Organization pipeline actions" size="sm">
-                        <EllipsisIcon width={15} height={15} />
-                      </IconButton>
-                    }
-                  />
-                  <MenuContent align="end" />
-                </Menu>
-              }
-              expanded={orgFoldOpen}
-              onExpandedChange={setOrgFoldOpen}
-            >
-              <RailProvider value={orgRail}>
-                <PipelineRail
-                  blocks={orgBlocks}
-                  lastLabel={<>Otherwise, continue to the <Referenced reference={{ kind: "pipeline", agentSlug }} inline>{agentName ?? <span className="font-mono text-[12px]">{agentSlug}</span>} pipeline</Referenced></>}
-                  emptyText="No organization blocks. Requests start here."
+        <PipelineEntryCard
+          title={entry ? "Approval requests start here" : "Requests arrive from other pipelines"}
+          description={entry ? undefined : delegatingKeys.length ? (
+            <span className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
+              <span>Handed here by</span>
+              {delegatingKeys.map((key) => (
+                <ReferenceChip
+                  key={key}
+                  reference={{ kind: "pipeline", pipelineKey: key, name: pipelines.find((option) => option.key === key)?.name ?? (key === ENTRY_PIPELINE_KEY ? "Entry pipeline" : undefined) }}
+                  link={pipelineLink(key)}
+                  inline
                 />
-              </RailProvider>
-            </PipelineFoldedSection>
-            {!organizationStop ? <PipelineConnector label={<>If no decision is made, continue to the <Referenced reference={{ kind: "pipeline", agentSlug }} inline>{agentName ?? <span className="font-mono text-[12px]">{agentSlug}</span>} pipeline</Referenced></>} /> : null}
-          </>
-        ) : null}
+              ))}
+            </span>
+          ) : "No active pipeline delegates here yet. Add a delegate block to the entry pipeline, or to another one, to send requests this way."}
+        />
+        <PipelineConnector label="Check the blocks in order" />
 
-        {organizationStop ? (
-          <Callout tone="warn" icon={<AlertIcon width={15} height={15} />} title="Agent pipelines are unreachable">
-            The organization pipeline stops at “{organizationStop.name || "Untitled block"}”. Requests cannot continue to agent pipelines.
-          </Callout>
-        ) : null}
         {blocksArea}
 
         {!reachability.stoppedBy && (editing || railBlocks.length === 0) ? <PipelineConnector /> : null}
@@ -1198,30 +1079,16 @@ export function PipelineViewScreen({
         <div
           className={cn(
             "rounded-lg transition-shadow duration-200",
-            settled &&
-              test &&
-              (test.reasonCode === "end_of_pipeline" || test.reasonCode === "end_of_section") &&
-              (organization ? "ring-2 ring-edge-strong" : "ring-2 ring-warn"),
+            settled && test && test.reasonCode === "end_of_pipeline" && "ring-2 ring-warn",
           )}
         >
-          {organization ? (
-            <ContinueCard
-              target={currentDefault}
-              directory={editing ? directory : undefined}
-              onTargetChange={editing ? setDraftDefault : undefined}
-              route={defaultRoute}
-            />
-          ) : (
-            <PipelineTerminusCard
-              target={editing ? currentDefault : effectiveDefault}
-              directory={editing ? directory : undefined}
-              onTargetChange={editing ? setDraftDefault : undefined}
-              fallbackLabel={
-                orgDefault ? `Organization default: ${orgDefault.name}` : "Any authorized reviewer"
-              }
-              route={defaultRoute}
-            />
-          )}
+          <PipelineTerminusCard
+            target={currentDefault}
+            directory={editing ? directory : undefined}
+            onTargetChange={editing ? setDraftDefault : undefined}
+            fallbackLabel={inheritedLabel}
+            route={defaultRoute}
+          />
         </div>
       </div>
 
@@ -1259,27 +1126,34 @@ export function PipelineViewScreen({
         />
       ) : null}
 
-      <Dialog open={archiveOpen} onOpenChange={setArchiveOpen}>
-        <DialogContent>
-          <DialogTitle>Archive pipeline</DialogTitle>
-          <DialogDescription>
-            An agent's pipeline is archived with the agent and restored with it. Open the agent to
-            archive it.
-          </DialogDescription>
-          <DialogFooter>
-            <DialogClose render={<Button variant="ghost">Close</Button>} />
-            <Button
-              variant="primary"
-              onClick={() => {
-                setArchiveOpen(false);
-                void navigate({ to: "/agents/$agentSlug", params: { agentSlug } });
-              }}
-            >
-              View agent
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {archiving && uses.length > 0 ? (
+        <Dialog open onOpenChange={(open) => !open && setArchiving(false)}>
+          <DialogContent>
+            <DialogTitle>This pipeline is in use</DialogTitle>
+            <DialogDescription>
+              {uses.length === 1
+                ? "An active pipeline revision delegates to this pipeline. Activate a revision of that pipeline without the delegate block, then archive this one."
+                : `${uses.length} active pipeline revisions delegate to this pipeline. Activate revisions of those pipelines without the delegate blocks, then archive this one.`}
+            </DialogDescription>
+            <DialogBody>
+              <PipelineUseList uses={uses} />
+            </DialogBody>
+            <DialogFooter>
+              <DialogClose render={<Button variant="ghost">Close</Button>} />
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      ) : archiving ? (
+        <ConfirmDialog
+          open
+          onOpenChange={(open) => !open && setArchiving(false)}
+          title={`Archive ${pipelineName}?`}
+          description="The pipeline keeps its revisions for the record and requests already in progress keep the revision they pinned, but it is never active again, no pipeline can delegate to it, and its key cannot be reused. This cannot be undone."
+          confirmLabel="Archive pipeline"
+          typeToConfirm={pipelineName}
+          onConfirm={archive}
+        />
+      ) : null}
 
       <TestRequestDialog
         open={testOpen}
@@ -1334,9 +1208,43 @@ export function PipelineViewScreen({
   );
 }
 
-/* What blocks activating a revision: the paths, endpoints, and block
- * runtimes that are no longer in place. Healthy dependencies are not
- * listed; the dialog is for what to restore. */
+/* Why the server refused to activate a revision, as a sentence for the
+ * toast; null for an error that is not an activation refusal. */
+export function activationRefusal(reason: RequestError): string | null {
+  const keys = (name: string) => (reason.details?.[name] as string[] | undefined) ?? [];
+  const list = (items: string[], singular: string, plural: string) =>
+    `${items.length === 1 ? singular : plural} ${items.join(", ")} ${items.length === 1 ? "has" : "have"}`;
+  switch (reason.code) {
+    case "escalation_path_inactive": {
+      const paths = keys("escalation_paths");
+      return `${list(paths, "Escalation path", "Escalation paths")} no active revision. Activate one, then try again.`;
+    }
+    case "webhook_endpoint_inactive": {
+      const endpoints = keys("webhook_endpoints");
+      return `${list(endpoints, "Webhook endpoint", "Webhook endpoints")} no active revision. Activate one, then try again.`;
+    }
+    case "request_approval_pipeline_inactive": {
+      const pipelines = keys("pipelines");
+      return `${list(pipelines, "Pipeline", "Pipelines")} no active revision or ${pipelines.length === 1 ? "is" : "are"} archived. A delegate block cannot hand requests there.`;
+    }
+    case "request_approval_pipeline_delegation_cycle": {
+      const pipelines = keys("pipelines");
+      return `Activating it would make pipelines delegate in a circle${pipelines.length ? ` (${pipelines.join(" → ")})` : ""}. Remove one of the delegate blocks.`;
+    }
+    case "request_approval_pipeline_delegation_too_deep": {
+      const maximum = reason.details?.maximum;
+      return `Pipelines would delegate more than ${typeof maximum === "number" ? maximum : "the allowed number of"} levels deep. Flatten the chain.`;
+    }
+    case "request_approval_pipeline_too_large":
+      return "The entry pipeline and everything it delegates to would hold more blocks than a request can run. Remove blocks or delegate less.";
+    default:
+      return null;
+  }
+}
+
+/* What blocks activating a revision: the paths, endpoints, pipelines,
+ * and block runtimes that are no longer in place. Healthy dependencies
+ * are not listed; the dialog is for what to restore. */
 function RevisionDependencies({
   references,
   pathNames,
@@ -1346,6 +1254,7 @@ function RevisionDependencies({
 }) {
   const paths = references.escalation_paths.filter((path) => !path.active);
   const endpoints = references.webhook_endpoints.filter((endpoint) => !endpoint.active);
+  const pipelines = references.pipelines.filter((pipeline) => !pipeline.active);
   return (
     <ul className="flex flex-col gap-1.5">
       {paths.map((path) => (
@@ -1385,6 +1294,24 @@ function RevisionDependencies({
               <span className="font-mono text-[12px]">{endpoint.endpoint_key}</span>
             )}
             {describeReferrers(endpoint.block_keys, false)}
+          </span>
+        </li>
+      ))}
+      {pipelines.map((pipeline) => (
+        <li key={`pipeline-${pipeline.pipeline_key}`} className="flex items-center gap-2 text-body text-ink-secondary">
+          <Badge tone="deny">{pipeline.exists ? "Archived" : "Missing"}</Badge>
+          <span>
+            Pipeline{" "}
+            {pipeline.exists ? (
+              <ReferenceChip
+                reference={{ kind: "pipeline", pipelineKey: pipeline.pipeline_key, name: pipeline.name }}
+                link={pipelineLink(pipeline.pipeline_key)}
+                className="-my-1"
+              />
+            ) : (
+              <span className="font-mono text-[12px]">{pipeline.pipeline_key}</span>
+            )}
+            {describeReferrers(pipeline.block_keys, false)}
           </span>
         </li>
       ))}
@@ -1445,6 +1372,7 @@ function checkDocumentBlocks(blocks: unknown[], path: number[], keys: Map<string
         endpoint_key?: unknown;
         allowed_outcomes?: unknown;
         blocks?: unknown;
+        pipeline_key?: unknown;
       };
     };
     if (typeof block.id === "string") {
@@ -1486,6 +1414,17 @@ function checkDocumentBlocks(blocks: unknown[], path: number[], keys: Map<string
           throw new Error(`${label} is missing config.blocks, the blocks the branch runs.`);
         }
         checkDocumentBlocks(block.config.blocks, [...path, index + 1], keys);
+        break;
+      case "delegate":
+        if (!block.config?.when) {
+          throw new Error(`${label} is missing config.when.`);
+        }
+        if (typeof block.config.pipeline_key !== "string" || block.config.pipeline_key === "") {
+          throw new Error(`${label} is missing config.pipeline_key, the pipeline matching requests continue in.`);
+        }
+        if (block.config.pipeline_key === ENTRY_PIPELINE_KEY) {
+          throw new Error(`${label} cannot hand requests to the entry pipeline.`);
+        }
         break;
       default: {
         /* A kind the edition registered checks its own config; anything

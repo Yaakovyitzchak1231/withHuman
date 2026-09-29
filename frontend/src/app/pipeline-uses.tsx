@@ -4,13 +4,12 @@ import { pipelineLink } from "./pipeline-link";
 import { ReferenceChip } from "./reference-chip";
 
 /* The pipeline a use belongs to, as a chip that opens its card and
- * links to its page. */
+ * links to its page. The chip shows the key; the card names it. */
 export function PipelineUseLink({ use }: { use: PipelineUse }) {
-  const agentSlug = use.scope === "organization" ? "" : (use.agent_slug ?? "");
   return (
     <ReferenceChip
-      reference={{ kind: "pipeline", agentSlug }}
-      link={pipelineLink(agentSlug)}
+      reference={{ kind: "pipeline", pipelineKey: use.pipeline_key }}
+      link={pipelineLink(use.pipeline_key)}
     />
   );
 }

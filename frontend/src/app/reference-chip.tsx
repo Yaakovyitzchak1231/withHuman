@@ -63,13 +63,7 @@ function labelOf(reference: Reference): ReactNode {
     case "team_escalation_policy":
       return `${reference.teamName} policy`;
     case "pipeline":
-      return reference.agentSlug === "" ? (
-        "Organization pipeline"
-      ) : (
-        <>
-          <span className="font-mono text-[12px]">{reference.agentSlug}</span> pipeline
-        </>
-      );
+      return reference.name ?? <span className="font-mono text-[12px]">{reference.pipelineKey}</span>;
     case "tool":
       return <span className="font-mono text-[12px]">{reference.name}</span>;
     case "request":

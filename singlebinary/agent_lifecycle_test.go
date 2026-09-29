@@ -69,7 +69,6 @@ func testAgentLifecycleAPI(t *testing.T, api *apiClient) {
 	refuse(http.MethodPatch, path, map[string]any{"status": "disabled"}, "agent_archived")
 	refuse(http.MethodPost, "/api/v1/agents", map[string]any{"slug": "lifecycle", "name": "Lifecycle again"}, "agent_slug_taken")
 	api.postJSON("/api/v1/agents", map[string]any{"slug": "lifecycle-heir", "name": "Lifecycle robot"}, http.StatusCreated, nil)
-	api.request(http.MethodGet, "/api/v1/request-approval-pipelines/agents/lifecycle", nil, http.StatusNotFound, nil)
 	for _, listing := range []struct {
 		status string
 		want   []string
@@ -97,7 +96,7 @@ func testAgentLifecycleAPI(t *testing.T, api *apiClient) {
 	}
 
 	// Restore needs the name back: the heir holds it until renamed. Then
-	// the agent is active again and its pipeline is served once more.
+	// the agent is active again.
 	refuse(http.MethodPost, "/api/v1/agents/lifecycle/restore", nil, "agent_name_taken")
 	api.request(http.MethodPatch, "/api/v1/agents/lifecycle-heir", map[string]any{"name": "Lifecycle heir"}, http.StatusOK, nil)
 	var restored agentRecord
@@ -106,16 +105,6 @@ func testAgentLifecycleAPI(t *testing.T, api *apiClient) {
 		t.Fatalf("restored agent = %+v", restored)
 	}
 	refuse(http.MethodPost, "/api/v1/agents/lifecycle/restore", nil, "agent_not_archived")
-	var pipeline struct {
-		Scope     string `json:"scope"`
-		AgentSlug string `json:"agent_slug"`
-		Revision  int64  `json:"revision"`
-		IsActive  bool   `json:"is_active"`
-	}
-	api.request(http.MethodGet, "/api/v1/request-approval-pipelines/agents/lifecycle", nil, http.StatusOK, &pipeline)
-	if pipeline.Scope != "agent" || pipeline.AgentSlug != "lifecycle" || pipeline.Revision != 1 || !pipeline.IsActive {
-		t.Fatalf("restored pipeline = %+v", pipeline)
-	}
 	var none struct {
 		Agents []agentRecord `json:"agents"`
 	}

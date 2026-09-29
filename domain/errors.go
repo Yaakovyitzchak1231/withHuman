@@ -39,13 +39,38 @@ var (
 	// ErrAgentInstanceNameTaken refuses an instance name another instance
 	// of the same agent already carries.
 	ErrAgentInstanceNameTaken error = conflictError{"agent instance name is already taken"}
-	// ErrRequestApprovalPipelineArchived refuses appending to or
-	// activating within the pipeline of an archived agent.
+	// ErrRequestApprovalPipelineArchived refuses appending to, activating
+	// within, or archiving again a pipeline that was archived. Archived
+	// pipelines are read only.
 	ErrRequestApprovalPipelineArchived = errors.New("request approval pipeline is archived")
-	ErrAuthenticationStale             = errors.New("authentication is too old")
-	ErrAuthenticationWeak              = errors.New("authentication assurance is insufficient")
-	ErrSelfApproval                    = errors.New("self-approval is disabled")
-	ErrEmailMismatch                   = errors.New("authenticated email does not match the invitation")
+	// ErrRequestApprovalPipelineExists refuses creating a pipeline whose
+	// key was ever used, archived keys included.
+	ErrRequestApprovalPipelineExists = errors.New("request approval pipeline already exists")
+	// ErrRequestApprovalPipelineEntry refuses what the entry pipeline
+	// never allows: creating it again or archiving it.
+	ErrRequestApprovalPipelineEntry = errors.New("the entry pipeline cannot be created or archived")
+	// ErrRequestApprovalPipelineInUse refuses archiving a pipeline a
+	// delegate block in an active pipeline revision still names.
+	ErrRequestApprovalPipelineInUse = errors.New("request approval pipeline is in use")
+	// ErrRequestApprovalPipelineNotFound rejects a delegate block that
+	// names a pipeline key with no live revision in the organization.
+	ErrRequestApprovalPipelineNotFound = errors.New("request approval pipeline not found")
+	// ErrRequestApprovalPipelineInactive refuses activating a pipeline
+	// revision that delegates to a pipeline with no active revision.
+	ErrRequestApprovalPipelineInactive = errors.New("request approval pipeline has no active revision")
+	// ErrPipelineDelegationCycle refuses an activation that would let a
+	// request reach a pipeline it already passed through.
+	ErrPipelineDelegationCycle = errors.New("pipeline delegation forms a cycle")
+	// ErrPipelineDelegationTooDeep refuses an activation whose delegation
+	// chain exceeds MaximumDelegationDepth.
+	ErrPipelineDelegationTooDeep = errors.New("pipeline delegation is too deep")
+	// ErrEffectivePipelineTooLarge refuses an activation whose flattened
+	// effective pipeline exceeds MaximumEffectivePipelineBlocks.
+	ErrEffectivePipelineTooLarge = errors.New("effective pipeline is too large")
+	ErrAuthenticationStale       = errors.New("authentication is too old")
+	ErrAuthenticationWeak        = errors.New("authentication assurance is insufficient")
+	ErrSelfApproval              = errors.New("self-approval is disabled")
+	ErrEmailMismatch             = errors.New("authenticated email does not match the invitation")
 	// ErrUserExists refuses an unauthenticated admission that would attach
 	// an existing global account by email alone: the person must sign in
 	// to that account and accept from there.
@@ -164,6 +189,55 @@ func (err EscalationPathsInactiveError) Error() string {
 }
 
 func (err EscalationPathsInactiveError) Unwrap() error { return ErrEscalationPathInactive }
+
+// RequestApprovalPipelineInUseError carries the uses that refused
+// archiving a pipeline.
+type RequestApprovalPipelineInUseError struct {
+	PipelineKey string
+	Uses        []PipelineUse
+}
+
+func (err RequestApprovalPipelineInUseError) Error() string {
+	return fmt.Sprintf("%d active pipeline revision reference(s) delegate to pipeline %q: %v", len(err.Uses), err.PipelineKey, ErrRequestApprovalPipelineInUse)
+}
+
+func (err RequestApprovalPipelineInUseError) Unwrap() error { return ErrRequestApprovalPipelineInUse }
+
+// PipelinesInactiveError names the delegated pipelines that refused an
+// activation: each exists without an active revision or not at all.
+type PipelinesInactiveError struct {
+	PipelineKeys []string
+}
+
+func (err PipelinesInactiveError) Error() string {
+	return fmt.Sprintf("pipelines %v: %v", err.PipelineKeys, ErrRequestApprovalPipelineInactive)
+}
+
+func (err PipelinesInactiveError) Unwrap() error { return ErrRequestApprovalPipelineInactive }
+
+// PipelineDelegationCycleError names the keys on the cycle an activation
+// would close, in delegation order.
+type PipelineDelegationCycleError struct {
+	PipelineKeys []string
+}
+
+func (err PipelineDelegationCycleError) Error() string {
+	return fmt.Sprintf("pipelines %v: %v", err.PipelineKeys, ErrPipelineDelegationCycle)
+}
+
+func (err PipelineDelegationCycleError) Unwrap() error { return ErrPipelineDelegationCycle }
+
+// PipelineDelegationTooDeepError carries the depth an activation would
+// reach.
+type PipelineDelegationTooDeepError struct {
+	Depth int
+}
+
+func (err PipelineDelegationTooDeepError) Error() string {
+	return fmt.Sprintf("delegation depth %d exceeds %d: %v", err.Depth, MaximumDelegationDepth, ErrPipelineDelegationTooDeep)
+}
+
+func (err PipelineDelegationTooDeepError) Unwrap() error { return ErrPipelineDelegationTooDeep }
 
 // MembershipInEscalationPathError carries the active path revisions that
 // refused a suspension or deprovision, so the caller can name them and

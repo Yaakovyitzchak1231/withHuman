@@ -27,7 +27,8 @@ import { Route as AppAgentsAgentSlugRouteImport } from './routes/_app.agents_.$a
 import { Route as AppConnectAuthorizeRouteImport } from './routes/_app.connect_.authorize'
 import { Route as AppEscalationPathsPathKeyRouteImport } from './routes/_app.escalation-paths_.$pathKey'
 import { Route as AppEscalationPathsNewRouteImport } from './routes/_app.escalation-paths_.new'
-import { Route as AppPipelinesOrganizationRouteImport } from './routes/_app.pipelines_.organization'
+import { Route as AppPipelinesPipelineKeyRouteImport } from './routes/_app.pipelines_.$pipelineKey'
+import { Route as AppPipelinesNewRouteImport } from './routes/_app.pipelines_.new'
 import { Route as AppQueueRequestIdRouteImport } from './routes/_app.queue_.$requestId'
 import { Route as AppSettingsIndexRouteImport } from './routes/_app.settings.index'
 import { Route as AppSettingsAccountRouteImport } from './routes/_app.settings.account'
@@ -40,7 +41,6 @@ import { Route as AppSettingsPersonalApiKeysRouteImport } from './routes/_app.se
 import { Route as AppSettingsTeamsRouteImport } from './routes/_app.settings.teams'
 import { Route as AppSettingsToolPresentationsRouteImport } from './routes/_app.settings.tool-presentations'
 import { Route as AppWebhooksEndpointKeyRouteImport } from './routes/_app.webhooks_.$endpointKey'
-import { Route as AppPipelinesAgentsAgentSlugRouteImport } from './routes/_app.pipelines_.agents.$agentSlug'
 import { Route as AppSettingsNotificationsAddRouteImport } from './routes/_app.settings.notifications_.add'
 import { Route as AppSettingsPersonalApiKeysNewRouteImport } from './routes/_app.settings.personal-api-keys_.new'
 import { Route as AppSettingsToolPresentationsPresentationIdRouteImport } from './routes/_app.settings.tool-presentations_.$presentationId'
@@ -140,12 +140,16 @@ const AppEscalationPathsNewRoute = AppEscalationPathsNewRouteImport.update({
   path: '/escalation-paths/new',
   getParentRoute: () => AppRoute,
 } as any)
-const AppPipelinesOrganizationRoute =
-  AppPipelinesOrganizationRouteImport.update({
-    id: '/pipelines_/organization',
-    path: '/pipelines/organization',
-    getParentRoute: () => AppRoute,
-  } as any)
+const AppPipelinesPipelineKeyRoute = AppPipelinesPipelineKeyRouteImport.update({
+  id: '/pipelines_/$pipelineKey',
+  path: '/pipelines/$pipelineKey',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppPipelinesNewRoute = AppPipelinesNewRouteImport.update({
+  id: '/pipelines_/new',
+  path: '/pipelines/new',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppQueueRequestIdRoute = AppQueueRequestIdRouteImport.update({
   id: '/queue_/$requestId',
   path: '/queue/$requestId',
@@ -209,12 +213,6 @@ const AppWebhooksEndpointKeyRoute = AppWebhooksEndpointKeyRouteImport.update({
   path: '/webhooks/$endpointKey',
   getParentRoute: () => AppRoute,
 } as any)
-const AppPipelinesAgentsAgentSlugRoute =
-  AppPipelinesAgentsAgentSlugRouteImport.update({
-    id: '/pipelines_/agents/$agentSlug',
-    path: '/pipelines/agents/$agentSlug',
-    getParentRoute: () => AppRoute,
-  } as any)
 const AppSettingsNotificationsAddRoute =
   AppSettingsNotificationsAddRouteImport.update({
     id: '/settings/notifications_/add',
@@ -282,7 +280,8 @@ export interface FileRoutesByFullPath {
   '/connect/authorize': typeof AppConnectAuthorizeRoute
   '/escalation-paths/$pathKey': typeof AppEscalationPathsPathKeyRoute
   '/escalation-paths/new': typeof AppEscalationPathsNewRoute
-  '/pipelines/organization': typeof AppPipelinesOrganizationRoute
+  '/pipelines/$pipelineKey': typeof AppPipelinesPipelineKeyRoute
+  '/pipelines/new': typeof AppPipelinesNewRoute
   '/queue/$requestId': typeof AppQueueRequestIdRoute
   '/settings/account': typeof AppSettingsAccountRoute
   '/settings/appearance': typeof AppSettingsAppearanceRoute
@@ -295,7 +294,6 @@ export interface FileRoutesByFullPath {
   '/settings/tool-presentations': typeof AppSettingsToolPresentationsRoute
   '/webhooks/$endpointKey': typeof AppWebhooksEndpointKeyRoute
   '/settings/': typeof AppSettingsIndexRoute
-  '/pipelines/agents/$agentSlug': typeof AppPipelinesAgentsAgentSlugRoute
   '/settings/notifications/add': typeof AppSettingsNotificationsAddRoute
   '/settings/personal-api-keys/new': typeof AppSettingsPersonalApiKeysNewRoute
   '/settings/tool-presentations/$presentationId': typeof AppSettingsToolPresentationsPresentationIdRoute
@@ -323,7 +321,8 @@ export interface FileRoutesByTo {
   '/connect/authorize': typeof AppConnectAuthorizeRoute
   '/escalation-paths/$pathKey': typeof AppEscalationPathsPathKeyRoute
   '/escalation-paths/new': typeof AppEscalationPathsNewRoute
-  '/pipelines/organization': typeof AppPipelinesOrganizationRoute
+  '/pipelines/$pipelineKey': typeof AppPipelinesPipelineKeyRoute
+  '/pipelines/new': typeof AppPipelinesNewRoute
   '/queue/$requestId': typeof AppQueueRequestIdRoute
   '/settings/account': typeof AppSettingsAccountRoute
   '/settings/appearance': typeof AppSettingsAppearanceRoute
@@ -336,7 +335,6 @@ export interface FileRoutesByTo {
   '/settings/tool-presentations': typeof AppSettingsToolPresentationsRoute
   '/webhooks/$endpointKey': typeof AppWebhooksEndpointKeyRoute
   '/settings': typeof AppSettingsIndexRoute
-  '/pipelines/agents/$agentSlug': typeof AppPipelinesAgentsAgentSlugRoute
   '/settings/notifications/add': typeof AppSettingsNotificationsAddRoute
   '/settings/personal-api-keys/new': typeof AppSettingsPersonalApiKeysNewRoute
   '/settings/tool-presentations/$presentationId': typeof AppSettingsToolPresentationsPresentationIdRoute
@@ -366,7 +364,8 @@ export interface FileRoutesById {
   '/_app/connect_/authorize': typeof AppConnectAuthorizeRoute
   '/_app/escalation-paths_/$pathKey': typeof AppEscalationPathsPathKeyRoute
   '/_app/escalation-paths_/new': typeof AppEscalationPathsNewRoute
-  '/_app/pipelines_/organization': typeof AppPipelinesOrganizationRoute
+  '/_app/pipelines_/$pipelineKey': typeof AppPipelinesPipelineKeyRoute
+  '/_app/pipelines_/new': typeof AppPipelinesNewRoute
   '/_app/queue_/$requestId': typeof AppQueueRequestIdRoute
   '/_app/settings/account': typeof AppSettingsAccountRoute
   '/_app/settings/appearance': typeof AppSettingsAppearanceRoute
@@ -379,7 +378,6 @@ export interface FileRoutesById {
   '/_app/settings/tool-presentations': typeof AppSettingsToolPresentationsRoute
   '/_app/webhooks_/$endpointKey': typeof AppWebhooksEndpointKeyRoute
   '/_app/settings/': typeof AppSettingsIndexRoute
-  '/_app/pipelines_/agents/$agentSlug': typeof AppPipelinesAgentsAgentSlugRoute
   '/_app/settings/notifications_/add': typeof AppSettingsNotificationsAddRoute
   '/_app/settings/personal-api-keys_/new': typeof AppSettingsPersonalApiKeysNewRoute
   '/_app/settings/tool-presentations_/$presentationId': typeof AppSettingsToolPresentationsPresentationIdRoute
@@ -409,7 +407,8 @@ export interface FileRouteTypes {
     | '/connect/authorize'
     | '/escalation-paths/$pathKey'
     | '/escalation-paths/new'
-    | '/pipelines/organization'
+    | '/pipelines/$pipelineKey'
+    | '/pipelines/new'
     | '/queue/$requestId'
     | '/settings/account'
     | '/settings/appearance'
@@ -422,7 +421,6 @@ export interface FileRouteTypes {
     | '/settings/tool-presentations'
     | '/webhooks/$endpointKey'
     | '/settings/'
-    | '/pipelines/agents/$agentSlug'
     | '/settings/notifications/add'
     | '/settings/personal-api-keys/new'
     | '/settings/tool-presentations/$presentationId'
@@ -450,7 +448,8 @@ export interface FileRouteTypes {
     | '/connect/authorize'
     | '/escalation-paths/$pathKey'
     | '/escalation-paths/new'
-    | '/pipelines/organization'
+    | '/pipelines/$pipelineKey'
+    | '/pipelines/new'
     | '/queue/$requestId'
     | '/settings/account'
     | '/settings/appearance'
@@ -463,7 +462,6 @@ export interface FileRouteTypes {
     | '/settings/tool-presentations'
     | '/webhooks/$endpointKey'
     | '/settings'
-    | '/pipelines/agents/$agentSlug'
     | '/settings/notifications/add'
     | '/settings/personal-api-keys/new'
     | '/settings/tool-presentations/$presentationId'
@@ -492,7 +490,8 @@ export interface FileRouteTypes {
     | '/_app/connect_/authorize'
     | '/_app/escalation-paths_/$pathKey'
     | '/_app/escalation-paths_/new'
-    | '/_app/pipelines_/organization'
+    | '/_app/pipelines_/$pipelineKey'
+    | '/_app/pipelines_/new'
     | '/_app/queue_/$requestId'
     | '/_app/settings/account'
     | '/_app/settings/appearance'
@@ -505,7 +504,6 @@ export interface FileRouteTypes {
     | '/_app/settings/tool-presentations'
     | '/_app/webhooks_/$endpointKey'
     | '/_app/settings/'
-    | '/_app/pipelines_/agents/$agentSlug'
     | '/_app/settings/notifications_/add'
     | '/_app/settings/personal-api-keys_/new'
     | '/_app/settings/tool-presentations_/$presentationId'
@@ -654,11 +652,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppEscalationPathsNewRouteImport
       parentRoute: typeof AppRoute
     }
-    '/_app/pipelines_/organization': {
-      id: '/_app/pipelines_/organization'
-      path: '/pipelines/organization'
-      fullPath: '/pipelines/organization'
-      preLoaderRoute: typeof AppPipelinesOrganizationRouteImport
+    '/_app/pipelines_/$pipelineKey': {
+      id: '/_app/pipelines_/$pipelineKey'
+      path: '/pipelines/$pipelineKey'
+      fullPath: '/pipelines/$pipelineKey'
+      preLoaderRoute: typeof AppPipelinesPipelineKeyRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/pipelines_/new': {
+      id: '/_app/pipelines_/new'
+      path: '/pipelines/new'
+      fullPath: '/pipelines/new'
+      preLoaderRoute: typeof AppPipelinesNewRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/queue_/$requestId': {
@@ -745,13 +750,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppWebhooksEndpointKeyRouteImport
       parentRoute: typeof AppRoute
     }
-    '/_app/pipelines_/agents/$agentSlug': {
-      id: '/_app/pipelines_/agents/$agentSlug'
-      path: '/pipelines/agents/$agentSlug'
-      fullPath: '/pipelines/agents/$agentSlug'
-      preLoaderRoute: typeof AppPipelinesAgentsAgentSlugRouteImport
-      parentRoute: typeof AppRoute
-    }
     '/_app/settings/notifications_/add': {
       id: '/_app/settings/notifications_/add'
       path: '/settings/notifications/add'
@@ -823,7 +821,8 @@ interface AppRouteChildren {
   AppConnectAuthorizeRoute: typeof AppConnectAuthorizeRoute
   AppEscalationPathsPathKeyRoute: typeof AppEscalationPathsPathKeyRoute
   AppEscalationPathsNewRoute: typeof AppEscalationPathsNewRoute
-  AppPipelinesOrganizationRoute: typeof AppPipelinesOrganizationRoute
+  AppPipelinesPipelineKeyRoute: typeof AppPipelinesPipelineKeyRoute
+  AppPipelinesNewRoute: typeof AppPipelinesNewRoute
   AppQueueRequestIdRoute: typeof AppQueueRequestIdRoute
   AppSettingsAccountRoute: typeof AppSettingsAccountRoute
   AppSettingsAppearanceRoute: typeof AppSettingsAppearanceRoute
@@ -836,7 +835,6 @@ interface AppRouteChildren {
   AppSettingsToolPresentationsRoute: typeof AppSettingsToolPresentationsRoute
   AppWebhooksEndpointKeyRoute: typeof AppWebhooksEndpointKeyRoute
   AppSettingsIndexRoute: typeof AppSettingsIndexRoute
-  AppPipelinesAgentsAgentSlugRoute: typeof AppPipelinesAgentsAgentSlugRoute
   AppSettingsNotificationsAddRoute: typeof AppSettingsNotificationsAddRoute
   AppSettingsPersonalApiKeysNewRoute: typeof AppSettingsPersonalApiKeysNewRoute
   AppSettingsToolPresentationsPresentationIdRoute: typeof AppSettingsToolPresentationsPresentationIdRoute
@@ -859,7 +857,8 @@ const AppRouteChildren: AppRouteChildren = {
   AppConnectAuthorizeRoute: AppConnectAuthorizeRoute,
   AppEscalationPathsPathKeyRoute: AppEscalationPathsPathKeyRoute,
   AppEscalationPathsNewRoute: AppEscalationPathsNewRoute,
-  AppPipelinesOrganizationRoute: AppPipelinesOrganizationRoute,
+  AppPipelinesPipelineKeyRoute: AppPipelinesPipelineKeyRoute,
+  AppPipelinesNewRoute: AppPipelinesNewRoute,
   AppQueueRequestIdRoute: AppQueueRequestIdRoute,
   AppSettingsAccountRoute: AppSettingsAccountRoute,
   AppSettingsAppearanceRoute: AppSettingsAppearanceRoute,
@@ -872,7 +871,6 @@ const AppRouteChildren: AppRouteChildren = {
   AppSettingsToolPresentationsRoute: AppSettingsToolPresentationsRoute,
   AppWebhooksEndpointKeyRoute: AppWebhooksEndpointKeyRoute,
   AppSettingsIndexRoute: AppSettingsIndexRoute,
-  AppPipelinesAgentsAgentSlugRoute: AppPipelinesAgentsAgentSlugRoute,
   AppSettingsNotificationsAddRoute: AppSettingsNotificationsAddRoute,
   AppSettingsPersonalApiKeysNewRoute: AppSettingsPersonalApiKeysNewRoute,
   AppSettingsToolPresentationsPresentationIdRoute:

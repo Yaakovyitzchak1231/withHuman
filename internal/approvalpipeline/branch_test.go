@@ -39,23 +39,24 @@ func refundsPipeline() []approvalblock.Definition {
 }
 
 type branchScope struct {
-	slug        domain.AgentSlug
+	key         string
 	definitions []approvalblock.Definition
 	defaultPath string
 }
 
-// branchFixture activates each scope's document and returns an execution
-// service for the billing agent.
+// branchFixture activates each pipeline's document and returns an
+// execution service for the billing agent. The entry pipeline is what a
+// request runs; any other key is reached through a delegate block.
 func branchFixture(t *testing.T, now time.Time, registry *BlockRegistry, scopes ...branchScope) (*ExecutionService, *memoryPipelineRepository) {
 	t.Helper()
 	repository := newMemoryPipelineRepository()
 	management := NewManagementService(repository, NewCompiledPipelineState(repository, registry), fixedPipelineClock{now: now})
 	for _, scope := range scopes {
-		created, err := management.CreateRevision(context.Background(), pipelineManagerPrincipal("organization-1"), scope.slug, scope.definitions, scope.defaultPath)
+		created, err := management.CreateRevision(context.Background(), pipelineManagerPrincipal("organization-1"), scope.key, pipelineName(scope.key), scope.definitions, scope.defaultPath)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := management.Activate(context.Background(), pipelineManagerPrincipal("organization-1"), scope.slug, created.Revision.Revision, 1); err != nil {
+		if _, err := management.Activate(context.Background(), pipelineManagerPrincipal("organization-1"), scope.key, created.Revision.Revision, 1); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -104,9 +105,9 @@ func steps(evaluated []map[string]any) string {
 	return strings.Join(parts, " ")
 }
 
-func snapshotIDOf(t *testing.T, repository *memoryPipelineRepository, slug domain.AgentSlug, key string) domain.ID {
+func snapshotIDOf(t *testing.T, repository *memoryPipelineRepository, pipelineKey string, key string) domain.ID {
 	t.Helper()
-	for _, revision := range repository.revisions[slug] {
+	for _, revision := range repository.revisions[pipelineKey] {
 		if !revision.IsActive {
 			continue
 		}
@@ -116,13 +117,13 @@ func snapshotIDOf(t *testing.T, repository *memoryPipelineRepository, slug domai
 			}
 		}
 	}
-	t.Fatalf("no active block %q in scope %q", key, slug)
+	t.Fatalf("no active block %q in pipeline %q", key, pipelineKey)
 	return ""
 }
 
 func TestBranchIsSkippedByRequestsItsConditionDoesNotMatch(t *testing.T) {
 	now := time.Unix(3_000, 0).UTC()
-	service, _ := branchFixture(t, now, NewBlockRegistry(), branchScope{slug: "billing", definitions: refundsPipeline()})
+	service, _ := branchFixture(t, now, NewBlockRegistry(), branchScope{key: "entry", definitions: refundsPipeline()})
 	input, err := service.Evaluate(context.Background(), branchRequest(now, "deploy", `{"amount":5}`))
 	if err != nil {
 		t.Fatal(err)
@@ -144,7 +145,7 @@ func TestBranchIsSkippedByRequestsItsConditionDoesNotMatch(t *testing.T) {
 
 func TestBlocksInsideAnEnteredBranchDecide(t *testing.T) {
 	now := time.Unix(3_000, 0).UTC()
-	service, _ := branchFixture(t, now, NewBlockRegistry(), branchScope{slug: "billing", definitions: refundsPipeline()})
+	service, _ := branchFixture(t, now, NewBlockRegistry(), branchScope{key: "entry", definitions: refundsPipeline()})
 	for _, test := range []struct {
 		arguments string
 		status    domain.ApprovalStatus
@@ -168,7 +169,7 @@ func TestBlocksInsideAnEnteredBranchDecide(t *testing.T) {
 
 func TestABranchThatDecidesNothingAsksAHumanAndEndsThePipeline(t *testing.T) {
 	now := time.Unix(3_000, 0).UTC()
-	service, repository := branchFixture(t, now, NewBlockRegistry(), branchScope{slug: "billing", definitions: refundsPipeline(), defaultPath: "on-call"})
+	service, repository := branchFixture(t, now, NewBlockRegistry(), branchScope{key: "entry", definitions: refundsPipeline(), defaultPath: "on-call"})
 	input, err := service.Evaluate(context.Background(), branchRequest(now, "stripe.refund", `{"amount":50,"customer":"alice"}`))
 	if err != nil {
 		t.Fatal(err)
@@ -194,7 +195,7 @@ func TestABranchThatDecidesNothingAsksAHumanAndEndsThePipeline(t *testing.T) {
 	}
 	route := input.HumanReview
 	if route == nil || route.PathKey != "payments-review" || route.Reason != domain.RoutingReasonBlockEscalation ||
-		route.BlockID != snapshotIDOf(t, repository, "billing", "refunds") {
+		route.BlockID != snapshotIDOf(t, repository, "entry", "refunds") {
 		t.Fatalf("the branch's own path must take its end: %#v", route)
 	}
 	if err := input.Validate(); err != nil {
@@ -207,7 +208,7 @@ func TestABranchConditionThatFailsHandsTheRequestToTheDefault(t *testing.T) {
 	branch := branchDefinition("large", approvalblock.Field("/request/arguments/amount").GreaterThan(10),
 		alwaysDefinition("inside", approvalblock.Approve))
 	branch.Branch.EscalationPath = "payments-review"
-	service, _ := branchFixture(t, now, NewBlockRegistry(), branchScope{slug: "billing", definitions: []approvalblock.Definition{branch, alwaysDefinition("rest", approvalblock.Approve)}, defaultPath: "on-call"})
+	service, _ := branchFixture(t, now, NewBlockRegistry(), branchScope{key: "entry", definitions: []approvalblock.Definition{branch, alwaysDefinition("rest", approvalblock.Approve)}, defaultPath: "on-call"})
 	input, err := service.Evaluate(context.Background(), branchRequest(now, "stripe.refund", `{"amount":"12"}`))
 	if err != nil {
 		t.Fatal(err)
@@ -232,7 +233,7 @@ func TestAnInnerBranchEndEndsThePipeline(t *testing.T) {
 		),
 		pipelineDefinition("approve-rest", approvalblock.Approve, approvalblock.Field("/request/tool").Equals("stripe.refund")),
 	)
-	service, _ := branchFixture(t, now, NewBlockRegistry(), branchScope{slug: "billing", definitions: []approvalblock.Definition{outer, alwaysDefinition("everything-else", approvalblock.Deny)}})
+	service, _ := branchFixture(t, now, NewBlockRegistry(), branchScope{key: "entry", definitions: []approvalblock.Definition{outer, alwaysDefinition("everything-else", approvalblock.Deny)}})
 
 	large, err := service.Evaluate(context.Background(), branchRequest(now, "stripe.refund", `{"amount":500,"customer":"alice"}`))
 	if err != nil {
@@ -254,33 +255,34 @@ func TestAnInnerBranchEndEndsThePipeline(t *testing.T) {
 	}
 }
 
-func TestAnOrganizationBranchEndPreemptsTheAgentSection(t *testing.T) {
+func TestAnEntryBranchEndPreemptsADelegatedPipeline(t *testing.T) {
 	now := time.Unix(3_000, 0).UTC()
 	service, _ := branchFixture(t, now, NewBlockRegistry(),
-		branchScope{slug: "", definitions: []approvalblock.Definition{refundsBranch(
-			pipelineDefinition("never", approvalblock.Approve, approvalblock.Field("/request/tool").Equals("other")),
-		)}},
-		branchScope{slug: "billing", definitions: []approvalblock.Definition{alwaysDefinition("agent-approves", approvalblock.Approve)}},
+		branchScope{key: "billing", definitions: []approvalblock.Definition{alwaysDefinition("billing-approves", approvalblock.Approve)}},
+		branchScope{key: "entry", definitions: []approvalblock.Definition{
+			refundsBranch(pipelineDefinition("never", approvalblock.Approve, approvalblock.Field("/request/tool").Equals("other"))),
+			delegateDefinition("to-billing", "billing", approvalblock.Field("/agent/slug").Equals("billing")),
+		}},
 	)
 	input, err := service.Evaluate(context.Background(), branchRequest(now, "stripe.refund", `{}`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := steps(evaluatedEvents(t, input.AuditEvents)); got != "refunds:enter@0 never:next@1 refunds:human@0" || input.Decision != nil {
-		t.Fatalf("the agent section must not run after an organization branch end: %s", got)
+		t.Fatalf("the delegated pipeline must not run after an entry branch end: %s", got)
 	}
 	other, err := service.Evaluate(context.Background(), branchRequest(now, "deploy", `{}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := steps(evaluatedEvents(t, other.AuditEvents)); got != "refunds:next@0 agent-approves:approve@2" {
-		t.Fatalf("a skipped organization branch must reach the agent section: %s", got)
+	if got := steps(evaluatedEvents(t, other.AuditEvents)); got != "refunds:next@0 to-billing:enter@2 billing-approves:approve@3" {
+		t.Fatalf("a skipped entry branch must reach the delegate: %s", got)
 	}
 }
 
 func TestBlocksInsideABranchDoNotInheritItsEscalationPath(t *testing.T) {
 	now := time.Unix(3_000, 0).UTC()
-	service, _ := branchFixture(t, now, NewBlockRegistry(), branchScope{slug: "billing", defaultPath: "on-call", definitions: []approvalblock.Definition{
+	service, _ := branchFixture(t, now, NewBlockRegistry(), branchScope{key: "entry", defaultPath: "on-call", definitions: []approvalblock.Definition{
 		refundsBranch(pipelineDefinition("ask", approvalblock.Human, approvalblock.Field("/request/tool").Equals("stripe.refund"))),
 	}})
 	input, err := service.Evaluate(context.Background(), branchRequest(now, "stripe.refund", `{}`))
@@ -294,7 +296,7 @@ func TestBlocksInsideABranchDoNotInheritItsEscalationPath(t *testing.T) {
 
 func TestAnAlwaysInsideABranchStopsItsLaterBlocks(t *testing.T) {
 	now := time.Unix(3_000, 0).UTC()
-	service, _ := branchFixture(t, now, NewBlockRegistry(), branchScope{slug: "billing", definitions: []approvalblock.Definition{
+	service, _ := branchFixture(t, now, NewBlockRegistry(), branchScope{key: "entry", definitions: []approvalblock.Definition{
 		refundsBranch(alwaysDefinition("stop", approvalblock.Human), pipelineDefinition("unreachable", approvalblock.Approve, approvalblock.Field("/request/tool").Equals("stripe.refund"))),
 		alwaysDefinition("everything-else", approvalblock.Approve),
 	}})
@@ -323,7 +325,7 @@ func TestABranchAtTheBudgetFitsTheAuditCap(t *testing.T) {
 	for index := range children {
 		children[index] = pipelineDefinition(fmt.Sprintf("check-%d", index), approvalblock.Deny, approvalblock.Field("/request/tool").Equals("other"))
 	}
-	service, _ := branchFixture(t, now, NewBlockRegistry(), branchScope{slug: "billing", definitions: []approvalblock.Definition{
+	service, _ := branchFixture(t, now, NewBlockRegistry(), branchScope{key: "entry", definitions: []approvalblock.Definition{
 		branchDefinition("everything", approvalblock.Field("/request/tool").Exists(), children...),
 	}})
 	input, err := service.Evaluate(context.Background(), branchRequest(now, "deploy", `{}`))
@@ -514,7 +516,7 @@ func scriptedBranchFixture(t *testing.T, now time.Time, check *scriptedModel, sc
 func TestAnAsynchronousBlockInsideAMatchedBranchSuspendsAndResumesInside(t *testing.T) {
 	now := time.Unix(4_000, 0).UTC()
 	check := newScripted(scriptedOutcome(BlockApprove))
-	service, _ := scriptedBranchFixture(t, now, check, branchScope{slug: "", definitions: []approvalblock.Definition{
+	service, _ := scriptedBranchFixture(t, now, check, branchScope{key: "entry", definitions: []approvalblock.Definition{
 		branchDefinition("deploys", approvalblock.Field("/request/tool").Equals("deploy"),
 			scriptedDefinition()),
 	}})
@@ -543,7 +545,7 @@ func TestAnAsynchronousBlockInsideAMatchedBranchSuspendsAndResumesInside(t *test
 func TestAnAsynchronousBlockInASkippedBranchIsNeverCalled(t *testing.T) {
 	now := time.Unix(4_000, 0).UTC()
 	check := newScripted()
-	service, _ := scriptedBranchFixture(t, now, check, branchScope{slug: "", definitions: []approvalblock.Definition{
+	service, _ := scriptedBranchFixture(t, now, check, branchScope{key: "entry", definitions: []approvalblock.Definition{
 		branchDefinition("refunds", approvalblock.Field("/request/tool").Equals("stripe.refund"), scriptedDefinition()),
 		alwaysDefinition("everything-else", approvalblock.Approve),
 	}})
@@ -559,7 +561,7 @@ func TestAnAsynchronousBlockInASkippedBranchIsNeverCalled(t *testing.T) {
 func TestAnAsynchronousBlockThatContinuesAtTheEndOfItsBranchEndsTheBranch(t *testing.T) {
 	now := time.Unix(4_000, 0).UTC()
 	check := newScripted(scriptedOutcome(BlockNext))
-	service, _ := scriptedBranchFixture(t, now, check, branchScope{slug: "", definitions: []approvalblock.Definition{
+	service, _ := scriptedBranchFixture(t, now, check, branchScope{key: "entry", definitions: []approvalblock.Definition{
 		branchDefinition("deploys", approvalblock.Field("/request/tool").Equals("deploy"),
 			scriptedDefinition()),
 		alwaysDefinition("everything-else", approvalblock.Approve),
@@ -583,37 +585,41 @@ func TestAnAsynchronousBlockThatContinuesAtTheEndOfItsBranchEndsTheBranch(t *tes
 	}
 }
 
-func TestResumeReentersNestedBranchesAcrossSections(t *testing.T) {
+func TestResumeReentersNestedBranchesAcrossPipelines(t *testing.T) {
 	now := time.Unix(4_000, 0).UTC()
 	check := newScripted(scriptedOutcome(BlockNext))
 	service, _ := scriptedBranchFixture(t, now, check,
-		branchScope{slug: "", definitions: []approvalblock.Definition{
-			pipelineDefinition("deny-other", approvalblock.Deny, approvalblock.Field("/request/tool").Equals("other")),
-		}},
-		branchScope{slug: "billing", definitions: []approvalblock.Definition{
+		branchScope{key: "billing", definitions: []approvalblock.Definition{
 			branchDefinition("outer", approvalblock.Field("/request/tool").Equals("deploy"),
 				branchDefinition("inner", approvalblock.Field("/request/tool").Exists(),
 					scriptedDefinition()),
 				alwaysDefinition("after-inner", approvalblock.Approve),
 			),
 		}},
+		branchScope{key: "entry", definitions: []approvalblock.Definition{
+			pipelineDefinition("deny-other", approvalblock.Deny, approvalblock.Field("/request/tool").Equals("other")),
+			delegateDefinition("to-billing", "billing", approvalblock.Field("/agent/slug").Equals("billing")),
+		}},
 	)
 	initialization, err := service.Evaluate(context.Background(), executionRequest(now, "request-1", "key-1", "billing", json.RawMessage(`{}`)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	// deny-other 0 | outer 1, inner 2, refund-judge 3, after-inner 4
-	if initialization.Suspension == nil || initialization.Suspension.ResumePosition != 3 {
+	// deny-other 0, to-billing 1 | outer 2, inner 3, refund-check 4, after-inner 5
+	if initialization.Suspension == nil || initialization.Suspension.ResumePosition != 4 {
 		t.Fatalf("unexpected suspension: %#v", initialization.Suspension)
 	}
-	if got := steps(evaluatedEvents(t, initialization.AuditEvents)); got != "deny-other:next@0 outer:enter@1 inner:enter@2" {
+	if got := steps(evaluatedEvents(t, initialization.AuditEvents)); got != "deny-other:next@0 to-billing:enter@1 outer:enter@2 inner:enter@3" {
 		t.Fatalf("got steps %s", got)
+	}
+	if pins := initialization.Suspension.PinnedRevisions; len(pins) != 2 || pins["entry"] == "" || pins["billing"] == "" {
+		t.Fatalf("the suspension must pin every pipeline of the run: %#v", pins)
 	}
 	resume, err := service.Resume(context.Background(), initialization.Request, *initialization.Suspension)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := steps(evaluatedEvents(t, resume.AuditEvents)); got != "refund-check:next@3 inner:human@2" {
+	if got := steps(evaluatedEvents(t, resume.AuditEvents)); got != "refund-check:next@4 inner:human@3" {
 		t.Fatalf("the resumed segment must end the inner branch, not reach after-inner: %s", got)
 	}
 }
@@ -623,10 +629,10 @@ func TestAWebhookInsideABranchIsCalledOnlyForMatchingRequests(t *testing.T) {
 	deliverer := &fakeDeliverer{script: []scriptedDelivery{ok(`{"outcome":"next","metadata":{"risk_score":12}}`)}}
 	endpoints := &fakeEndpoints{endpoint: domain.WebhookEndpointRevision{ID: testEndpointRevisionID, EndpointKey: testEndpointKey, Revision: 1, IsActive: true, OrganizationID: "organization-1", Name: "fraud-service", URL: "https://fraud.example.com/hooks/approval"}, secret: "whsec_test"}
 	registry := NewBlockRegistry(WithWebhooks(WebhookRuntime{Endpoints: endpoints, Deliverer: deliverer, Backoff: func(int) time.Duration { return 0 }}), WithClock(fixedPipelineClock{now: now}))
-	service, _ := branchFixture(t, now, registry, branchScope{slug: "", definitions: []approvalblock.Definition{
+	service, _ := branchFixture(t, now, registry, branchScope{key: "entry", definitions: []approvalblock.Definition{
 		refundsBranch(
 			webhookDefinition(),
-			pipelineDefinition("approve-low-risk", approvalblock.Approve, approvalblock.Field("/previous_metadata/organization/fraud-check/risk_score").LessThan(50)),
+			pipelineDefinition("approve-low-risk", approvalblock.Approve, approvalblock.Field("/previous_metadata/entry/fraud-check/risk_score").LessThan(50)),
 		),
 		alwaysDefinition("everything-else", approvalblock.Deny),
 	}})
@@ -710,7 +716,7 @@ func TestManagementStoresReadsAndChecksNestedBlocks(t *testing.T) {
 	inner := pipelineDefinition("ask", approvalblock.Human, approvalblock.Field("/request/arguments/amount").GreaterThan(1000))
 	inner.CEL.EscalationPath = "fraud-team"
 	document[0].Branch.Blocks = append(document[0].Branch.Blocks, inner)
-	created, err := management.CreateRevision(context.Background(), pipelineManagerPrincipal("organization-1"), "billing", document, "on-call")
+	created, err := management.CreateRevision(context.Background(), pipelineManagerPrincipal("organization-1"), "billing", pipelineName("billing"), document, "on-call")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -736,7 +742,7 @@ func TestManagementStoresReadsAndChecksNestedBlocks(t *testing.T) {
 	}
 
 	gated := NewManagementService(repository, NewCompiledPipelineState(repository, NewBlockRegistry(withScripted(newScripted()), WithEntitlements(&denyingEntitlements{}))), fixedPipelineClock{now: now})
-	_, err = gated.CreateRevision(context.Background(), pipelineManagerPrincipal("organization-1"), "billing", []approvalblock.Definition{
+	_, err = gated.CreateRevision(context.Background(), pipelineManagerPrincipal("organization-1"), "billing", pipelineName("billing"), []approvalblock.Definition{
 		refundsBranch(scriptedDefinition()),
 	}, "")
 	if !errors.Is(err, domain.ErrForbidden) {

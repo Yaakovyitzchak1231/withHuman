@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
+	"slices"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -21,15 +23,26 @@ func insertPipelineSuspension(ctx context.Context, tx execer, suspension domain.
 	if suspension.PreviousMetadata == nil {
 		metadata = []byte(`{}`)
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO approval_request_pipeline_suspensions
-		(request_id, organization_id, pipeline_evaluation_id, organization_pipeline_id, agent_pipeline_id,
+	if _, err := tx.Exec(ctx, `INSERT INTO approval_request_pipeline_suspensions
+		(request_id, organization_id, pipeline_evaluation_id,
 		 resume_position, previous_metadata, attempted_block_count, total_attempts, total_cost, started_at, suspended_at)
-		VALUES ($1, $2, $3, NULLIF($4::text, '')::uuid, NULLIF($5::text, '')::uuid, $6, $7, $8, $9, $10, $11, $12)`,
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
 		suspension.RequestID, suspension.OrganizationID, suspension.EvaluationID,
-		suspension.OrganizationPipelineID, suspension.AgentPipelineID, suspension.ResumePosition, metadata,
+		suspension.ResumePosition, metadata,
 		suspension.AttemptedBlockCount, suspension.TotalAttempts, int64(suspension.TotalCost),
-		suspension.StartedAt, suspension.SuspendedAt)
-	return err
+		suspension.StartedAt, suspension.SuspendedAt); err != nil {
+		return err
+	}
+	// One pin per pipeline of the run, entered or not, so the worker
+	// flattens the same revisions into the same positions.
+	for _, key := range slices.Sorted(maps.Keys(suspension.PinnedRevisions)) {
+		if _, err := tx.Exec(ctx, `INSERT INTO approval_request_pipeline_suspension_pins
+			(request_id, organization_id, pipeline_key, pipeline_id) VALUES ($1, $2, $3, $4)`,
+			suspension.RequestID, suspension.OrganizationID, key, suspension.PinnedRevisions[key]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Store) GetPipelineSuspension(ctx context.Context, input application.GetPipelineSuspensionInput) (domain.PipelineSuspension, error) {
@@ -37,19 +50,18 @@ func (s *Store) GetPipelineSuspension(ctx context.Context, input application.Get
 		return domain.PipelineSuspension{}, err
 	}
 	var (
-		suspension                                  domain.PipelineSuspension
-		organizationPipelineID, agentTypePipelineID *string
-		metadata                                    []byte
-		totalCost                                   int64
-		resumedAt                                   *time.Time
+		suspension domain.PipelineSuspension
+		metadata   []byte
+		totalCost  int64
+		resumedAt  *time.Time
 	)
 	err := s.pool.QueryRow(ctx, `SELECT request_id::text, organization_id::text, pipeline_evaluation_id::text,
-		organization_pipeline_id::text, agent_pipeline_id::text, resume_position, previous_metadata,
+		resume_position, previous_metadata,
 		attempted_block_count, total_attempts, total_cost, started_at, suspended_at, resumed_at
 		FROM approval_request_pipeline_suspensions WHERE organization_id=$1 AND request_id=$2`,
 		input.OrganizationID, input.RequestID).Scan(
 		&suspension.RequestID, &suspension.OrganizationID, &suspension.EvaluationID,
-		&organizationPipelineID, &agentTypePipelineID, &suspension.ResumePosition, &metadata,
+		&suspension.ResumePosition, &metadata,
 		&suspension.AttemptedBlockCount, &suspension.TotalAttempts, &totalCost,
 		&suspension.StartedAt, &suspension.SuspendedAt, &resumedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -58,11 +70,22 @@ func (s *Store) GetPipelineSuspension(ctx context.Context, input application.Get
 	if err != nil {
 		return domain.PipelineSuspension{}, err
 	}
-	if organizationPipelineID != nil {
-		suspension.OrganizationPipelineID = domain.ID(*organizationPipelineID)
+	pins, err := s.pool.Query(ctx, `SELECT pipeline_key, pipeline_id::text FROM approval_request_pipeline_suspension_pins
+		WHERE organization_id=$1 AND request_id=$2`, input.OrganizationID, input.RequestID)
+	if err != nil {
+		return domain.PipelineSuspension{}, err
 	}
-	if agentTypePipelineID != nil {
-		suspension.AgentPipelineID = domain.ID(*agentTypePipelineID)
+	defer pins.Close()
+	suspension.PinnedRevisions = make(map[string]domain.ID)
+	for pins.Next() {
+		var key, id string
+		if err := pins.Scan(&key, &id); err != nil {
+			return domain.PipelineSuspension{}, err
+		}
+		suspension.PinnedRevisions[key] = domain.ID(id)
+	}
+	if err := pins.Err(); err != nil {
+		return domain.PipelineSuspension{}, err
 	}
 	suspension.TotalCost = uint64(totalCost)
 	suspension.ResumedAt = resumedAt

@@ -48,6 +48,7 @@ import type {
   SlackConnection,
   SocialProvider,
   Session,
+  RequestApprovalPipelineCreate,
   RequestApprovalPipelineDocument,
   RequestApprovalPipelinePreview,
   RequestApprovalPipelinePreviewSample,
@@ -95,12 +96,9 @@ export const revisionPageQuery = (cursor: string) => {
   return search.toString();
 };
 
-/* An empty agent slug addresses the organization pipeline scope, whose
- * blocks run before the agent's own section for every request. */
-const pipelineScopePath = (agentSlug: string) =>
-  agentSlug === ""
-    ? `${APP_API_BASE}/request-approval-pipelines/organization`
-    : `${APP_API_BASE}/request-approval-pipelines/agents/${encodeURIComponent(agentSlug)}`;
+/* A pipeline by its key; "entry" is the one every request enters. */
+const pipelinePath = (pipelineKey: string) =>
+  `${APP_API_BASE}/request-approval-pipelines/${encodeURIComponent(pipelineKey)}`;
 
 export class RequestError extends Error {
   constructor(
@@ -327,8 +325,8 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify({ name }),
     }),
-  /* Archives the agent and its approval pipeline together. Revoked
-   * credentials stay revoked; restore brings the agent back. */
+  /* Archives the agent. Revoked credentials stay revoked; restore brings
+   * the agent back. */
   archiveAgent: (slug: string) =>
     request<void>(`${APP_API_BASE}/agents/${encodeURIComponent(slug)}`, { method: "DELETE" }),
   restoreAgent: (slug: string) =>
@@ -570,62 +568,79 @@ export const api = {
       `${APP_API_BASE}/enterprise/directory/groups/${encodeURIComponent(providerObjectId)}/grant`,
       { method: "DELETE" },
     ),
-  /* The overview; pipelines archived with the last agent of their type
-   * come only when asked for. */
+  /* The overview, narrowed to the pipelines the caller may read;
+   * archived pipelines come only when asked for. */
   requestApprovalPipelines: (status: PipelineListStatus = "live") =>
     request<{ request_approval_pipelines: RequestApprovalPipelineSummary[] }>(
       `${APP_API_BASE}/request-approval-pipelines?limit=100&status=${status}`,
     ),
-  /* The scope's active revision with its blocks; 404 when no agent has
-   * the slug or its pipeline is archived. */
-  activeRequestApprovalPipeline: (agentSlug: string) =>
-    request<RequestApprovalPipelineRevision>(pipelineScopePath(agentSlug)),
-  requestApprovalPipelineRevisions: (agentSlug: string, cursor = "") =>
+  /* A new pipeline with its first revision, active at once. 409
+   * request_approval_pipeline_exists when the key was ever used. */
+  createRequestApprovalPipeline: (body: RequestApprovalPipelineCreate) =>
+    request<RequestApprovalPipelineRevision>(`${APP_API_BASE}/request-approval-pipelines`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  /* The pipeline's active revision with its blocks; 404 when no pipeline
+   * has the key or it is archived. */
+  activeRequestApprovalPipeline: (pipelineKey: string) =>
+    request<RequestApprovalPipelineRevision>(pipelinePath(pipelineKey)),
+  requestApprovalPipelineRevisions: (pipelineKey: string, cursor = "") =>
     request<RevisionPage<RequestApprovalPipelineRevisionSummary>>(
-      `${pipelineScopePath(agentSlug)}/revisions?${revisionPageQuery(cursor)}`,
+      `${pipelinePath(pipelineKey)}/revisions?${revisionPageQuery(cursor)}`,
     ),
-  requestApprovalPipelineRevision: (agentSlug: string, revision: number) =>
+  requestApprovalPipelineRevision: (pipelineKey: string, revision: number) =>
     request<RequestApprovalPipelineRevision>(
-      `${pipelineScopePath(agentSlug)}/revisions/${revision}`,
+      `${pipelinePath(pipelineKey)}/revisions/${revision}`,
     ),
   previewRequestApprovalPipeline: (
-    agentSlug: string,
+    pipelineKey: string,
     document: RequestApprovalPipelineDocument,
     sample: RequestApprovalPipelinePreviewSample,
   ) =>
     request<RequestApprovalPipelinePreview>(
-      `${pipelineScopePath(agentSlug)}/preview`,
+      `${pipelinePath(pipelineKey)}/preview`,
       {
         method: "POST",
-        body: JSON.stringify({ ...document, sample }),
+        body: JSON.stringify({ blocks: document.blocks, default_escalation_path: document.default_escalation_path, sample }),
       },
     ),
   createRequestApprovalPipelineRevision: (
-    agentSlug: string,
+    pipelineKey: string,
     document: RequestApprovalPipelineDocument,
   ) =>
     request<RequestApprovalPipelineRevision>(
-      `${pipelineScopePath(agentSlug)}/revisions`,
+      `${pipelinePath(pipelineKey)}/revisions`,
       { method: "POST", body: JSON.stringify(document) },
     ),
   /* The live state of everything a revision depends on, so a rollback
    * can be explained before it is attempted. */
-  requestApprovalPipelineRevisionReferences: (agentSlug: string, revision: number) =>
+  requestApprovalPipelineRevisionReferences: (pipelineKey: string, revision: number) =>
     request<PipelineReferences>(
-      `${pipelineScopePath(agentSlug)}/revisions/${revision}/references`,
+      `${pipelinePath(pipelineKey)}/revisions/${revision}/references`,
     ),
   activateRequestApprovalPipelineRevision: (
-    agentSlug: string,
+    pipelineKey: string,
     revision: number,
     expectedActiveRevision: number,
   ) =>
     request<RequestApprovalPipelineRevision>(
-      `${pipelineScopePath(agentSlug)}/revisions/${revision}/activate`,
+      `${pipelinePath(pipelineKey)}/revisions/${revision}/activate`,
       {
         method: "POST",
         headers: { "If-Match": `"${expectedActiveRevision}"` },
       },
     ),
+  /* The active pipeline revisions whose delegate blocks hand requests to
+   * the key: the same set that refuses archiving it. */
+  requestApprovalPipelineUses: (pipelineKey: string) =>
+    request<{ uses: PipelineUse[] }>(`${pipelinePath(pipelineKey)}/uses`),
+  /* Archives the pipeline, revisions included. It stays readable but is
+   * never active again and its key is never reused; refused with
+   * request_approval_pipeline_in_use while an active revision delegates
+   * to it, and request_approval_pipeline_entry for the entry pipeline. */
+  archiveRequestApprovalPipeline: (pipelineKey: string) =>
+    request<void>(pipelinePath(pipelineKey), { method: "DELETE" }),
   /* The guided setup (design doc 09). Starting a session supersedes any
    * open one; the commands in the answer carry the single-use setup code
    * and are never returned again. */

@@ -64,9 +64,9 @@ var auditorPermissions = []Permission{
 var agentPermissions = []Permission{PermissionRequestCreate, PermissionRequestRead}
 
 // BuiltInRoles lists the five roles every deployment seeds. Admin is
-// bindable at team and agent scope so the open edition can express
-// scoped management with built-in roles alone; a narrowly bound admin
-// carries only the permissions whose resource exists at that scope. A
+// bindable at team, agent, and pipeline scope so the open edition can
+// express scoped management with built-in roles alone; a narrowly bound
+// admin carries only the permissions whose resource exists at that scope. A
 // role's list is its core keys plus every registered edition key that
 // names the role, resolved at call time like the owner's.
 func BuiltInRoles() []RoleDefinition {
@@ -74,7 +74,7 @@ func BuiltInRoles() []RoleDefinition {
 		{ID: RoleOwnerID, Key: RoleOwner, Name: "Owner", Description: "Full control, including billing, deleting the organization, and deciding outside routing.",
 			Permissions: HumanPermissions(), BindableScopeKinds: []ScopeKind{ScopeOrganization}},
 		{ID: RoleAdminID, Key: RoleAdmin, Name: "Admin", Description: "Connects agents, writes pipelines and paths, and manages members and teams.",
-			Permissions: rolePermissions(RoleAdmin, adminPermissions), BindableScopeKinds: []ScopeKind{ScopeOrganization, ScopeTeam, ScopeAgent}},
+			Permissions: rolePermissions(RoleAdmin, adminPermissions), BindableScopeKinds: []ScopeKind{ScopeOrganization, ScopeTeam, ScopeAgent, ScopePipeline}},
 		{ID: RoleReviewerID, Key: RoleReviewer, Name: "Reviewer", Description: "Reviews and decides the requests routed to them.",
 			Permissions: rolePermissions(RoleReviewer, reviewerPermissions), BindableScopeKinds: []ScopeKind{ScopeOrganization}},
 		{ID: RoleAuditorID, Key: RoleAuditor, Name: "Auditor", Description: "Reads every request, decision, and role without changing anything.",

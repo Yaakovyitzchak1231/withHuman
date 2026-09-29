@@ -290,18 +290,23 @@ func (m *minterStub) CreateAgentInstanceCredential(_ context.Context, _ domain.P
 }
 
 type pipelinesStub struct {
-	active    map[domain.AgentSlug]approvalpipeline.PipelineRevision
-	created   map[domain.AgentSlug][]approvalblock.Definition
-	activated map[domain.AgentSlug]int64
-	failOn    domain.AgentSlug
-	// previews records every sample the assistant checked, and
-	// previewOutcome is what each answers.
+	active    map[string]approvalpipeline.PipelineRevision
+	created   map[string][]approvalblock.Definition
+	activated map[string]int64
+	failOn    string
+	// previews records every sample the assistant checked, previewed the
+	// document the last one ran, and previewOutcome is what each answers.
 	previews       []approvalpipeline.PreviewSample
+	previewed      []approvalblock.Definition
 	previewOutcome approvalpipeline.BlockOutcome
+	// pending is the revision the last create produced, activated next.
+	pending     *approvalpipeline.PipelineRevision
+	activateErr error
 }
 
-func (p *pipelinesStub) Preview(_ context.Context, _ domain.Principal, _ domain.AgentSlug, _ []approvalblock.Definition, _ string, sample approvalpipeline.PreviewSample) (approvalpipeline.PreviewResult, error) {
+func (p *pipelinesStub) Preview(_ context.Context, _ domain.Principal, _ string, definitions []approvalblock.Definition, _ string, sample approvalpipeline.PreviewSample) (approvalpipeline.PreviewResult, error) {
 	p.previews = append(p.previews, sample)
+	p.previewed = definitions
 	outcome := p.previewOutcome
 	if outcome == "" {
 		outcome = approvalpipeline.BlockHuman
@@ -309,36 +314,68 @@ func (p *pipelinesStub) Preview(_ context.Context, _ domain.Principal, _ domain.
 	return approvalpipeline.PreviewResult{Outcome: outcome, TerminalBlockKey: "stub"}, nil
 }
 
-// GetActive answers like the real service: an agent whose pipeline
-// nobody has edited has the empty revision 1 it was born with.
-func (p *pipelinesStub) GetActive(_ context.Context, _ domain.Principal, agentSlug domain.AgentSlug) (approvalpipeline.PipelineRevision, error) {
-	if revision, ok := p.active[agentSlug]; ok {
+// GetActive answers like the real service: a pipeline nobody has edited
+// has the empty revision 1 it was born with, and a create makes the
+// created revision active.
+func (p *pipelinesStub) GetActive(_ context.Context, _ domain.Principal, pipelineKey string) (approvalpipeline.PipelineRevision, error) {
+	if revision, ok := p.active[pipelineKey]; ok {
 		return revision, nil
 	}
-	return approvalpipeline.PipelineRevision{Revision: domain.RequestApprovalPipelineRevision{AgentSlug: agentSlug, Revision: 1, IsActive: true}}, nil
+	return approvalpipeline.PipelineRevision{Revision: domain.RequestApprovalPipelineRevision{PipelineKey: pipelineKey, Name: "Entry pipeline", Revision: 1, IsActive: true}}, nil
 }
 
-func (p *pipelinesStub) CreateRevision(_ context.Context, _ domain.Principal, agentSlug domain.AgentSlug, definitions []approvalblock.Definition, defaultPath string) (approvalpipeline.PipelineRevision, error) {
-	if agentSlug == p.failOn {
+func (p *pipelinesStub) CreateRevision(_ context.Context, _ domain.Principal, pipelineKey, name string, definitions []approvalblock.Definition, defaultPath string) (approvalpipeline.PipelineRevision, error) {
+	if pipelineKey == p.failOn {
 		return approvalpipeline.PipelineRevision{}, fmt.Errorf("boom: %w", domain.ErrInvalid)
 	}
 	if p.created == nil {
-		p.created = map[domain.AgentSlug][]approvalblock.Definition{}
+		p.created = map[string][]approvalblock.Definition{}
 	}
-	p.created[agentSlug] = definitions
+	p.created[pipelineKey] = definitions
 	next := int64(2)
-	if active, ok := p.active[agentSlug]; ok {
+	if active, ok := p.active[pipelineKey]; ok {
 		next = active.Revision.Revision + 1
 	}
-	return approvalpipeline.PipelineRevision{Revision: domain.RequestApprovalPipelineRevision{Revision: next, DefaultEscalationPath: defaultPath}}, nil
+	p.pending = &approvalpipeline.PipelineRevision{Revision: domain.RequestApprovalPipelineRevision{PipelineKey: pipelineKey, Name: name, Revision: next, DefaultEscalationPath: defaultPath}}
+	for _, definition := range definitions {
+		p.pending.Blocks = append(p.pending.Blocks, approvalpipeline.PipelineBlock{Definition: definition})
+	}
+	return *p.pending, nil
 }
 
-func (p *pipelinesStub) Activate(_ context.Context, _ domain.Principal, agentSlug domain.AgentSlug, revision int64, expected int64) (approvalpipeline.PipelineRevision, error) {
-	if p.activated == nil {
-		p.activated = map[domain.AgentSlug]int64{}
+// Activate records the expectation and, like the real service, makes the
+// created revision the one GetActive answers with.
+func (p *pipelinesStub) Activate(_ context.Context, _ domain.Principal, pipelineKey string, revision int64, expected int64) (approvalpipeline.PipelineRevision, error) {
+	if p.activateErr != nil {
+		err := p.activateErr
+		p.activateErr = nil
+		return approvalpipeline.PipelineRevision{}, err
 	}
-	p.activated[agentSlug] = expected
-	return approvalpipeline.PipelineRevision{Revision: domain.RequestApprovalPipelineRevision{Revision: revision, IsActive: true}}, nil
+	if p.activated == nil {
+		p.activated = map[string]int64{}
+	}
+	p.activated[pipelineKey] = expected
+	if p.pending != nil && p.pending.Revision.PipelineKey == pipelineKey && p.pending.Revision.Revision == revision {
+		activated := *p.pending
+		activated.Revision.IsActive = true
+		p.active[pipelineKey] = activated
+		return activated, nil
+	}
+	return approvalpipeline.PipelineRevision{Revision: domain.RequestApprovalPipelineRevision{PipelineKey: pipelineKey, Revision: revision, IsActive: true}}, nil
+}
+
+// entryBlocks is the document the stub last activated for the entry
+// pipeline.
+func (p *pipelinesStub) entryBlocks() []approvalblock.Definition {
+	active, ok := p.active[EntryPipelineKey]
+	if !ok {
+		return nil
+	}
+	definitions := make([]approvalblock.Definition, len(active.Blocks))
+	for index, block := range active.Blocks {
+		definitions[index] = block.Definition
+	}
+	return definitions
 }
 
 type pathsStub struct {
@@ -421,7 +458,7 @@ func newHarness() *harness {
 		agents:    agents,
 		approvals: &approvalsStub{requests: map[domain.ID]domain.ApprovalRequest{}},
 		minter:    &minterStub{agents: agents},
-		pipelines: &pipelinesStub{active: map[domain.AgentSlug]approvalpipeline.PipelineRevision{}},
+		pipelines: &pipelinesStub{active: map[string]approvalpipeline.PipelineRevision{}},
 		paths:     &pathsStub{active: map[string]reviewrouting.PathRevision{}},
 		principal: principal,
 	}
@@ -581,17 +618,29 @@ func TestGuidedSetupHappyPath(t *testing.T) {
 	if len(h.paths.activated) != 1 || !PathTargetsMembership(h.paths.created["notify-chris-battarbee"], h.principal.MembershipID) {
 		t.Fatalf("path not created for the member: %+v", h.paths.created)
 	}
-	if got := GatedToolsOf(h.pipelines.created["claude-code"]); strings.Join(got, ",") != "Bash,create_refund,customer" {
+	entry := h.pipelines.entryBlocks()
+	if got := GatedToolsOf(entry, "claude-code"); strings.Join(got, ",") != "Bash,create_refund,customer" {
 		t.Fatalf("claude-code gated tools: %v", got)
 	}
-	if got := GatedToolsOf(h.pipelines.created["codex"]); strings.Join(got, ",") != "Bash" {
+	if got := GatedToolsOf(entry, "codex"); strings.Join(got, ",") != "Bash" {
 		t.Fatalf("codex gated tools: %v", got)
 	}
-	if h.pipelines.created["codex"][0].CEL.EscalationPath != "notify-chris-battarbee" || h.pipelines.created["codex"][1].Always == nil || h.pipelines.created["codex"][1].Always.Outcome != approvalblock.Approve {
-		t.Fatalf("pipeline blocks: %+v", h.pipelines.created["codex"])
+	// One entry revision holds one branch per runtime, each gating its
+	// tools to the person's path and approving the rest.
+	if len(entry) != 2 || entry[0].ID != "claude-code" || entry[1].ID != "codex" || entry[1].Branch == nil || entry[1].Branch.EscalationPath != "notify-chris-battarbee" {
+		t.Fatalf("entry blocks: %+v", entry)
 	}
-	if session.Generated.Pipelines["codex"].Revision != 2 || session.Generated.Pipelines["codex"].ReplacedActiveRevision != 1 {
-		t.Fatalf("generated pipelines: %+v", session.Generated.Pipelines)
+	codex := entry[1].Branch.Blocks
+	if codex[0].CEL.EscalationPath != "notify-chris-battarbee" || codex[1].Always == nil || codex[1].Always.Outcome != approvalblock.Approve {
+		t.Fatalf("codex branch blocks: %+v", codex)
+	}
+	if h.pipelines.active[EntryPipelineKey].Revision.DefaultEscalationPath != "notify-chris-battarbee" {
+		t.Fatalf("an empty entry default should take the setup's path: %+v", h.pipelines.active[EntryPipelineKey].Revision)
+	}
+	for _, runtime := range []string{"codex", "claude-code"} {
+		if generated := session.Generated.Pipelines[runtime]; generated.PipelineKey != EntryPipelineKey || generated.BranchKey != runtime || generated.Revision != 2 || generated.ReplacedActiveRevision != 1 {
+			t.Fatalf("generated pipelines: %+v", session.Generated.Pipelines)
+		}
 	}
 
 	// The CLI's turn: enrollment mints one agent and instance per runtime,
@@ -695,7 +744,7 @@ func TestGuidedSetupHappyPath(t *testing.T) {
 func TestProvisionFailureKeepsSessionAndRecordsError(t *testing.T) {
 	ctx := context.Background()
 	h := newHarness()
-	h.pipelines.failOn = "codex"
+	h.pipelines.failOn = EntryPipelineKey
 	begun, _ := h.service.Begin(ctx, h.principal)
 	exchanged, _ := h.service.Exchange(ctx, begun.SetupCode, domain.OnboardingMachine{Hostname: "box"})
 	session, _ := h.service.ReportDetections(ctx, exchanged.Session, detections("codex"))
@@ -734,9 +783,17 @@ func TestProvisionFailureKeepsSessionAndRecordsError(t *testing.T) {
 func TestSecondRunUnionsPipelineAndReusesAgent(t *testing.T) {
 	ctx := context.Background()
 	h := newHarness()
-	h.pipelines.active["claude-code"] = approvalpipeline.PipelineRevision{
-		Revision: domain.RequestApprovalPipelineRevision{Revision: 3, IsActive: true},
-		Blocks:   []approvalpipeline.PipelineBlock{{Definition: PipelineBlocks([]string{"Write"}, "notify-x")[0]}, {Definition: PipelineBlocks(nil, "notify-x")[1]}},
+	// The entry already holds a foreign rule, the runtime's starting
+	// branch gating Write, and a trailing catch-all.
+	foreign := approvalblock.Define("deny-prod", approvalblock.Name("Deny production"), approvalblock.When(approvalblock.Field("/request/tool").Equals("prod_deploy")), approvalblock.OnMatch(approvalblock.Deny), approvalblock.Reason("Never."))
+	catchAll := approvalblock.DefineAlways("everything-else", approvalblock.Approve, approvalblock.Name("Approve the rest"), approvalblock.Reason("Routine."))
+	h.pipelines.active[EntryPipelineKey] = approvalpipeline.PipelineRevision{
+		Revision: domain.RequestApprovalPipelineRevision{PipelineKey: EntryPipelineKey, Name: "Entry pipeline", Revision: 3, IsActive: true, DefaultEscalationPath: "on-call"},
+		Blocks: []approvalpipeline.PipelineBlock{
+			{Definition: *foreign},
+			{Definition: RuntimeBranch("claude-code", StartingBlocks("claude-code", []string{"Write"}, "notify-x"), "notify-x")},
+			{Definition: *catchAll},
+		},
 	}
 	h.agents.existing["claude-code"] = domain.Agent{ID: domain.ID(uuid.NewString()), Name: "Claude Code", AgentSlug: "claude-code", Status: domain.AgentActive}
 	begun, _ := h.service.Begin(ctx, h.principal)
@@ -749,10 +806,17 @@ func TestSecondRunUnionsPipelineAndReusesAgent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Provision: %v", err)
 	}
-	if got := GatedToolsOf(h.pipelines.created["claude-code"]); strings.Join(got, ",") != "Bash,Write" {
+	entry := h.pipelines.entryBlocks()
+	if got := GatedToolsOf(entry, "claude-code"); strings.Join(got, ",") != "Bash,Write" {
 		t.Fatalf("second run should union: %v", got)
 	}
-	if expected := h.pipelines.activated["claude-code"]; expected != 3 {
+	if len(entry) != 3 || entry[0].ID != "deny-prod" || entry[1].ID != "claude-code" || entry[2].ID != "everything-else" {
+		t.Fatalf("foreign blocks must keep their place around the branch: %+v", entry)
+	}
+	if h.pipelines.active[EntryPipelineKey].Revision.DefaultEscalationPath != "on-call" {
+		t.Fatal("the entry's own default must be kept")
+	}
+	if expected := h.pipelines.activated[EntryPipelineKey]; expected != 3 {
 		t.Fatalf("activation should carry the replaced revision, got %v", expected)
 	}
 	if replaced := session.Generated.Pipelines["claude-code"].ReplacedActiveRevision; replaced != 3 {
@@ -862,13 +926,16 @@ func TestGenerators(t *testing.T) {
 	if !PathTargetsMembership(document, "11111111-1111-1111-1111-111111111111") || PathTargetsMembership(document, "other") {
 		t.Fatal("PathTargetsMembership")
 	}
-	blocks := PipelineBlocks([]string{"Write", "Bash"}, "notify-x")
-	for _, block := range blocks {
-		if err := block.Validate(); err != nil {
-			t.Fatalf("generated block %s is invalid: %v", block.ID, err)
-		}
+	blocks := StartingBlocks("codex", []string{"Write", "Bash"}, "notify-x")
+	branch := RuntimeBranch("codex", blocks, "notify-x")
+	if err := branch.Validate(); err != nil {
+		t.Fatalf("generated branch is invalid: %v", err)
 	}
-	if got := GatedToolsOf(blocks); strings.Join(got, ",") != "Bash,Write" {
+	if branch.ID != "codex" || branch.Name != "Codex" || branch.Branch.EscalationPath != "notify-x" || blocks[0].ID != "codex-gate-selected-tools" || blocks[1].ID != "codex-approve-the-rest" {
+		t.Fatalf("generated branch: %+v", branch)
+	}
+	entry := EntryBlocks(nil, branch)
+	if got := GatedToolsOf(entry, "codex"); strings.Join(got, ",") != "Bash,Write" {
 		t.Fatalf("GatedToolsOf: %v", got)
 	}
 	// The product quotes block names inside sentences, so they stay
@@ -876,8 +943,33 @@ func TestGenerators(t *testing.T) {
 	if blocks[0].Name != "Review tools chosen in setup" || blocks[1].Name != "Approve every other tool" {
 		t.Fatalf("block names: %q, %q", blocks[0].Name, blocks[1].Name)
 	}
-	if GatedToolsOf(blocks[1:]) != nil || GatedToolsOf(nil) != nil {
-		t.Fatal("GatedToolsOf should ignore foreign first blocks")
+	if GatedToolsOf(entry, "claude-code") != nil || GatedToolsOf(nil, "codex") != nil {
+		t.Fatal("GatedToolsOf should answer nil for a missing branch")
+	}
+	// The same input produces the same document, so a rerun that changes
+	// nothing writes nothing; an empty tool list keeps the approve block
+	// alone and still validates.
+	if !SameDocument(entry, EntryBlocks(nil, RuntimeBranch("codex", StartingBlocks("codex", []string{"Bash", "Write"}, "notify-x"), "notify-x"))) {
+		t.Fatal("generated documents must be deterministic")
+	}
+	empty := RuntimeBranch("codex", StartingBlocks("codex", nil, "notify-x"), "notify-x")
+	if err := empty.Validate(); err != nil || len(empty.Branch.Blocks) != 1 || len(GatedToolsOf(EntryBlocks(nil, empty), "codex")) != 0 {
+		t.Fatalf("an empty gate list must validate with the approve block alone: %v %+v", err, empty)
+	}
+	// A new branch lands before the first top-level always; an existing
+	// one is replaced in place; a rewritten body is not the starting shape.
+	always := approvalblock.DefineAlways("rest", approvalblock.Approve, approvalblock.Name("Rest"), approvalblock.Reason("Routine."))
+	placed := EntryBlocks([]approvalblock.Definition{*always}, branch)
+	if len(placed) != 2 || placed[0].ID != "codex" || placed[1].ID != "rest" {
+		t.Fatalf("EntryBlocks placement: %+v", placed)
+	}
+	replaced := EntryBlocks(placed, empty)
+	if len(replaced) != 2 || len(replaced[0].Branch.Blocks) != 1 {
+		t.Fatalf("EntryBlocks replacement: %+v", replaced)
+	}
+	rewritten := RuntimeBranch("codex", []approvalblock.Definition{*always}, "notify-x")
+	if StartingShape("codex", rewritten) || !StartingShape("codex", branch) || !StartingShape("codex", empty) {
+		t.Fatal("StartingShape")
 	}
 	if got := Union([]string{"b", "a"}, nil, []string{"a", "", "c"}); strings.Join(got, ",") != "a,b,c" {
 		t.Fatalf("Union: %v", got)

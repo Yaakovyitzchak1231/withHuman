@@ -32,23 +32,23 @@ type approvalResponse struct {
 	Decision              *approvalDecisionResponse `json:"decision,omitempty"`
 }
 
-// requestApprovalPipelineSummaryResponse is one scope. active_revision
-// is absent and archived_at present for a scope archived with its agent.
+// requestApprovalPipelineSummaryResponse is one pipeline. active_revision
+// is absent and archived_at present for an archived pipeline.
 type requestApprovalPipelineSummaryResponse struct {
-	Scope           string           `json:"scope"`
-	AgentSlug       domain.AgentSlug `json:"agent_slug,omitempty"`
-	ActiveRevision  *int64           `json:"active_revision,omitempty"`
-	LatestRevision  int64            `json:"latest_revision"`
-	RevisionCount   int64            `json:"revision_count"`
-	LatestCreatedAt time.Time        `json:"latest_created_at"`
-	ArchivedAt      *time.Time       `json:"archived_at,omitempty"`
+	PipelineKey     string     `json:"pipeline_key"`
+	Name            string     `json:"name"`
+	ActiveRevision  *int64     `json:"active_revision,omitempty"`
+	LatestRevision  int64      `json:"latest_revision"`
+	RevisionCount   int64      `json:"revision_count"`
+	LatestCreatedAt time.Time  `json:"latest_created_at"`
+	ArchivedAt      *time.Time `json:"archived_at,omitempty"`
 }
 
 func newRequestApprovalPipelineSummaryResponses(summaries []domain.RequestApprovalPipelineSummary) []requestApprovalPipelineSummaryResponse {
 	responses := make([]requestApprovalPipelineSummaryResponse, len(summaries))
 	for index, summary := range summaries {
 		responses[index] = requestApprovalPipelineSummaryResponse{
-			Scope: domain.PipelineScopeName(summary.AgentSlug), AgentSlug: summary.AgentSlug,
+			PipelineKey: summary.PipelineKey, Name: summary.Name,
 			ActiveRevision: summary.ActiveRevision, LatestRevision: summary.LatestRevision,
 			RevisionCount: summary.RevisionCount, LatestCreatedAt: summary.LatestCreatedAt,
 			ArchivedAt: summary.ArchivedAt,
@@ -58,16 +58,16 @@ func newRequestApprovalPipelineSummaryResponses(summaries []domain.RequestApprov
 }
 
 type requestApprovalPipelineRevisionSummaryResponse struct {
-	ID                    domain.ID        `json:"id"`
-	Scope                 string           `json:"scope"`
-	AgentSlug             domain.AgentSlug `json:"agent_slug,omitempty"`
-	Revision              int64            `json:"revision"`
-	IsActive              bool             `json:"is_active"`
-	BlockCount            int              `json:"block_count"`
-	DefaultEscalationPath string           `json:"default_escalation_path,omitempty"`
-	CreatedByActorID      domain.ID        `json:"created_by_actor_id"`
-	CreatedAt             time.Time        `json:"created_at"`
-	ArchivedAt            *time.Time       `json:"archived_at,omitempty"`
+	ID                    domain.ID  `json:"id"`
+	PipelineKey           string     `json:"pipeline_key"`
+	Name                  string     `json:"name"`
+	Revision              int64      `json:"revision"`
+	IsActive              bool       `json:"is_active"`
+	BlockCount            int        `json:"block_count"`
+	DefaultEscalationPath string     `json:"default_escalation_path,omitempty"`
+	CreatedByActorID      domain.ID  `json:"created_by_actor_id"`
+	CreatedAt             time.Time  `json:"created_at"`
+	ArchivedAt            *time.Time `json:"archived_at,omitempty"`
 }
 
 type requestApprovalPipelineRevisionResponse struct {
@@ -102,7 +102,7 @@ type storedBranchConfigResponse struct {
 
 func newRequestApprovalPipelineRevisionSummaryResponse(revision domain.RequestApprovalPipelineRevision) requestApprovalPipelineRevisionSummaryResponse {
 	return requestApprovalPipelineRevisionSummaryResponse{
-		ID: revision.ID, Scope: domain.PipelineScopeName(revision.AgentSlug), AgentSlug: revision.AgentSlug,
+		ID: revision.ID, PipelineKey: revision.PipelineKey, Name: revision.Name,
 		Revision: revision.Revision, IsActive: revision.IsActive, BlockCount: len(revision.BlockIDs),
 		DefaultEscalationPath: revision.DefaultEscalationPath,
 		CreatedByActorID:      revision.CreatedByActorID, CreatedAt: revision.CreatedAt,
@@ -122,19 +122,18 @@ func newRequestApprovalPipelineRevisionSummaryResponses(revisions []domain.Reque
 // shared object. block_key is absent when the revision names an
 // escalation path as its default.
 type pipelineUseResponse struct {
-	PipelineID domain.ID        `json:"pipeline_id"`
-	Scope      string           `json:"scope"`
-	AgentSlug  domain.AgentSlug `json:"agent_slug,omitempty"`
-	Revision   int64            `json:"revision"`
-	BlockKey   string           `json:"block_key,omitempty"`
+	PipelineID  domain.ID `json:"pipeline_id"`
+	PipelineKey string    `json:"pipeline_key"`
+	Revision    int64     `json:"revision"`
+	BlockKey    string    `json:"block_key,omitempty"`
 }
 
 func newPipelineUseResponses(uses []domain.PipelineUse) []pipelineUseResponse {
 	responses := make([]pipelineUseResponse, 0, len(uses))
 	for _, use := range uses {
 		responses = append(responses, pipelineUseResponse{
-			PipelineID: use.PipelineID, Scope: domain.PipelineScopeName(use.AgentSlug),
-			AgentSlug: use.AgentSlug, Revision: use.Revision, BlockKey: use.BlockKey,
+			PipelineID: use.PipelineID, PipelineKey: use.PipelineKey,
+			Revision: use.Revision, BlockKey: use.BlockKey,
 		})
 	}
 	return responses
@@ -161,8 +160,17 @@ func newEscalationPathReferenceResponses(paths []domain.EscalationPathReference)
 type pipelineReferencesResponse struct {
 	EscalationPaths  []escalationPathReferenceResponse  `json:"escalation_paths"`
 	WebhookEndpoints []webhookEndpointReferenceResponse `json:"webhook_endpoints"`
+	Pipelines        []pipelineReferenceResponse        `json:"pipelines"`
 	Blocks           []blockReferenceResponse           `json:"blocks"`
 	Activatable      bool                               `json:"activatable"`
+}
+
+type pipelineReferenceResponse struct {
+	PipelineKey string   `json:"pipeline_key"`
+	Name        string   `json:"name,omitempty"`
+	BlockKeys   []string `json:"block_keys"`
+	Exists      bool     `json:"exists"`
+	Active      bool     `json:"active"`
 }
 
 type escalationPathReferenceResponse struct {
@@ -191,8 +199,14 @@ func newPipelineReferencesResponse(references approvalpipeline.RevisionReference
 	response := pipelineReferencesResponse{
 		EscalationPaths:  make([]escalationPathReferenceResponse, 0, len(references.EscalationPaths)),
 		WebhookEndpoints: make([]webhookEndpointReferenceResponse, 0, len(references.WebhookEndpoints)),
+		Pipelines:        make([]pipelineReferenceResponse, 0, len(references.Pipelines)),
 		Blocks:           make([]blockReferenceResponse, 0, len(references.Blocks)),
 		Activatable:      references.Activatable,
+	}
+	for _, pipeline := range references.Pipelines {
+		response.Pipelines = append(response.Pipelines, pipelineReferenceResponse{
+			PipelineKey: pipeline.PipelineKey, Name: pipeline.Name, BlockKeys: pipeline.BlockKeys, Exists: pipeline.Exists, Active: pipeline.Active,
+		})
 	}
 	for _, path := range references.EscalationPaths {
 		response.EscalationPaths = append(response.EscalationPaths, escalationPathReferenceResponse{
@@ -243,24 +257,26 @@ func newRequestApprovalPipelineBlockResponses(blocks []approvalpipeline.Pipeline
 }
 
 type requestApprovalPipelinePreviewResponse struct {
-	Outcome              approvalpipeline.BlockOutcome        `json:"outcome"`
-	ReasonCode           string                               `json:"reason_code"`
-	TerminalBlockKey     string                               `json:"terminal_block_id,omitempty"`
-	Blocks               []requestApprovalPipelineBlockResult `json:"blocks"`
-	EscalationPath       string                               `json:"escalation_path,omitempty"`
-	EscalationPathReason string                               `json:"escalation_path_reason,omitempty"`
+	Outcome                   approvalpipeline.BlockOutcome        `json:"outcome"`
+	ReasonCode                string                               `json:"reason_code"`
+	TerminalBlockKey          string                               `json:"terminal_block_id,omitempty"`
+	Blocks                    []requestApprovalPipelineBlockResult `json:"blocks"`
+	EscalationPath            string                               `json:"escalation_path,omitempty"`
+	EscalationPathReason      string                               `json:"escalation_path_reason,omitempty"`
+	EscalationPathPipelineKey string                               `json:"escalation_path_pipeline_key,omitempty"`
 }
 
 type requestApprovalPipelineBlockResult struct {
-	BlockKey  string                             `json:"block_id"`
-	Position  int                                `json:"position"`
-	Outcome   approvalpipeline.BlockOutcome      `json:"outcome"`
-	Reason    string                             `json:"reason,omitempty"`
-	Metadata  map[string]json.RawMessage         `json:"metadata,omitempty"`
-	Cost      uint64                             `json:"cost"`
-	Trace     []approvalpipeline.NodeTrace       `json:"trace"`
-	ErrorCode approvalpipeline.BlockErrorCode    `json:"error_code,omitempty"`
-	Delivery  *approvalpipeline.DeliveryEvidence `json:"delivery,omitempty"`
+	BlockKey    string                             `json:"block_id"`
+	PipelineKey string                             `json:"pipeline_key"`
+	Position    int                                `json:"position"`
+	Outcome     approvalpipeline.BlockOutcome      `json:"outcome"`
+	Reason      string                             `json:"reason,omitempty"`
+	Metadata    map[string]json.RawMessage         `json:"metadata,omitempty"`
+	Cost        uint64                             `json:"cost"`
+	Trace       []approvalpipeline.NodeTrace       `json:"trace"`
+	ErrorCode   approvalpipeline.BlockErrorCode    `json:"error_code,omitempty"`
+	Delivery    *approvalpipeline.DeliveryEvidence `json:"delivery,omitempty"`
 	// EndOfBranch marks the closing step of a branch the request entered
 	// and nothing inside decided.
 	EndOfBranch bool `json:"end_of_branch,omitempty"`
@@ -270,7 +286,7 @@ func newRequestApprovalPipelinePreviewResponse(result approvalpipeline.PreviewRe
 	blocks := make([]requestApprovalPipelineBlockResult, len(result.Blocks))
 	for index, block := range result.Blocks {
 		blocks[index] = requestApprovalPipelineBlockResult{
-			BlockKey: block.BlockKey, Position: block.Position, Outcome: block.Outcome,
+			BlockKey: block.BlockKey, PipelineKey: block.PipelineKey, Position: block.Position, Outcome: block.Outcome,
 			Reason: block.Reason, Metadata: block.Metadata, Cost: block.Evidence.Cost,
 			Trace: block.Evidence.Trace, ErrorCode: block.ErrorCode, Delivery: block.Evidence.Delivery,
 			EndOfBranch: block.EndOfBranch,
@@ -280,6 +296,7 @@ func newRequestApprovalPipelinePreviewResponse(result approvalpipeline.PreviewRe
 		Outcome: result.Outcome, ReasonCode: result.ReasonCode,
 		TerminalBlockKey: result.TerminalBlockKey, Blocks: blocks,
 		EscalationPath: result.EscalationPath, EscalationPathReason: result.EscalationPathReason,
+		EscalationPathPipelineKey: result.EscalationPathPipelineKey,
 	}
 }
 

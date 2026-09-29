@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -19,7 +20,7 @@ import (
 // The reference guards in both directions: a pipeline revision cannot be
 // activated while a path it names is inactive or an endpoint it posts to
 // is gone, and a path cannot be archived while an active revision names it.
-// Every scope is born with an empty active revision 1, so "no revision
+// Every pipeline is born with an empty active revision 1, so "no revision
 // names the path" means that seed is active again.
 func TestPipelineReferenceGuardsAgainstRealPostgres(t *testing.T) {
 	server := embeddedpgtest.Start(t)
@@ -47,9 +48,9 @@ func TestPipelineReferenceGuardsAgainstRealPostgres(t *testing.T) {
 		}
 		return activated
 	}
-	activatePipeline := func(agentSlug domain.AgentSlug, revision, expected int64) error {
+	activatePipeline := func(pipelineKey string, revision, expected int64) error {
 		_, err := store.ActivateRequestApprovalPipelineRevision(ctx, application.ActivateRequestApprovalPipelineRevisionInput{
-			OrganizationID: orgID, AgentSlug: agentSlug, Revision: revision,
+			OrganizationID: orgID, PipelineKey: pipelineKey, Revision: revision,
 			ExpectedActiveRevision: expected, ActorID: membershipID, Now: now,
 		})
 		return err
@@ -60,9 +61,9 @@ func TestPipelineReferenceGuardsAgainstRealPostgres(t *testing.T) {
 		})
 		return err
 	}
-	activeRevision := func(t *testing.T, agentSlug domain.AgentSlug) domain.RequestApprovalPipelineRevision {
+	activeRevision := func(t *testing.T, pipelineKey string) domain.RequestApprovalPipelineRevision {
 		t.Helper()
-		active, _, err := activeRequestApprovalPipelineRevision(ctx, mustBegin(t, ctx, store), orgID, agentSlug)
+		active, _, err := activeRequestApprovalPipelineRevision(ctx, mustBegin(t, ctx, store), orgID, pipelineKey)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -76,7 +77,7 @@ func TestPipelineReferenceGuardsAgainstRealPostgres(t *testing.T) {
 		review := pipelineTestBlock("manual-review", `{"outcome":"human","escalation_path":"payments"}`)
 		review.BlockType = "always"
 		revision, err := store.CreateRequestApprovalPipelineRevision(ctx, application.CreateRequestApprovalPipelineRevisionInput{
-			ID: domain.ID(uuid.NewString()), OrganizationID: orgID, AgentSlug: "billing",
+			ID: domain.ID(uuid.NewString()), OrganizationID: orgID, PipelineKey: "billing", Name: "Billing",
 			Blocks: []application.RequestApprovalBlockSnapshotInput{
 				pipelineTestBlock("auto-approve", `{"on_match":"approve"}`),
 				review,
@@ -107,7 +108,7 @@ func TestPipelineReferenceGuardsAgainstRealPostgres(t *testing.T) {
 		}
 
 		uses, err := store.ListEscalationPathUses(ctx, application.ListEscalationPathUsesInput{OrganizationID: orgID, PathKey: "payments"})
-		if err != nil || len(uses) != 1 || uses[0].PipelineID != revision.ID || uses[0].AgentSlug != "billing" || uses[0].Revision != revision.Revision || uses[0].BlockKey != "manual-review" {
+		if err != nil || len(uses) != 1 || uses[0].PipelineID != revision.ID || uses[0].PipelineKey != "billing" || uses[0].Revision != revision.Revision || uses[0].BlockKey != "manual-review" {
 			t.Fatalf("block use = %+v %v", uses, err)
 		}
 		uses, err = store.ListEscalationPathUses(ctx, application.ListEscalationPathUsesInput{OrganizationID: orgID, PathKey: "fallback"})
@@ -275,24 +276,141 @@ func TestPipelineReferenceGuardsAgainstRealPostgres(t *testing.T) {
 		}
 	})
 
+	// Delegated pipelines are references too: a revision cannot be
+	// activated while a pipeline it delegates to has no active revision,
+	// a pipeline cannot be archived while an active revision delegates to
+	// it, and the delegation graph refuses cycles and over-deep chains.
+	t.Run("delegated pipelines", func(t *testing.T) {
+		delegate := func(key, target string) application.RequestApprovalBlockSnapshotInput {
+			config, _ := json.Marshal(map[string]any{
+				"when": map[string]any{"id": uuid.NewString(), "field": "/request/tool", "operator": "exists"}, "pipeline_key": target,
+			})
+			block := pipelineTestBlock(key, string(config))
+			block.BlockType = "delegate"
+			return block
+		}
+		seedPipelineTestScope(t, ctx, store, orgID, membershipID, domain.EntryPipelineKey, now)
+		seedPipelineTestScope(t, ctx, store, orgID, membershipID, "payments", now)
+		revision := createPipelineTestRevision(t, ctx, store, orgID, membershipID, domain.EntryPipelineKey, []application.RequestApprovalBlockSnapshotInput{
+			delegate("to-payments", "payments"), delegate("to-nowhere", "nowhere"),
+		}, now)
+		var inactive domain.PipelinesInactiveError
+		if err := activatePipeline(domain.EntryPipelineKey, revision.Revision, 1); !errors.As(err, &inactive) || len(inactive.PipelineKeys) != 1 || inactive.PipelineKeys[0] != "nowhere" {
+			t.Fatalf("activation delegating to a missing pipeline = %v, want PipelinesInactiveError{nowhere}", err)
+		}
+		healthy := createPipelineTestRevision(t, ctx, store, orgID, membershipID, domain.EntryPipelineKey, []application.RequestApprovalBlockSnapshotInput{
+			delegate("to-payments", "payments"),
+		}, now)
+		if err := activatePipeline(domain.EntryPipelineKey, healthy.Revision, 1); err != nil {
+			t.Fatalf("activation delegating to a live pipeline: %v", err)
+		}
+		uses, err := store.ListRequestApprovalPipelineUses(ctx, application.ListRequestApprovalPipelineUsesInput{OrganizationID: orgID, PipelineKey: "payments"})
+		if err != nil || len(uses) != 1 || uses[0].PipelineKey != domain.EntryPipelineKey || uses[0].BlockKey != "to-payments" {
+			t.Fatalf("delegate uses = %+v %v", uses, err)
+		}
+		var inUse domain.RequestApprovalPipelineInUseError
+		if _, err := store.ArchiveRequestApprovalPipeline(ctx, application.ArchiveRequestApprovalPipelineInput{OrganizationID: orgID, PipelineKey: "payments", ActorID: membershipID, Now: now}); !errors.As(err, &inUse) || len(inUse.Uses) != 1 {
+			t.Fatalf("archive while delegated to = %v", err)
+		}
+		if _, err := store.ArchiveRequestApprovalPipeline(ctx, application.ArchiveRequestApprovalPipelineInput{OrganizationID: orgID, PipelineKey: domain.EntryPipelineKey, ActorID: membershipID, Now: now}); !errors.Is(err, domain.ErrRequestApprovalPipelineEntry) {
+			t.Fatalf("archiving the entry pipeline = %v", err)
+		}
+		if resolved, err := store.ResolvePipelineKeys(ctx, application.ResolvePipelineKeysInput{OrganizationID: orgID, PipelineKeys: []string{"payments", "nowhere"}}); err != nil || len(resolved.Missing) != 1 || resolved.Missing[0] != "nowhere" || len(resolved.Inactive) != 0 {
+			t.Fatalf("resolve = %+v %v", resolved, err)
+		}
+
+		// A cycle: payments delegating back to a pipeline that reaches it.
+		seedPipelineTestScope(t, ctx, store, orgID, membershipID, "checks", now)
+		checksLoop := createPipelineTestRevision(t, ctx, store, orgID, membershipID, "checks", []application.RequestApprovalBlockSnapshotInput{
+			delegate("back", "payments"),
+		}, now)
+		if err := activatePipeline("checks", checksLoop.Revision, 1); err != nil {
+			t.Fatalf("checks -> payments is not a cycle yet: %v", err)
+		}
+		paymentsLoop := createPipelineTestRevision(t, ctx, store, orgID, membershipID, "payments", []application.RequestApprovalBlockSnapshotInput{
+			delegate("to-checks", "checks"),
+		}, now)
+		var cycle domain.PipelineDelegationCycleError
+		if err := activatePipeline("payments", paymentsLoop.Revision, 1); !errors.As(err, &cycle) || len(cycle.PipelineKeys) != 3 {
+			t.Fatalf("closing a cycle = %v, want PipelineDelegationCycleError", err)
+		}
+		if active := activeRevision(t, "payments"); active.Revision != 1 {
+			t.Fatalf("a refused activation changed the active revision: %+v", active)
+		}
+		self := createPipelineTestRevision(t, ctx, store, orgID, membershipID, "payments", []application.RequestApprovalBlockSnapshotInput{
+			delegate("me", "payments"),
+		}, now)
+		if err := activatePipeline("payments", self.Revision, 1); !errors.Is(err, domain.ErrPipelineDelegationCycle) {
+			t.Fatalf("self delegation = %v", err)
+		}
+
+		// A chain deeper than the limit: checks -> payments is a chain of
+		// depth 1, and each deep-N key adds one link on top of it.
+		previous := "checks"
+		for depth := 0; depth <= domain.MaximumDelegationDepth; depth++ {
+			key := fmt.Sprintf("deep-%d", depth)
+			seedPipelineTestScope(t, ctx, store, orgID, membershipID, key, now)
+			link := createPipelineTestRevision(t, ctx, store, orgID, membershipID, key, []application.RequestApprovalBlockSnapshotInput{delegate("down", previous)}, now)
+			err := activatePipeline(key, link.Revision, 1)
+			if depth+2 > domain.MaximumDelegationDepth {
+				var tooDeep domain.PipelineDelegationTooDeepError
+				if !errors.As(err, &tooDeep) {
+					t.Fatalf("depth %d: activation = %v, want PipelineDelegationTooDeepError", depth+2, err)
+				}
+				break
+			}
+			if err != nil {
+				t.Fatalf("depth %d: %v", depth+2, err)
+			}
+			previous = key
+		}
+
+		// The empty seed active again frees payments to be archived; the
+		// archived key resolves as missing and cannot be created again.
+		if err := activatePipeline(domain.EntryPipelineKey, 1, healthy.Revision); err != nil {
+			t.Fatalf("roll back to the seed: %v", err)
+		}
+		if err := activatePipeline("checks", 1, checksLoop.Revision); err != nil {
+			t.Fatalf("roll back checks: %v", err)
+		}
+		archived, err := store.ArchiveRequestApprovalPipeline(ctx, application.ArchiveRequestApprovalPipelineInput{OrganizationID: orgID, PipelineKey: "payments", ActorID: membershipID, Now: now})
+		if err != nil || len(archived) != 3 || archived[0].ArchivedAt == nil || archived[0].IsActive {
+			t.Fatalf("archive = %+v, %v", archived, err)
+		}
+		if _, err := store.ArchiveRequestApprovalPipeline(ctx, application.ArchiveRequestApprovalPipelineInput{OrganizationID: orgID, PipelineKey: "payments", ActorID: membershipID, Now: now}); !errors.Is(err, domain.ErrRequestApprovalPipelineArchived) {
+			t.Fatalf("archiving twice = %v", err)
+		}
+		if resolved, err := store.ResolvePipelineKeys(ctx, application.ResolvePipelineKeysInput{OrganizationID: orgID, PipelineKeys: []string{"payments"}}); err != nil || len(resolved.Missing) != 1 {
+			t.Fatalf("an archived pipeline must resolve as missing: %+v %v", resolved, err)
+		}
+		if err := activatePipeline(domain.EntryPipelineKey, healthy.Revision, 1); !errors.Is(err, domain.ErrRequestApprovalPipelineInactive) {
+			t.Fatalf("rollback onto an archived target = %v", err)
+		}
+		if _, err := store.CreateRequestApprovalPipeline(ctx, application.CreateRequestApprovalPipelineInput{
+			ID: domain.ID(uuid.NewString()), OrganizationID: orgID, PipelineKey: "payments", Name: "Payments again", CreatedByActorID: membershipID, Now: now,
+		}); !errors.Is(err, domain.ErrRequestApprovalPipelineExists) {
+			t.Fatalf("recreating an archived key = %v", err)
+		}
+	})
+
 	// An archive and an activation that names the path race: exactly one
 	// commits, and the end state is consistent either way.
 	t.Run("archive races activation", func(t *testing.T) {
 		for round := 0; round < 4; round++ {
 			key := "race-" + uuid.NewString()[:8]
-			agentSlug := domain.AgentSlug("agent-" + uuid.NewString()[:8])
-			seedPipelineTestScope(t, ctx, store, orgID, membershipID, agentSlug, now)
+			pipelineKey := "pipeline-" + uuid.NewString()[:8]
+			seedPipelineTestScope(t, ctx, store, orgID, membershipID, pipelineKey, now)
 			activatePath(t, key)
-			revision := createPipelineTestRevision(t, ctx, store, orgID, membershipID, agentSlug, []application.RequestApprovalBlockSnapshotInput{
+			revision := createPipelineTestRevision(t, ctx, store, orgID, membershipID, pipelineKey, []application.RequestApprovalBlockSnapshotInput{
 				pipelineTestBlock("review", `{"on_match":"human","escalation_path":"`+key+`"}`),
 			}, now)
 			var wait sync.WaitGroup
 			var activateErr, archiveErr error
 			wait.Add(2)
-			go func() { defer wait.Done(); activateErr = activatePipeline(agentSlug, revision.Revision, 1) }()
+			go func() { defer wait.Done(); activateErr = activatePipeline(pipelineKey, revision.Revision, 1) }()
 			go func() { defer wait.Done(); archiveErr = archivePath(key) }()
 			wait.Wait()
-			active := activeRevision(t, agentSlug)
+			active := activeRevision(t, pipelineKey)
 			_, pathErr := store.GetActiveEscalationPathRevision(ctx, application.GetActiveEscalationPathRevisionInput{OrganizationID: orgID, PathKey: key})
 			pathActive := pathErr == nil
 			switch {

@@ -344,16 +344,16 @@ func (s *Store) ListEscalationPathUses(ctx context.Context, input application.Li
 // name the path: once per block whose config names it, and once with an
 // empty block key when the revision names it as its default.
 func listEscalationPathUses(ctx context.Context, q querier, organizationID domain.ID, pathKey string) ([]domain.PipelineUse, error) {
-	return scanPipelineUses(q.Query(ctx, `SELECT id::text, agent_slug, revision, block_key FROM (
-		SELECT p.id, COALESCE(p.agent_slug, '') AS agent_slug, p.revision, '' AS block_key
+	return scanPipelineUses(q.Query(ctx, `SELECT id::text, pipeline_key, revision, block_key FROM (
+		SELECT p.id, p.pipeline_key, p.revision, '' AS block_key
 		FROM request_approval_pipelines p
 		WHERE p.organization_id = $1 AND p.is_active AND p.default_escalation_path = $2
 		UNION ALL
-		SELECT p.id, COALESCE(p.agent_slug, ''), p.revision, b.block_key
+		SELECT p.id, p.pipeline_key, p.revision, b.block_key
 		FROM request_approval_pipelines p
 		JOIN request_approval_blocks b ON b.organization_id = p.organization_id AND b.id = ANY(p.block_ids)
 		WHERE p.organization_id = $1 AND p.is_active AND b.config->>'escalation_path' = $2
-	) uses ORDER BY agent_slug, revision, block_key`, organizationID, pathKey))
+	) uses ORDER BY (pipeline_key <> $3), pipeline_key, revision, block_key`, organizationID, pathKey, domain.EntryPipelineKey))
 }
 
 // ResolveEscalationPaths reports which of the named keys are missing

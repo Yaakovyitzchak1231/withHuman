@@ -2,6 +2,8 @@
 
 Status: accepted · Last updated: 2026-09-23
 
+> **Amended 2026-09-29.** Pipelines are now keyed (`pipeline_key`, `name`) with a reserved `entry` key, the agent scope is gone, and suspensions pin one revision per pipeline in `approval_request_pipeline_suspension_pins`. See [16-pipeline-delegation.md](16-pipeline-delegation.md).
+
 ## Summary
 
 A `RequestApprovalPipeline` is an organization-owned, ordered program in one

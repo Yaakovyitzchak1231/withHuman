@@ -110,9 +110,9 @@ func (s *Store) ActivateOrganization(ctx context.Context, input application.Acti
 	}, []domain.AssignmentSpec{{RoleID: domain.RoleOwnerID, ScopeKind: domain.ScopeOrganization}}, input.Now); err != nil {
 		return application.ActivationResult{}, err
 	}
-	// The organization pipeline exists from the first moment, empty, so
-	// every scope always has an active revision.
-	if err := s.ensureRequestApprovalPipelineScope(ctx, tx, input.OrganizationID, "", input.MembershipID, input.Now); err != nil {
+	// The entry pipeline exists from the first moment, empty, so every
+	// request has a pipeline to start in.
+	if err := s.ensureEntryPipeline(ctx, tx, input.OrganizationID, input.MembershipID, input.Now); err != nil {
 		return application.ActivationResult{}, err
 	}
 	activated := map[string]string{
@@ -285,6 +285,7 @@ var purgeStatements = []string{
 	`DELETE FROM agent_instance_deliveries WHERE organization_id = $1`,
 	`DELETE FROM agent_instances WHERE organization_id = $1`,
 	`DELETE FROM agents WHERE organization_id = $1`,
+	`DELETE FROM approval_request_pipeline_suspension_pins WHERE organization_id = $1`,
 	`DELETE FROM request_approval_pipelines WHERE organization_id = $1`,
 	`DELETE FROM request_approval_blocks WHERE organization_id = $1`,
 	`DELETE FROM escalation_paths WHERE organization_id = $1`,

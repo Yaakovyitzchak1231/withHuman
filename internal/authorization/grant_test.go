@@ -23,8 +23,9 @@ func TestEvaluateGrant(t *testing.T) {
 	org := domain.Scope{Kind: domain.ScopeOrganization}
 	refund := domain.Scope{Kind: domain.ScopeAgent, ID: "refund-bot"}
 	release := domain.Scope{Kind: domain.ScopeAgent, ID: "release-bot"}
+	payments := domain.Scope{Kind: domain.ScopePipeline, ID: "payments"}
 	editor := domain.RoleRow{ID: "custom", Key: "pipeline-editor", Permissions: []domain.Permission{domain.PermissionPipelineRead, domain.PermissionPipelineWrite, domain.PermissionPolicyWrite},
-		BindableScopeKinds: []domain.ScopeKind{domain.ScopeOrganization, domain.ScopeAgent}}
+		BindableScopeKinds: []domain.ScopeKind{domain.ScopeOrganization, domain.ScopePipeline}}
 
 	tests := []struct {
 		name  string
@@ -43,8 +44,9 @@ func TestEvaluateGrant(t *testing.T) {
 		{"scoped admin grants admin at the same type", GrantInput{Actor: scopedAdmin, Role: builtIn(domain.RoleAdmin), Scope: refund}, "", nil},
 		{"scoped admin cannot grant admin at another type", GrantInput{Actor: scopedAdmin, Role: builtIn(domain.RoleAdmin), Scope: release}, "forbidden", domain.ErrForbidden},
 		{"scoped admin cannot grant admin everywhere", GrantInput{Actor: scopedAdmin, Role: builtIn(domain.RoleAdmin), Scope: org}, "forbidden", domain.ErrForbidden},
-		{"admin delegates permissions it holds at the same scope", GrantInput{Actor: admin, Role: editor, Scope: refund}, "", nil},
-		{"owner grants the custom role", GrantInput{Actor: owner, ActorIsOwner: true, Role: editor, Scope: refund}, "", nil},
+		{"admin delegates permissions it holds at the same scope", GrantInput{Actor: admin, Role: editor, Scope: payments}, "", nil},
+		{"owner grants the custom role", GrantInput{Actor: owner, ActorIsOwner: true, Role: editor, Scope: payments}, "", nil},
+		{"scoped admin cannot grant a pipeline role", GrantInput{Actor: scopedAdmin, Role: editor, Scope: payments}, "forbidden", domain.ErrForbidden},
 		{"dangerous role never arrives unattended", GrantInput{Actor: owner, ActorIsOwner: true, Role: editor, Scope: org, Unattended: true}, "dangerous_role_unattended", domain.ErrInvalid},
 		{"reviewer role may arrive unattended", GrantInput{Actor: owner, ActorIsOwner: true, Role: builtIn(domain.RoleReviewer), Scope: org, Unattended: true}, "", nil},
 	}

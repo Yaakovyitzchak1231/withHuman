@@ -11,7 +11,8 @@ import (
 // maximumApprovalAuditEvents bounds the audit events one pipeline segment
 // (the request path's initialization, or the worker's resume) commits.
 // Every block that continues spends a request budget: at most 1,000
-// condition evaluations (cel blocks and branch conditions share it), five
+// condition evaluations (cel blocks, branch and delegate conditions share
+// it), five
 // judge blocks, and five webhook blocks. One more evaluated event ends the
 // run (a block that decides or fails, including the budget check that
 // refuses the next block, or a branch's closing event), and at most four
@@ -194,8 +195,13 @@ func validateApprovalInitializationSuspension(input InitializeApprovalInput) err
 	}); err != nil {
 		return err
 	}
-	if suspension.OrganizationPipelineID == "" && suspension.AgentPipelineID == "" {
-		return invalidField("approval suspension", "must pin at least one pipeline revision")
+	if suspension.EntryPipelineID() == "" {
+		return invalidField("approval suspension", "must pin the entry pipeline revision")
+	}
+	for key, id := range suspension.PinnedRevisions {
+		if !domain.ValidPipelineKey(key) || id == "" {
+			return invalidField("approval suspension", "must pin revisions under valid pipeline keys")
+		}
 	}
 	if suspension.ResumePosition < 0 || suspension.ResumedAt != nil {
 		return invalidField("approval suspension", "must be open at a non-negative position")

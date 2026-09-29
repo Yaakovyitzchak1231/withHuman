@@ -17,9 +17,7 @@ import (
 // shape is tested without a database.
 
 const (
-	gateBlockID      = "gate-selected-tools"
 	gateBlockName    = "Review tools chosen in setup"
-	approveBlockID   = "approve-the-rest"
 	approveBlockName = "Approve every other tool"
 	pathKeyPrefix    = "notify-"
 	pathEscalateAft  = "1h"
@@ -83,49 +81,171 @@ func PathTargetsMembership(document routing.PathDocument, membershipID domain.ID
 	return false
 }
 
-// PipelineBlocks builds the two-block starting pipeline for one agent
-// type: the suggested tools go to a human through the path, and an
-// always block approves everything else. The setup assistant replaces it
-// with the person's own rules; without an assistant it is what the setup
-// leaves behind. The explicit approve block matters because falling off
-// the end of a pipeline is an implicit human outcome, and the adapter
-// policy is shared across runtimes, so a tool gated for one runtime can
-// reach another's pipeline.
+// EntryPipelineKey is the pipeline the setup writes into: every request
+// starts there, and each connected runtime gets a branch of its own.
+const EntryPipelineKey = domain.EntryPipelineKey
+
+const (
+	gateBlockSuffix    = "-gate-selected-tools"
+	approveBlockSuffix = "-approve-the-rest"
+	conditionNamespace = "withhuman/onboarding/"
+)
+
+// RuntimeBranchKey is the entry block id of one runtime's branch: the
+// runtime key itself.
+func RuntimeBranchKey(runtime string) string { return runtime }
+
+// conditionID is the stable id of one of the setup's conditions, so two
+// runs that gate the same tools produce byte-identical documents and a
+// rerun that changes nothing writes no revision.
+func conditionID(runtime, purpose string) string {
+	return uuid.NewSHA1(uuid.NameSpaceOID, []byte(conditionNamespace+runtime+"/"+purpose)).String()
+}
+
+// StartingBlocks builds the two-block starting body for one runtime: the
+// suggested tools go to a human through the path, and an always block
+// approves everything else. The setup assistant replaces it with the
+// person's own rules; without an assistant it is what the setup leaves
+// behind. The explicit approve block matters because running out of a
+// branch is an implicit human outcome, and the adapter policy is shared
+// across runtimes, so a tool gated for one runtime can reach another's
+// branch. An empty tool list leaves the gate out: every call runs.
 //
-// Block names are verb-first labels, like every other block, because the
-// product quotes them inside sentences: the pipeline card lists them, and
-// a request's review says `"<name>" asked for a human` or `"<name>"
-// approved it`. Reasons are the full sentences shown under "Why this
-// needs a human".
-func PipelineBlocks(selected []string, pathKey string) []approvalblock.Definition {
-	tools := append([]string(nil), selected...)
-	sort.Strings(tools)
-	gate := approvalblock.Define(gateBlockID,
+// Block ids carry the runtime, because keys are unique across the whole
+// entry pipeline and two runtimes each get a branch. Block names are
+// verb-first labels, like every other block, because the product quotes
+// them inside sentences. Reasons are the full sentences shown under "Why
+// this needs a human".
+func StartingBlocks(runtime string, selected []string, pathKey string) []approvalblock.Definition {
+	tools := Union(selected)
+	rest := approvalblock.DefineAlways(runtime+approveBlockSuffix, approvalblock.Approve,
+		approvalblock.Name(approveBlockName),
+		approvalblock.Reason("This tool was not suggested for human approval during the guided setup."),
+	)
+	if len(tools) == 0 {
+		return []approvalblock.Definition{*rest}
+	}
+	gate := approvalblock.Define(runtime+gateBlockSuffix,
 		approvalblock.Name(gateBlockName),
-		approvalblock.When(approvalblock.Field("/request/tool").In(tools...)),
+		approvalblock.When(approvalblock.ConditionID(conditionID(runtime, "gate"), approvalblock.Field("/request/tool").In(tools...))),
 		approvalblock.OnMatch(approvalblock.Human),
 		approvalblock.Reason("This tool was suggested for human approval during the guided setup."),
 	)
 	gate.CEL.EscalationPath = pathKey
-	rest := approvalblock.DefineAlways(approveBlockID, approvalblock.Approve,
-		approvalblock.Name(approveBlockName),
-		approvalblock.Reason("This tool was not suggested for human approval during the guided setup."),
-	)
 	return []approvalblock.Definition{*gate, *rest}
 }
 
-// GatedToolsOf reads the tool list back out of a pipeline's first block
-// when that block is one onboarding wrote, so a second run unions rather
-// than replaces. Any other first block yields nothing.
-func GatedToolsOf(definitions []approvalblock.Definition) []string {
-	if len(definitions) == 0 || definitions[0].ID != gateBlockID || definitions[0].CEL == nil {
+// RuntimeBranch wraps a body in the runtime's branch of the entry
+// pipeline: requests from the runtime's agent enter it, and a request the
+// body does not decide goes to the person through the path. Blocks inside
+// a branch never inherit its path, so the gate names the path itself.
+func RuntimeBranch(runtime string, body []approvalblock.Definition, pathKey string) approvalblock.Definition {
+	name := runtimeName(runtime)
+	branch := approvalblock.DefineBranch(RuntimeBranchKey(runtime), body,
+		approvalblock.Name(name),
+		approvalblock.When(approvalblock.ConditionID(conditionID(runtime, "branch"), approvalblock.Field("/agent/slug").Equals(runtime))),
+		approvalblock.Reason("No rule for "+name+" decided this request, so it waits for a person."),
+	)
+	branch.Branch.EscalationPath = pathKey
+	return *branch
+}
+
+// runtimeName is the display name the branch carries.
+func runtimeName(runtime string) string {
+	if known, ok := agentruntime.Lookup(agentruntime.Key(runtime)); ok {
+		return known.DisplayName
+	}
+	return runtime
+}
+
+// EntryBlocks upserts the runtime branches into an entry document: a
+// top-level block whose id equals a branch's id is replaced in place; a
+// new branch is inserted before the first top-level always block (which
+// would make it unreachable) or appended. Every other block stays where
+// it was.
+func EntryBlocks(existing []approvalblock.Definition, branches ...approvalblock.Definition) []approvalblock.Definition {
+	blocks := append([]approvalblock.Definition(nil), existing...)
+	for _, branch := range branches {
+		replaced := false
+		for index := range blocks {
+			if blocks[index].ID == branch.ID {
+				blocks[index] = branch
+				replaced = true
+				break
+			}
+		}
+		if replaced {
+			continue
+		}
+		at := len(blocks)
+		for index, block := range blocks {
+			if block.Type == approvalblock.TypeAlways {
+				at = index
+				break
+			}
+		}
+		blocks = append(blocks[:at], append([]approvalblock.Definition{branch}, blocks[at:]...)...)
+	}
+	if blocks == nil {
+		blocks = []approvalblock.Definition{}
+	}
+	return blocks
+}
+
+// RuntimeBranchOf finds the runtime's top-level branch in an entry
+// document.
+func RuntimeBranchOf(entry []approvalblock.Definition, runtime string) (approvalblock.Definition, bool) {
+	for _, block := range entry {
+		if block.ID == RuntimeBranchKey(runtime) && block.Type == approvalblock.TypeBranch && block.Branch != nil {
+			return block, true
+		}
+	}
+	return approvalblock.Definition{}, false
+}
+
+// StartingShape reports whether the branch body is still what the setup
+// wrote: the gate followed by the approve block, or the approve block
+// alone. A body the person or the assistant rewrote is left alone by a
+// later run.
+func StartingShape(runtime string, branch approvalblock.Definition) bool {
+	if branch.Branch == nil {
+		return false
+	}
+	body := branch.Branch.Blocks
+	switch len(body) {
+	case 1:
+		return body[0].ID == runtime+approveBlockSuffix
+	case 2:
+		return body[0].ID == runtime+gateBlockSuffix && body[0].CEL != nil && body[1].ID == runtime+approveBlockSuffix
+	}
+	return false
+}
+
+// GatedToolsOf reads the tool list back out of the runtime's branch when
+// it is still in the starting shape, so a second run unions rather than
+// replaces: nil when the branch is absent or rewritten, an empty list
+// when the body is the approve block alone.
+func GatedToolsOf(entry []approvalblock.Definition, runtime string) []string {
+	branch, ok := RuntimeBranchOf(entry, runtime)
+	if !ok || !StartingShape(runtime, branch) {
 		return nil
 	}
+	if len(branch.Branch.Blocks) == 1 {
+		return []string{}
+	}
 	var tools []string
-	if err := json.Unmarshal(definitions[0].CEL.When.Value, &tools); err != nil {
+	if err := json.Unmarshal(branch.Branch.Blocks[0].CEL.When.Value, &tools); err != nil {
 		return nil
 	}
 	return tools
+}
+
+// SameDocument reports whether two documents are byte-identical once
+// encoded, which the deterministic condition ids make meaningful.
+func SameDocument(a, b []approvalblock.Definition) bool {
+	left, errA := json.Marshal(a)
+	right, errB := json.Marshal(b)
+	return errA == nil && errB == nil && string(left) == string(right)
 }
 
 func sortStrings(values []string) { sort.Strings(values) }

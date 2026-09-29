@@ -133,7 +133,8 @@ recorded in this file with both the reason and the replacement rule.
   resource)` for one action, `Scope(principal, permission)` for list
   predicates, `HoldsAnywhere` for navigation and the router's coarse gate.
   Principals carry grants (a permission pinned to a scope: organization,
-  team, or agent, the last keyed by the agent's slug); `Principal.Permissions` is the flat projection
+  team, agent, or pipeline, the last two keyed by the agent's slug and
+  the pipeline's key); `Principal.Permissions` is the flat projection
   for clients and server code never reads it. Never check a role name.
   Every route registers through `httpapi.handle` with an access label,
   and every OpenAPI operation carries the same label in
@@ -543,45 +544,79 @@ recorded in this file with both the reason and the replacement rule.
   (the `claim` field exists only on the product representation), and are
   audited as `routing.claimed` / `routing.claim_released` /
   `routing.claim_lapsed`.
-- Every live pipeline scope has exactly one active revision at all times.
-  Scopes are `organization` and `agent`; the agent scope is keyed by the
-  agent's slug and every agent owns exactly one
-  (`/api/v1/request-approval-pipelines/agents/{agent_slug}`). The
-  organization scope is seeded in the organization's activation
-  transaction and an agent's scope in the transaction that inserts the
-  agent (agent creation, device-code enrollment, or onboarding
-  provisioning, which creates the agent before its pipeline), as an
-  empty revision 1 that passes requests through
-  (`ensureRequestApprovalPipelineScope`). There is no deactivate and no
-  delete: a pipeline that should decide nothing gets an empty revision,
-  activation always requires the current active revision in `If-Match`,
-  the store refuses a revision for a slug no agent holds (404), and a
-  deferred constraint trigger refuses leaving a scope without an active
-  row. The one exception is archiving: archiving the agent stamps every
-  revision of its scope with `archived_at` and deactivates the active one
-  in the same update (`archiveRequestApprovalPipelineScope`, under the
-  scope's advisory lock, the lock agent creation takes before it reads
-  the scope). An archived scope is listed only with `status=archived|all`
-  (no `active_revision`, `archived_at` instead), its revisions stay
-  readable but frozen, and creating or activating within it is 409
-  `request_approval_pipeline_archived`. Restoring the agent restores the
-  scope in the same transaction: the stamps are cleared and the latest
-  revision re-activated, audited as
-  `request_approval_pipeline.restored`. Slugs are never reused, so no
-  other agent can ever take over an archived scope. The organization
-  scope is never archived. The pipeline overview never offers to create
-  a pipeline; an agent appears there as soon as it is created.
+- Pipelines are keyed objects (`docs/design/16-pipeline-delegation.md`):
+  `request_approval_pipelines.pipeline_key` (the agent slug pattern,
+  chosen once, never reused) with a `name` on every revision (renaming is
+  a revision), append-only numbered revisions, `default_escalation_path`,
+  and exactly one active revision per live key at all times (a deferred
+  constraint trigger refuses leaving a key without an active row). Every
+  organization has the reserved `entry` pipeline (`domain.EntryPipelineKey`,
+  seeded empty and active in the activation transaction by
+  `ensureEntryPipeline`), which every request runs; every other pipeline
+  is created explicitly (`POST /api/v1/request-approval-pipelines` with
+  `pipeline_key`, `name` and its first revision, organization-scope
+  `pipeline.write`, 409 `request_approval_pipeline_exists` on any key
+  ever used, 409 `request_approval_pipeline_entry` for `entry`) and
+  reached only through `delegate` blocks. A delegate (`config: {when,
+  pipeline_key}`, synchronous, no reason, no path, never `entry` or its
+  own pipeline) is a branch whose body is the target's active revision:
+  the condition belongs to the pipeline being branched out of, what
+  happens after the match to the target's owners, who hold `pipeline.*`
+  at the scope kind `pipeline` (id the key; `admin` is bindable there).
+  A request that enters the target is decided inside it; when the target
+  runs out of blocks the run ends `human` with a closing evaluated event
+  on the delegate (`end_of_branch: true`, reason code `end_of_branch`),
+  routed to the target's default path, else the enclosing pipelines'
+  defaults walking outward, else the default queue. The effective
+  pipeline is flattened per run in `internal/approvalpipeline/effective.go`
+  from the pinned or active revisions (a delegate immediately followed
+  by the target's blocks; positions index the flat list,
+  `resume_position` stays one integer, metadata keys are
+  `<pipeline_key>/<block_key>`, webhook idempotency keys
+  `requestID:pipelineKey:blockKey`), and a suspension pins one revision
+  per pipeline in `approval_request_pipeline_suspension_pins`. Activation
+  (`If-Match` on the current active revision) takes the organization-wide
+  advisory lock `<org>:pipeline-graph` before the key lock and checks the
+  whole active graph with the candidate standing in: every delegated key
+  live (409 `request_approval_pipeline_inactive`), no cycle (409
+  `request_approval_pipeline_delegation_cycle`), depth at most
+  `domain.MaximumDelegationDepth` (8, 409
+  `request_approval_pipeline_delegation_too_deep`), flattened size from
+  `entry` at most `domain.MaximumEffectivePipelineBlocks` (10,000, 409
+  `request_approval_pipeline_too_large`); diamonds are legal. Revision
+  creation and preview require every delegated key to exist
+  (`approvalpipeline.WithPipelineKeyResolver`, 400
+  `request_approval_pipeline_not_found`), `/revisions/{n}/references`
+  reports each target's state, and a run-time violation is
+  `compiled_cache_unavailable` (human on the entry default), never a
+  partial run. There is no deactivate and no restore: `DELETE
+  /request-approval-pipelines/{key}` (`pipeline.activate`) archives the
+  key, refused for `entry` and while any active revision delegates to it
+  (409 `request_approval_pipeline_in_use` with `uses`;
+  `GET /request-approval-pipelines/{key}/uses` explains it before the
+  click), stamping every revision with `archived_at`, deactivating the
+  active one and removing API-key assignments at `pipeline:<key>`
+  (audited `request_approval_pipeline.archived`). An archived key is
+  listed only with `status=archived|all`, stays readable, and refuses
+  revisions and activation (409 `request_approval_pipeline_archived`).
+  Agents own no pipeline: creating, archiving and restoring an agent
+  touch none, and "rules for one agent" is a branch or delegate on
+  `/agent/slug`. The overview offers New pipeline; the delegate card's
+  well draws the target's active blocks read only under the target's
+  own key.
 - Request approval block types are a registry
   (`internal/approvalpipeline.BlockRegistry`), constructed once in each
   composition root and shared by compiled state, management, and
   execution. `approvalblock.Definition` is a type-dispatched envelope: the
   wire `config` object decodes into the variant pointer selected by `type`
-  (`Always`, `CEL`, `Webhook`, or `Branch` for core's kinds, or the
-  `Config` of a registered edition kind), each type owns its envelope
-  limits (`approvalblock.LimitsFor`), and the runtime fingerprint is the
-  composition of every registered runtime's fingerprint. Core has four
-  types: `always`, `cel`, `webhook` (`docs/design/08-webhook-block.md`),
-  and `branch` (`docs/design/15-branch-blocks.md`). An edition adds a kind
+  (`Always`, `CEL`, `Webhook`, `Branch`, or `Delegate` for core's kinds,
+  or the `Config` of a registered edition kind), each type owns its
+  envelope limits (`approvalblock.LimitsFor`), and the runtime
+  fingerprint is the composition of every registered runtime's
+  fingerprint. Core has five types: `always`, `cel`, `webhook`
+  (`docs/design/08-webhook-block.md`), `branch`
+  (`docs/design/15-branch-blocks.md`), and `delegate`
+  (`docs/design/16-pipeline-delegation.md`). An edition adds a kind
   on two seams: `approvalblock.RegisterKind` (the grammar: type name,
   envelope limits, and a constructor for its strictly decoded `config`,
   which implements `Validate`, and `RoutedConfig` or `ReasonedConfig`
@@ -693,9 +728,10 @@ recorded in this file with both the reason and the replacement rule.
   and reserved ranges and pinned before dialing, no redirects, 64 KiB
   responses; `WITHHUMAN_WEBHOOK_ALLOW_INSECURE` and
   `WITHHUMAN_WEBHOOK_ALLOW_PRIVATE_NETWORKS` exist for development only.
-  CEL and branch conditions read earlier blocks' metadata at
-  `/previous_metadata/<scope>/<block_key>/...`; preview namespaces
-  metadata by the previewed scope and accepts seeded `previous_metadata`.
+  CEL, branch and delegate conditions read earlier blocks' metadata at
+  `/previous_metadata/<pipeline_key>/<block_key>/...`; preview
+  namespaces metadata by pipeline key and accepts seeded
+  `previous_metadata`.
 - The review queue (`GET /api/v1/requests` and the `queue` SSE stream) is
   for humans: it lists only requests that reached human review (pending,
   decided by a human, or expired while waiting). Requests the pipeline
@@ -849,32 +885,39 @@ recorded in this file with both the reason and the replacement rule.
   the person then records the request they decided in the one test
   (`tested`, checked against an enrolled agent) and finishes, which
   requires `tested`. Provisioning (the escalation path that notifies
-  the person, one starting pipeline revision per runtime's agent that
-  sends the suggested tools to a human and approves the rest) runs
-  under the person's own session when they reach
-  the rules step; enrollment is the one CLI-initiated write that mints,
+  the person, the runtimes' agents, and one entry pipeline revision
+  holding a top-level `branch` per runtime, block id the runtime key
+  and condition `/agent/slug equals <runtime>`, whose body sends the
+  suggested tools to a human and approves the rest; `internal/onboarding/generate.go`,
+  inserted before the first top-level always, other blocks untouched,
+  no revision when the document is unchanged) runs under the person's
+  own session when they reach the rules step; enrollment is the one CLI-initiated write that mints,
   under a principal rebuilt from the session's membership at that
   moment, because agent credentials are handed to the CLI once and
   never stored. Tool suggestions are deterministic
   (`internal/toolsuggest`) and carry a reason code; they seed the
-  starting pipeline. The rules step offers three ways: a prompt for
-  the person's own coding agent (which writes through the hosted MCP
-  server while the page polls the agents' pipelines), a gated-tools
-  table per agent, and the setup assistant
+  starting branch. The rules step offers three ways: a prompt for
+  the person's own coding agent (which writes the entry pipeline
+  through the hosted MCP server while the page polls it), a gated-tools
+  table per agent (which rewrites that runtime's branch alone), and the
+  setup assistant
   (`internal/onboarding/assistant.go`, `POST
   /api/v1/onboarding/session/assistant`): the person describes in their
   own words which calls should wait for them and the edition's assistant
   model (`runtime.ServerOptions.AssistantModel`, an
   `application.ToolUseModel`; the hosted edition hands over its judge
   catalog's default model, and runtime-config reports
-  `setup_assistant_enabled`) writes the agents' pipelines
-  through the hosted MCP server's own tool catalog, dispatched in
-  process under the person's resolved principal (`loopbackPrincipalKey`
-  in `internal/httpapi/mcp.go`), never a bearer. The service confines it
-  to the pipeline tools on the session's own agents, injects the setup's
-  path as the default, and owns `set_test_prompt`, which previews the
-  proposed sample against the active rules and refuses one that would
-  not reach a person before it becomes the test command. The transcript
+  `setup_assistant_enabled`) writes the agents' branches through the
+  setup's own tools (`get_agent_rules`, `update_agent_rules`,
+  `preview_agent_rules`, `set_test_prompt`), implemented in the
+  onboarding service under the person's resolved principal, never a
+  bearer. The service confines it to the session's own runtimes, injects
+  the setup's path on every block that can hand to a human and names
+  none, and `set_test_prompt` previews the proposed sample against the
+  active entry pipeline and refuses one that would not reach a person
+  before it becomes the test command. The grammar the prompt and
+  `read_reference` share lives in `internal/mcpreference`
+  (`onboarding.AssistantGrammar`). The transcript
   lives on the session (`assistant`, one action per tool call as it
   happens, so the events stream shows progress); the model's context is
   a column of its own. The grammar both the assistant's prompt and
@@ -936,17 +979,14 @@ recorded in this file with both the reason and the replacement rule.
   `archived` with `agents.archived_at`: every live credential and
   provisioner token is revoked, instances and history stay readable for
   the record, no instance or provisioner can be minted under it, the
-  status switch and instance switches answer 409 `agent_archived`, its
-  approval pipeline is archived in the same transaction (audited as
-  `agent.archived` with `pipeline_archived` and
-  `request_approval_pipeline.archived`), and its name is freed while its
-  slug stays taken. Onboarding whose runtime slug (`codex`) belongs to
+  status switch and instance switches answer 409 `agent_archived`
+  (audited as `agent.archived`), and its name is freed while its slug
+  stays taken. Onboarding whose runtime slug (`codex`) belongs to
   an archived agent fails with `agent_archived` and tells the person to
   restore the agent in the app or choose another slug. Archiving is
   reversible: `POST /api/v1/agents/{slug}/restore` (the Restore action
-  beside the archived badge) puts the agent back to `active` and
-  restores its pipeline with the latest revision re-activated, audited
-  as `agent.restored` and `request_approval_pipeline.restored`;
+  beside the archived badge) puts the agent back to `active`, audited
+  as `agent.restored`;
   credentials and provisioner tokens revoked at archive stay revoked,
   instances stay and can be re-enrolled, and restoring a live agent is
   409 `agent_not_archived`. The inventory lists

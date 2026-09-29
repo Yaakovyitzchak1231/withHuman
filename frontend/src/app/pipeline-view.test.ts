@@ -4,11 +4,11 @@ import type { RequestApprovalPipelineRevision } from "../types";
 import { loadPipelineView } from "./pipeline-view";
 import { pipelineLink, pipelineSearch } from "./pipeline-link";
 
-function revision(number: number, agentSlug = ""): RequestApprovalPipelineRevision {
+function revision(number: number, pipelineKey = "entry"): RequestApprovalPipelineRevision {
   return {
-    id: `revision-${number}`,
-    scope: agentSlug ? "agent" : "organization",
-    agent_slug: agentSlug || undefined,
+    id: `revision-${pipelineKey}-${number}`,
+    pipeline_key: pipelineKey,
+    name: pipelineKey === "entry" ? "Entry pipeline" : pipelineKey,
     revision: number,
     is_active: number === 3,
     block_count: 0,
@@ -21,12 +21,16 @@ function revision(number: number, agentSlug = ""): RequestApprovalPipelineRevisi
 afterEach(() => vi.restoreAllMocks());
 
 describe("pipeline review links", () => {
-  it("preserves the pipeline scope, historical revision, and exact block key", () => {
+  it("preserves the pipeline key, historical revision, and exact block key", () => {
     const search = pipelineSearch({ revision: "2", block: "production-review" });
-    expect(pipelineLink("", search)).toEqual({ to: "/pipelines/organization", search: { revision: 2, block: "production-review" } });
+    expect(pipelineLink("entry", search)).toEqual({
+      to: "/pipelines/$pipelineKey",
+      params: { pipelineKey: "entry" },
+      search: { revision: 2, block: "production-review" },
+    });
     expect(pipelineLink("release", search)).toEqual({
-      to: "/pipelines/agents/$agentSlug",
-      params: { agentSlug: "release" },
+      to: "/pipelines/$pipelineKey",
+      params: { pipelineKey: "release" },
       search: { revision: 2, block: "production-review" },
     });
   });
@@ -41,31 +45,60 @@ describe("pipeline review links", () => {
 
 describe("loading a pipeline from a review link", () => {
   function mockPage() {
-    vi.spyOn(api, "requestApprovalPipelineRevisions").mockImplementation(async (agentSlug) => ({
-      revisions: [revision(3, agentSlug)],
+    vi.spyOn(api, "requestApprovalPipelineRevisions").mockImplementation(async (pipelineKey) => ({
+      revisions: [revision(3, pipelineKey)],
       total_count: 3,
     }));
-    vi.spyOn(api, "activeRequestApprovalPipeline").mockImplementation(async (agentSlug) => revision(3, agentSlug));
+    vi.spyOn(api, "activeRequestApprovalPipeline").mockImplementation(async (pipelineKey) => revision(3, pipelineKey));
+    vi.spyOn(api, "requestApprovalPipelines").mockResolvedValue({ request_approval_pipelines: [] });
+    vi.spyOn(api, "requestApprovalPipelineUses").mockResolvedValue({ uses: [] });
     vi.spyOn(api, "escalationPaths").mockResolvedValue({ escalation_paths: [] });
     vi.spyOn(api, "runtimeConfig").mockRejectedValue(new Error("No optional block configuration"));
     vi.spyOn(api, "agents").mockResolvedValue({ agents: [] });
     vi.spyOn(api, "approvals").mockResolvedValue({ requests: [] });
   }
 
-  it.each(["", "release"])("loads the pinned revision separately from the active revision for scope %s", async (agentSlug) => {
+  it.each(["entry", "release"])("loads the pinned revision separately from the active revision for pipeline %s", async (pipelineKey) => {
     mockPage();
-    const readRevision = vi.spyOn(api, "requestApprovalPipelineRevision").mockResolvedValue(revision(2, agentSlug));
-    const page = await loadPipelineView(agentSlug, 2);
-    expect(readRevision).toHaveBeenCalledWith(agentSlug, 2);
+    const readRevision = vi.spyOn(api, "requestApprovalPipelineRevision").mockResolvedValue(revision(2, pipelineKey));
+    const page = await loadPipelineView(pipelineKey, 2);
+    expect(readRevision).toHaveBeenCalledWith(pipelineKey, 2);
     expect(page.linkedRevision?.revision).toBe(2);
     expect(page.displayed?.revision).toBe(3);
     expect(page.error).toBe("");
   });
 
+  it("asks who delegates to a pipeline, but never for the entry pipeline", async () => {
+    mockPage();
+    await loadPipelineView("release");
+    expect(api.requestApprovalPipelineUses).toHaveBeenCalledWith("release");
+    vi.mocked(api.requestApprovalPipelineUses).mockClear();
+    await loadPipelineView("entry");
+    expect(api.requestApprovalPipelineUses).not.toHaveBeenCalled();
+  });
+
+  it("loads the active revision of every pipeline the displayed revision delegates to", async () => {
+    mockPage();
+    vi.mocked(api.activeRequestApprovalPipeline).mockImplementation(async (pipelineKey) => ({
+      ...revision(3, pipelineKey),
+      blocks: pipelineKey === "entry"
+        ? [{
+            id: "to-billing", name: "Billing", type: "delegate", enabled: true, timeout: "50ms", max_attempts: 1,
+            snapshot_id: "s", config_version: 1, content_hash: "h",
+            config: { when: { id: "w", all: [] }, pipeline_key: "billing" },
+          }]
+        : [],
+    }));
+    const page = await loadPipelineView("entry");
+    expect(api.activeRequestApprovalPipeline).toHaveBeenCalledWith("billing");
+    expect(Object.keys(page.delegates)).toEqual(["billing"]);
+    expect(page.delegates.billing.name).toBe("billing");
+  });
+
   it("reports a missing pinned revision instead of silently showing today's pipeline", async () => {
     mockPage();
     vi.spyOn(api, "requestApprovalPipelineRevision").mockRejectedValue(new RequestError("Not found", 404, "not_found"));
-    const page = await loadPipelineView("", 2);
+    const page = await loadPipelineView("entry", 2);
     expect(page.linkedRevision).toBeNull();
     expect(page.displayed).toBeNull();
     expect(page.missing).toBe(false);

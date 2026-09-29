@@ -150,12 +150,15 @@ type OnboardingTool struct {
 }
 
 // OnboardingGeneratedPipeline records what provisioning wrote for one
-// agent: the revision it activated and the one that was active
-// before (the empty first revision the agent was born with, or an
-// earlier onboarding's).
+// runtime: the pipeline it wrote into (always the entry pipeline), the
+// branch that holds the runtime's rules, the revision it activated and
+// the one that was active before. Revision equals ReplacedActiveRevision
+// when a rerun found nothing to change.
 type OnboardingGeneratedPipeline struct {
-	Revision               int64 `json:"revision"`
-	ReplacedActiveRevision int64 `json:"replaced_active_revision"`
+	PipelineKey            string `json:"pipeline_key"`
+	BranchKey              string `json:"branch_key"`
+	Revision               int64  `json:"revision"`
+	ReplacedActiveRevision int64  `json:"replaced_active_revision"`
 }
 
 // OnboardingGenerated records every object provisioning created so the

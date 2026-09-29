@@ -186,14 +186,17 @@ export function PermissionsSummary({
                                           <span className="text-ink-secondary">
                                             {assignment.scope_kind === "team"
                                               ? "Team"
-                                              : "Agent"}
+                                              : assignment.scope_kind === "pipeline"
+                                                ? "Pipeline"
+                                                : "Agent"}
                                             :{" "}
                                           </span>
                                           <span>
                                             {assignment.scope_name ||
                                               assignment.scope_id}
                                           </span>
-                                          {assignment.scope_kind === "agent" &&
+                                          {(assignment.scope_kind === "agent" ||
+                                            assignment.scope_kind === "pipeline") &&
                                           assignment.scope_name ? (
                                             <span className="ml-1.5 font-mono text-micro text-ink-muted">
                                               {assignment.scope_id}

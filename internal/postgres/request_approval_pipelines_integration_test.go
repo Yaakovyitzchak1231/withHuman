@@ -31,14 +31,14 @@ func TestRequestApprovalPipelinesAgainstRealPostgres(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	firstOrg, firstMembership := insertPipelineTestTenant(t, ctx, store, "first", now)
 	secondOrg, secondMembership := insertPipelineTestTenant(t, ctx, store, "second", now)
-	// Every scope is born with an empty active revision 1, so authored
-	// revisions start at 2. The scopes this test edits are seeded the way
-	// agent creation and organization activation seed them.
+	// Every pipeline is born with an empty active revision 1, so authored
+	// revisions start at 2. The pipelines this test edits are seeded the
+	// way a create and the organization's activation seed them.
 	for _, scope := range []struct {
 		organization, membership domain.ID
-		agentSlug                domain.AgentSlug
-	}{{firstOrg, firstMembership, "billing"}, {secondOrg, secondMembership, "billing"}, {secondOrg, secondMembership, "cross-tenant"}, {secondOrg, secondMembership, ""}} {
-		seedPipelineTestScope(t, ctx, store, scope.organization, scope.membership, scope.agentSlug, now)
+		pipelineKey              string
+	}{{firstOrg, firstMembership, "billing"}, {secondOrg, secondMembership, "billing"}, {secondOrg, secondMembership, "cross-tenant"}, {secondOrg, secondMembership, domain.EntryPipelineKey}} {
+		seedPipelineTestScope(t, ctx, store, scope.organization, scope.membership, scope.pipelineKey, now)
 	}
 	firstBlocks := []application.RequestApprovalBlockSnapshotInput{
 		pipelineTestBlock("small-refund", `{"on_match":"approve","threshold":1000}`),
@@ -86,17 +86,17 @@ func TestRequestApprovalPipelinesAgainstRealPostgres(t *testing.T) {
 			t.Fatal("content hash deduplication crossed organization boundary")
 		}
 		_, err := store.GetRequestApprovalPipelineRevision(ctx, application.GetRequestApprovalPipelineRevisionInput{
-			OrganizationID: secondOrg, AgentSlug: "billing", Revision: 3,
+			OrganizationID: secondOrg, PipelineKey: "billing", Revision: 3,
 		})
 		if !errors.Is(err, domain.ErrNotFound) {
 			t.Fatalf("cross-tenant revision lookup returned %v, want not found", err)
 		}
 		_, err = store.CreateRequestApprovalPipelineRevision(ctx, application.CreateRequestApprovalPipelineRevisionInput{
-			ID: domain.ID(uuid.NewString()), OrganizationID: firstOrg, AgentSlug: "no-such-agent-type",
+			ID: domain.ID(uuid.NewString()), OrganizationID: firstOrg, PipelineKey: "no-such-pipeline", Name: "Nowhere",
 			Blocks: firstBlocks, CreatedByActorID: firstMembership, Now: now,
 		})
 		if !errors.Is(err, domain.ErrNotFound) {
-			t.Fatalf("revision for an agent type without agents returned %v, want not found", err)
+			t.Fatalf("revision for a pipeline never created returned %v, want not found", err)
 		}
 		_, err = store.GetRequestApprovalBlocks(ctx, application.GetRequestApprovalBlocksInput{
 			OrganizationID: secondOrg, BlockIDs: firstRevision.BlockIDs,
@@ -119,8 +119,8 @@ func TestRequestApprovalPipelinesAgainstRealPostgres(t *testing.T) {
 
 	t.Run("monotonic revisions and invalid references", func(t *testing.T) {
 		assertSQLRejected(t, ctx, store, `INSERT INTO request_approval_pipelines
-			(id, organization_id, agent_slug, revision, block_ids, created_by_actor_id, created_at)
-			VALUES ($1, $2, 'billing', 9, '{}', $3, $4)`, "revision must be 4",
+			(id, organization_id, pipeline_key, name, revision, block_ids, created_by_actor_id, created_at)
+			VALUES ($1, $2, 'billing', 'Billing', 9, '{}', $3, $4)`, "revision must be 4",
 			uuid.NewString(), firstOrg, firstMembership, now)
 
 		assertInvalidPipelineBlockArray(t, ctx, store, firstOrg, firstMembership,
@@ -164,7 +164,7 @@ func TestRequestApprovalPipelinesAgainstRealPostgres(t *testing.T) {
 		activate := func(revision int64) {
 			<-start
 			_, err := store.ActivateRequestApprovalPipelineRevision(ctx, application.ActivateRequestApprovalPipelineRevisionInput{
-				OrganizationID: firstOrg, AgentSlug: "billing", Revision: revision,
+				OrganizationID: firstOrg, PipelineKey: "billing", Revision: revision,
 				ExpectedActiveRevision: 1, ActorID: firstMembership, Now: now.Add(4 * time.Second),
 			})
 			results <- err
@@ -188,7 +188,7 @@ func TestRequestApprovalPipelinesAgainstRealPostgres(t *testing.T) {
 			t.Fatalf("concurrent activation results: %d succeeded, %d stale", succeeded, stale)
 		}
 		active, err := store.GetActiveRequestApprovalPipelineRevision(ctx, application.GetActiveRequestApprovalPipelineRevisionInput{
-			OrganizationID: firstOrg, AgentSlug: "billing",
+			OrganizationID: firstOrg, PipelineKey: "billing",
 		})
 		if err != nil {
 			t.Fatalf("get active revision: %v", err)
@@ -201,14 +201,14 @@ func TestRequestApprovalPipelinesAgainstRealPostgres(t *testing.T) {
 		}
 		wrongExpected := active.Revision + 100
 		_, err = store.ActivateRequestApprovalPipelineRevision(ctx, application.ActivateRequestApprovalPipelineRevisionInput{
-			OrganizationID: firstOrg, AgentSlug: "billing", Revision: rollbackTarget,
+			OrganizationID: firstOrg, PipelineKey: "billing", Revision: rollbackTarget,
 			ExpectedActiveRevision: wrongExpected, ActorID: firstMembership, Now: now.Add(5 * time.Second),
 		})
 		if !errors.Is(err, domain.ErrPreconditionFailed) {
 			t.Fatalf("stale activation returned %v, want precondition failed", err)
 		}
 		rolledBack, err := store.ActivateRequestApprovalPipelineRevision(ctx, application.ActivateRequestApprovalPipelineRevisionInput{
-			OrganizationID: firstOrg, AgentSlug: "billing", Revision: rollbackTarget,
+			OrganizationID: firstOrg, PipelineKey: "billing", Revision: rollbackTarget,
 			ExpectedActiveRevision: active.Revision, ActorID: firstMembership, Now: now.Add(6 * time.Second),
 		})
 		if err != nil || !rolledBack.IsActive || rolledBack.Revision != rollbackTarget {
@@ -218,12 +218,12 @@ func TestRequestApprovalPipelinesAgainstRealPostgres(t *testing.T) {
 		if err != nil {
 			t.Fatalf("list active revisions for startup: %v", err)
 		}
-		// Every seeded scope's empty revision is active too: the first
-		// organization's billing scope now holds the rolled-back revision,
-		// and the second organization's three scopes hold their seeds.
+		// Every seeded pipeline's empty revision is active too: the first
+		// organization's billing pipeline now holds the rolled-back
+		// revision, and the second organization's three hold their seeds.
 		byScope := make(map[string]domain.ID)
 		for _, revision := range activeRevisions {
-			byScope[string(revision.OrganizationID)+"/"+string(revision.AgentSlug)] = revision.ID
+			byScope[string(revision.OrganizationID)+"/"+revision.PipelineKey] = revision.ID
 		}
 		if len(activeRevisions) != 4 || byScope[string(firstOrg)+"/billing"] != rolledBack.ID {
 			t.Fatalf("startup revision scan returned unexpected tenants or revisions: %+v", activeRevisions)
@@ -233,54 +233,60 @@ func TestRequestApprovalPipelinesAgainstRealPostgres(t *testing.T) {
 			"must keep an active revision", rolledBack.ID)
 	})
 
-	t.Run("organization scope", func(t *testing.T) {
-		orgFirst := createPipelineTestRevision(t, ctx, store, secondOrg, secondMembership, "",
-			[]application.RequestApprovalBlockSnapshotInput{pipelineTestBlock("org-small-refund", `{"on_match":"approve"}`)}, now.Add(2*time.Second))
-		if orgFirst.Revision != 2 || orgFirst.AgentSlug != "" {
-			t.Fatalf("organization revision = %+v, want scope-independent revision 2", orgFirst)
+	t.Run("entry pipeline", func(t *testing.T) {
+		entryFirst := createPipelineTestRevision(t, ctx, store, secondOrg, secondMembership, domain.EntryPipelineKey,
+			[]application.RequestApprovalBlockSnapshotInput{pipelineTestBlock("entry-small-refund", `{"on_match":"approve"}`)}, now.Add(2*time.Second))
+		if entryFirst.Revision != 2 || entryFirst.PipelineKey != domain.EntryPipelineKey || entryFirst.Name != entryPipelineName {
+			t.Fatalf("entry revision = %+v, want revision 2 of the entry pipeline", entryFirst)
 		}
-		orgSecond := createPipelineTestRevision(t, ctx, store, secondOrg, secondMembership, "",
-			[]application.RequestApprovalBlockSnapshotInput{pipelineTestBlock("org-manual", `{"on_match":"human"}`)}, now.Add(3*time.Second))
-		if orgSecond.Revision != 3 {
-			t.Fatalf("organization scope did not keep its own revision sequence: %+v", orgSecond)
+		entrySecond := createPipelineTestRevision(t, ctx, store, secondOrg, secondMembership, domain.EntryPipelineKey,
+			[]application.RequestApprovalBlockSnapshotInput{pipelineTestBlock("entry-manual", `{"on_match":"human"}`)}, now.Add(3*time.Second))
+		if entrySecond.Revision != 3 {
+			t.Fatalf("the entry pipeline did not keep its own revision sequence: %+v", entrySecond)
 		}
 
 		assertSQLRejected(t, ctx, store, `INSERT INTO request_approval_pipelines
-			(id, organization_id, agent_slug, revision, block_ids, created_by_actor_id, created_at)
-			VALUES ($1, $2, NULL, 9, '{}', $3, $4)`, "revision must be 4",
+			(id, organization_id, pipeline_key, name, revision, block_ids, created_by_actor_id, created_at)
+			VALUES ($1, $2, 'entry', 'Entry pipeline', 9, '{}', $3, $4)`, "revision must be 4",
 			uuid.NewString(), secondOrg, secondMembership, now)
 
 		activated, err := store.ActivateRequestApprovalPipelineRevision(ctx, application.ActivateRequestApprovalPipelineRevisionInput{
-			OrganizationID: secondOrg, AgentSlug: "", Revision: orgFirst.Revision,
+			OrganizationID: secondOrg, PipelineKey: domain.EntryPipelineKey, Revision: entryFirst.Revision,
 			ExpectedActiveRevision: 1, ActorID: secondMembership, Now: now.Add(4 * time.Second),
 		})
 		if err != nil || !activated.IsActive {
-			t.Fatalf("organization activation = %+v, %v", activated, err)
+			t.Fatalf("entry activation = %+v, %v", activated, err)
 		}
 		assertSQLRejected(t, ctx, store, `UPDATE request_approval_pipelines SET is_active = true WHERE id = $1`,
-			"organization_scope_active", orgSecond.ID)
+			"request_approval_pipelines_active_idx", entrySecond.ID)
 
 		active, err := store.GetActiveRequestApprovalPipelineRevision(ctx, application.GetActiveRequestApprovalPipelineRevisionInput{
-			OrganizationID: secondOrg, AgentSlug: "",
+			OrganizationID: secondOrg, PipelineKey: domain.EntryPipelineKey,
 		})
-		if err != nil || active.ID != orgFirst.ID || active.AgentSlug != "" {
-			t.Fatalf("active organization revision = %+v, %v", active, err)
+		if err != nil || active.ID != entryFirst.ID {
+			t.Fatalf("active entry revision = %+v, %v", active, err)
 		}
 		if billing, err := store.GetActiveRequestApprovalPipelineRevision(ctx, application.GetActiveRequestApprovalPipelineRevisionInput{
-			OrganizationID: secondOrg, AgentSlug: "billing",
+			OrganizationID: secondOrg, PipelineKey: "billing",
 		}); err != nil || billing.Revision != 1 || len(billing.BlockIDs) != 0 {
-			t.Fatalf("organization activation leaked into an agent-type scope: %+v, %v", billing, err)
+			t.Fatalf("entry activation leaked into another pipeline: %+v, %v", billing, err)
 		}
 
 		summaries, err := store.ListRequestApprovalPipelineSummaries(ctx, application.ListRequestApprovalPipelineSummariesInput{
 			OrganizationID: secondOrg, Scope: domain.ScopeSet{All: true}, Limit: 50,
 		})
 		if err != nil {
-			t.Fatalf("list summaries with organization scope: %v", err)
+			t.Fatalf("list summaries: %v", err)
 		}
-		if len(summaries) != 3 || summaries[0].AgentSlug != "" || summaries[0].RevisionCount != 3 ||
-			summaries[0].ActiveRevision == nil || *summaries[0].ActiveRevision != orgFirst.Revision {
-			t.Fatalf("organization summary was not listed first: %+v", summaries)
+		if len(summaries) != 3 || summaries[0].PipelineKey != domain.EntryPipelineKey || summaries[0].Name != entryPipelineName || summaries[0].RevisionCount != 3 ||
+			summaries[0].ActiveRevision == nil || *summaries[0].ActiveRevision != entryFirst.Revision {
+			t.Fatalf("entry summary was not listed first: %+v", summaries)
+		}
+		scoped, err := store.ListRequestApprovalPipelineSummaries(ctx, application.ListRequestApprovalPipelineSummariesInput{
+			OrganizationID: secondOrg, Scope: domain.ScopeSet{Scopes: []domain.Scope{{Kind: domain.ScopePipeline, ID: "billing"}}}, Limit: 50,
+		})
+		if err != nil || len(scoped) != 1 || scoped[0].PipelineKey != "billing" {
+			t.Fatalf("a pipeline-scoped reader must see only their pipelines: %+v, %v", scoped, err)
 		}
 	})
 
@@ -306,14 +312,14 @@ func TestRequestApprovalPipelinesAgainstRealPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list pipeline summaries: %v", err)
 	}
-	if len(summaries) != 1 || summaries[0].AgentSlug != "billing" || summaries[0].ActiveRevision == nil ||
+	if len(summaries) != 1 || summaries[0].PipelineKey != "billing" || summaries[0].ActiveRevision == nil ||
 		summaries[0].LatestRevision != 5 || summaries[0].RevisionCount != 5 ||
 		!summaries[0].LatestCreatedAt.Equal(now.Add(3*time.Second)) {
 		t.Fatalf("unexpected organization-scoped summaries: %+v", summaries)
 	}
 
 	t.Run("history pages by cursor", func(t *testing.T) {
-		// The billing scope was seeded with revision 1; six more make a
+		// The paged pipeline is seeded with revision 1; six more make a
 		// history that does not divide into pages of four.
 		seedPipelineTestScope(t, ctx, store, firstOrg, firstMembership, "paged", now)
 		for index := 0; index < 6; index++ {
@@ -321,7 +327,7 @@ func TestRequestApprovalPipelinesAgainstRealPostgres(t *testing.T) {
 		}
 		assertRevisionPaging(t, func(cursor string, limit int) (revisionPageOf, error) {
 			page, err := store.ListRequestApprovalPipelineRevisions(ctx, application.ListRequestApprovalPipelineRevisionsInput{
-				OrganizationID: firstOrg, AgentSlug: "paged", Limit: limit, Cursor: cursor,
+				OrganizationID: firstOrg, PipelineKey: "paged", Limit: limit, Cursor: cursor,
 			})
 			result := revisionPageOf{nextCursor: page.NextCursor, totalCount: page.TotalCount}
 			for _, revision := range page.Revisions {
@@ -355,18 +361,27 @@ func insertPipelineTestTenant(t *testing.T, ctx context.Context, store *Store, k
 	return organizationID, membershipID
 }
 
-// seedPipelineTestScope brings a scope into being the way the product
-// does (an organization's activation, an agent type's first agent): an
-// empty active revision 1 written in one transaction.
-func seedPipelineTestScope(t *testing.T, ctx context.Context, store *Store, organizationID, membershipID domain.ID, agentSlug domain.AgentSlug, now time.Time) {
+// seedPipelineTestScope brings a pipeline into being the way the product
+// does: the entry pipeline through the organization's activation, any
+// other through its create. Both write an empty active revision 1.
+func seedPipelineTestScope(t *testing.T, ctx context.Context, store *Store, organizationID, membershipID domain.ID, pipelineKey string, now time.Time) {
 	t.Helper()
+	if pipelineKey != domain.EntryPipelineKey {
+		if _, err := store.CreateRequestApprovalPipeline(ctx, application.CreateRequestApprovalPipelineInput{
+			ID: domain.ID(uuid.NewString()), OrganizationID: organizationID, PipelineKey: pipelineKey, Name: "Pipeline " + pipelineKey,
+			CreatedByActorID: membershipID, Now: now,
+		}); err != nil {
+			t.Fatalf("create %q pipeline: %v", pipelineKey, err)
+		}
+		return
+	}
 	tx, err := store.Pool().Begin(ctx)
 	if err != nil {
 		t.Fatalf("begin seed transaction: %v", err)
 	}
 	defer tx.Rollback(ctx)
-	if err := store.ensureRequestApprovalPipelineScope(ctx, tx, organizationID, agentSlug, membershipID, now); err != nil {
-		t.Fatalf("seed %q scope: %v", agentSlug, err)
+	if err := store.ensureEntryPipeline(ctx, tx, organizationID, membershipID, now); err != nil {
+		t.Fatalf("seed the entry pipeline: %v", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		t.Fatalf("commit seed: %v", err)
@@ -380,14 +395,18 @@ func pipelineTestBlock(key, config string) application.RequestApprovalBlockSnaps
 	}
 }
 
-func createPipelineTestRevision(t *testing.T, ctx context.Context, store *Store, organizationID, membershipID domain.ID, agentSlug domain.AgentSlug, blocks []application.RequestApprovalBlockSnapshotInput, now time.Time) domain.RequestApprovalPipelineRevision {
+func createPipelineTestRevision(t *testing.T, ctx context.Context, store *Store, organizationID, membershipID domain.ID, pipelineKey string, blocks []application.RequestApprovalBlockSnapshotInput, now time.Time) domain.RequestApprovalPipelineRevision {
 	t.Helper()
+	name := "Pipeline " + pipelineKey
+	if pipelineKey == domain.EntryPipelineKey {
+		name = entryPipelineName
+	}
 	revision, err := store.CreateRequestApprovalPipelineRevision(ctx, application.CreateRequestApprovalPipelineRevisionInput{
-		ID: domain.ID(uuid.NewString()), OrganizationID: organizationID, AgentSlug: agentSlug,
+		ID: domain.ID(uuid.NewString()), OrganizationID: organizationID, PipelineKey: pipelineKey, Name: name,
 		Blocks: blocks, CreatedByActorID: membershipID, Now: now,
 	})
 	if err != nil {
-		t.Fatalf("create %s pipeline revision: %v", agentSlug, err)
+		t.Fatalf("create %s pipeline revision: %v", pipelineKey, err)
 	}
 	return revision
 }
@@ -402,8 +421,8 @@ func assertSQLRejected(t *testing.T, ctx context.Context, store *Store, query, m
 func assertInvalidPipelineBlockArray(t *testing.T, ctx context.Context, store *Store, organizationID, membershipID domain.ID, blockIDs []domain.ID, message string, now time.Time) {
 	t.Helper()
 	assertSQLRejected(t, ctx, store, `INSERT INTO request_approval_pipelines
-		(id, organization_id, agent_slug, revision, block_ids, created_by_actor_id, created_at)
-		VALUES ($1, $2, 'billing', 4, $3, $4, $5)`, message,
+		(id, organization_id, pipeline_key, name, revision, block_ids, created_by_actor_id, created_at)
+		VALUES ($1, $2, 'billing', 'Billing', 4, $3, $4, $5)`, message,
 		uuid.NewString(), organizationID, idStrings(blockIDs), membershipID, now)
 }
 
@@ -412,7 +431,7 @@ func TestRequestApprovalPipelineInputRejectsDuplicateLogicalBlocks(t *testing.T)
 	first := pipelineTestBlock("same-key", `{"v":1}`)
 	second := pipelineTestBlock("same-key", `{"v":2}`)
 	err := (application.CreateRequestApprovalPipelineRevisionInput{
-		ID: domain.ID(uuid.NewString()), OrganizationID: domain.ID(uuid.NewString()), AgentSlug: "billing",
+		ID: domain.ID(uuid.NewString()), OrganizationID: domain.ID(uuid.NewString()), PipelineKey: "billing", Name: "Billing",
 		Blocks:           []application.RequestApprovalBlockSnapshotInput{first, second},
 		CreatedByActorID: domain.ID(uuid.NewString()), Now: now,
 	}).Validate()
@@ -421,11 +440,10 @@ func TestRequestApprovalPipelineInputRejectsDuplicateLogicalBlocks(t *testing.T)
 	}
 }
 
-// A pipeline scope comes into being with the organization or with the
-// agent that owns it, as an empty active revision, so that there is
-// always exactly one pipeline per agent and none can be authored for a
-// slug no agent holds.
-func TestPipelineScopesFollowAgentsAgainstRealPostgres(t *testing.T) {
+// The entry pipeline comes into being with the organization, as an empty
+// active revision; every other pipeline comes into being through its
+// create. Agents own no pipeline, and a key is taken for good.
+func TestPipelinesAreKeyedAgainstRealPostgres(t *testing.T) {
 	server := embeddedpgtest.Start(t)
 	ctx := context.Background()
 	store, err := Open(ctx, server.URL("postgres"))
@@ -440,108 +458,85 @@ func TestPipelineScopesFollowAgentsAgainstRealPostgres(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	orgID, userID, membershipID := domain.ID(uuid.NewString()), domain.ID(uuid.NewString()), domain.ID(uuid.NewString())
 	if _, err := store.ActivateOrganization(ctx, application.ActivateOrganizationInput{
-		OrganizationID: orgID, OrganizationSlug: "scopes", OrganizationName: "Scopes",
+		OrganizationID: orgID, OrganizationSlug: "keyed", OrganizationName: "Keyed",
 		UserID: userID, MembershipID: membershipID, DisplayName: "Owner",
-		Email: "owner@scopes.example", PasswordHash: "argon2id$test",
+		Email: "owner@keyed.example", PasswordHash: "argon2id$test",
 		AdmissionSource: domain.AdmissionManual, Now: now,
 	}); err != nil {
 		t.Fatalf("ActivateOrganization: %v", err)
 	}
-	activeScope := func(agentSlug domain.AgentSlug) domain.RequestApprovalPipelineRevision {
-		t.Helper()
-		revision, err := store.GetActiveRequestApprovalPipelineRevision(ctx, application.GetActiveRequestApprovalPipelineRevisionInput{
-			OrganizationID: orgID, AgentSlug: agentSlug,
+	active := func(pipelineKey string) (domain.RequestApprovalPipelineRevision, error) {
+		return store.GetActiveRequestApprovalPipelineRevision(ctx, application.GetActiveRequestApprovalPipelineRevisionInput{
+			OrganizationID: orgID, PipelineKey: pipelineKey,
 		})
-		if err != nil {
-			t.Fatalf("active revision for %q: %v", agentSlug, err)
-		}
-		return revision
 	}
 
-	organization := activeScope("")
-	if organization.Revision != 1 || len(organization.BlockIDs) != 0 || organization.CreatedByActorID != membershipID {
-		t.Fatalf("organization activation did not seed an empty active revision: %+v", organization)
+	entry, err := active(domain.EntryPipelineKey)
+	if err != nil || entry.Revision != 1 || len(entry.BlockIDs) != 0 || entry.CreatedByActorID != membershipID || entry.Name != entryPipelineName {
+		t.Fatalf("organization activation did not seed an empty active entry pipeline: %+v, %v", entry, err)
 	}
-
-	if _, err := store.GetActiveRequestApprovalPipelineRevision(ctx, application.GetActiveRequestApprovalPipelineRevisionInput{
-		OrganizationID: orgID, AgentSlug: "release",
-	}); !errors.Is(err, domain.ErrNotFound) {
-		t.Fatalf("a slug no agent holds has a pipeline: %v", err)
-	}
-	createAgent := func(name string, agentSlug domain.AgentSlug) {
-		t.Helper()
-		if _, err := store.CreateAgent(ctx, application.CreateAgentInput{Kind: domain.AgentService,
-			OrganizationID: orgID, ActorID: membershipID, Name: name, AgentSlug: agentSlug,
-			AgentQuota: application.UnlimitedQuota(), Now: now,
-		}); err != nil {
-			t.Fatalf("CreateAgent %s: %v", name, err)
-		}
-	}
-	createAgent("release-one", "release")
-	release := activeScope("release")
-	if release.Revision != 1 || len(release.BlockIDs) != 0 || release.AgentSlug != "release" {
-		t.Fatalf("the agent did not seed its pipeline: %+v", release)
-	}
-	// The slug is the scope key and is taken for good: a second agent
-	// cannot share it, so no agent can ever take over another's pipeline.
 	if _, err := store.CreateAgent(ctx, application.CreateAgentInput{Kind: domain.AgentService,
-		OrganizationID: orgID, ActorID: membershipID, Name: "release-two", AgentSlug: "release",
+		OrganizationID: orgID, ActorID: membershipID, Name: "release-one", AgentSlug: "release",
 		AgentQuota: application.UnlimitedQuota(), Now: now,
-	}); !errors.Is(err, domain.ErrAgentSlugTaken) || !errors.Is(err, domain.ErrConflict) {
-		t.Fatalf("a second agent on the same slug must be refused as a conflict, got %v", err)
-	}
-	if again := activeScope("release"); again.ID != release.ID {
-		t.Fatalf("the refused agent touched the pipeline: %+v", again)
-	}
-	revisions, err := store.ListRequestApprovalPipelineRevisions(ctx, application.ListRequestApprovalPipelineRevisionsInput{
-		OrganizationID: orgID, AgentSlug: "release", Limit: 10,
-	})
-	if err != nil || len(revisions.Revisions) != 1 || revisions.TotalCount != 1 || revisions.NextCursor != "" {
-		t.Fatalf("release revisions = %+v, %v; want exactly the seed", revisions, err)
-	}
-
-	// Enrollment into an existing agent preserves that agent's pipeline.
-	createAgent("support-bot", "support")
-	supportAgent, err := store.GetAgentBySlug(ctx, application.GetAgentBySlugInput{OrganizationID: orgID, AgentSlug: "support"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	codeHash := make([]byte, 32)
-	if err := store.CreateAgentEnrollment(ctx, application.CreateAgentEnrollmentInput{Enrollment: domain.AgentEnrollment{
-		ID: domain.ID(uuid.NewString()), EnrollmentCodeHash: codeHash, UserCode: "WXYZ-1234",
-		Runtime: "claude-code", RequestedAgentSlug: "support", InstanceName: "laptop", InstanceMetadata: json.RawMessage(`{}`),
-		Status:    "pending",
-		ExpiresAt: now.Add(time.Hour), CreatedAt: now,
-	}}); err != nil {
-		t.Fatalf("CreateAgentEnrollment: %v", err)
-	}
-	if _, err := store.AuthorizeAgentEnrollment(ctx, application.AuthorizeAgentEnrollmentInput{
-		OrganizationID: orgID, UserCode: "WXYZ-1234", MembershipID: membershipID, AgentID: supportAgent.ID, Now: now,
 	}); err != nil {
-		t.Fatalf("AuthorizeAgentEnrollment: %v", err)
+		t.Fatalf("CreateAgent: %v", err)
 	}
-	if support := activeScope("support"); support.Revision != 1 || len(support.BlockIDs) != 0 || support.ID == release.ID {
-		t.Fatalf("enrollment did not keep the agent's own seeded pipeline: %+v", support)
+	if _, err := active("release"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("an agent must not seed a pipeline: %v", err)
 	}
 
-	summaries, err := store.ListRequestApprovalPipelineSummaries(ctx, application.ListRequestApprovalPipelineSummariesInput{OrganizationID: orgID, Scope: domain.ScopeSet{All: true}, Limit: 50})
-	if err != nil || len(summaries) != 3 {
-		t.Fatalf("summaries = %+v, %v; want organization, release, support", summaries, err)
+	created, err := store.CreateRequestApprovalPipeline(ctx, application.CreateRequestApprovalPipelineInput{
+		ID: domain.ID(uuid.NewString()), OrganizationID: orgID, PipelineKey: "payments", Name: "Payments",
+		Blocks:           []application.RequestApprovalBlockSnapshotInput{pipelineTestBlock("small", `{"on_match":"approve"}`)},
+		CreatedByActorID: membershipID, Now: now,
+	})
+	if err != nil || created.Revision != 1 || !created.IsActive || created.Name != "Payments" || len(created.BlockIDs) != 1 {
+		t.Fatalf("CreateRequestApprovalPipeline = %+v, %v", created, err)
 	}
-	for _, summary := range summaries {
-		if summary.ActiveRevision == nil || *summary.ActiveRevision != 1 || summary.RevisionCount != 1 {
-			t.Fatalf("seeded scope summary = %+v, want one active revision", summary)
-		}
+	if again, err := active("payments"); err != nil || again.ID != created.ID {
+		t.Fatalf("the created pipeline must be active at once: %+v, %v", again, err)
+	}
+	if _, err := store.CreateRequestApprovalPipeline(ctx, application.CreateRequestApprovalPipelineInput{
+		ID: domain.ID(uuid.NewString()), OrganizationID: orgID, PipelineKey: "payments", Name: "Payments again", CreatedByActorID: membershipID, Now: now,
+	}); !errors.Is(err, domain.ErrRequestApprovalPipelineExists) {
+		t.Fatalf("a second pipeline on the same key = %v", err)
+	}
+	if _, err := store.CreateRequestApprovalPipeline(ctx, application.CreateRequestApprovalPipelineInput{
+		ID: domain.ID(uuid.NewString()), OrganizationID: orgID, PipelineKey: domain.EntryPipelineKey, Name: "Entry", CreatedByActorID: membershipID, Now: now,
+	}); !errors.Is(err, domain.ErrInvalid) && !errors.Is(err, domain.ErrRequestApprovalPipelineEntry) {
+		t.Fatalf("creating the entry pipeline = %v", err)
+	}
+	renamed, err := store.CreateRequestApprovalPipelineRevision(ctx, application.CreateRequestApprovalPipelineRevisionInput{
+		ID: domain.ID(uuid.NewString()), OrganizationID: orgID, PipelineKey: "payments", Name: "Payments team",
+		CreatedByActorID: membershipID, Now: now,
+	})
+	if err != nil || renamed.Revision != 2 || renamed.Name != "Payments team" || renamed.IsActive {
+		t.Fatalf("a renaming revision = %+v, %v", renamed, err)
+	}
+	summaries, err := store.ListRequestApprovalPipelineSummaries(ctx, application.ListRequestApprovalPipelineSummariesInput{OrganizationID: orgID, Scope: domain.ScopeSet{All: true}, Limit: 50})
+	if err != nil || len(summaries) != 2 || summaries[0].PipelineKey != domain.EntryPipelineKey || summaries[1].Name != "Payments" || summaries[1].RevisionCount != 2 {
+		t.Fatalf("summaries = %+v, %v; the name is the active revision's", summaries, err)
+	}
+	if _, err := store.ActivateRequestApprovalPipelineRevision(ctx, application.ActivateRequestApprovalPipelineRevisionInput{
+		OrganizationID: orgID, PipelineKey: "payments", Revision: 2, ExpectedActiveRevision: 1, ActorID: membershipID, Now: now,
+	}); err != nil {
+		t.Fatalf("activate the rename: %v", err)
+	}
+	summaries, _ = store.ListRequestApprovalPipelineSummaries(ctx, application.ListRequestApprovalPipelineSummariesInput{OrganizationID: orgID, Scope: domain.ScopeSet{All: true}, Limit: 50})
+	if len(summaries) != 2 || summaries[1].Name != "Payments team" {
+		t.Fatalf("summaries after rename = %+v", summaries)
 	}
 
 	counts := make(map[string]int)
 	for _, event := range auditEvents(t, ctx, store, `organization_id = $1`, orgID) {
 		counts[event.EventType]++
 		if strings.HasPrefix(event.EventType, "request_approval_pipeline.") && (event.ActorID != userID || event.SubjectType != "request_approval_pipeline") {
-			t.Fatalf("seed audit event lacks the creating person: %+v", event)
+			t.Fatalf("pipeline audit event lacks the creating person: %+v", event)
 		}
 	}
+	// The entry seed, the create, and the rename each create; the seed,
+	// the create, and the activation each activate.
 	if counts["request_approval_pipeline.revision_created"] != 3 || counts["request_approval_pipeline.activated"] != 3 {
-		t.Fatalf("seed audit counts: %+v", counts)
+		t.Fatalf("audit counts: %+v", counts)
 	}
 }

@@ -189,7 +189,7 @@ export function ReviewerRoutingSection() {
 
       <Demo label="Human exits on the rail" hint="the consequence has two halves">
         <div className="flex flex-col">
-          <PipelineEntryCard agentSlug="billing" />
+          <PipelineEntryCard />
           <PipelineConnector />
           <PolicyBlockCard
             block={large}
@@ -264,10 +264,10 @@ export function ReviewerRoutingSection() {
           />
         </div>
         <p className="mt-3 text-micro text-ink-muted">
-          On the pipelines overview the terminus is the organization default without the
-          organization pipeline around it, so it carries the block cards' menu. Change default
+          On the pipelines overview the terminus is the entry pipeline's default without the
+          pipeline around it, so it carries the block cards' menu. Change default
           reviewers swaps the chip for the picker with Cancel and Save beside it; Save creates and
-          activates an organization revision with the same blocks, and the card returns to its
+          activates an entry revision with the same blocks, and the card returns to its
           chip. In the pipeline editor the same card is part of the draft and has neither the
           menu nor the buttons.
         </p>

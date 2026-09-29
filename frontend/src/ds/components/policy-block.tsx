@@ -18,7 +18,6 @@ import { InfoLabel } from "./info-label";
 import { IconButton } from "./icon-button";
 import { Menu, MenuContent, MenuTrigger, type MenuAction } from "./menu";
 import { OutcomeSelect, type BlockOutcome } from "./outcome-select";
-import { Referenced } from "./reference";
 import { TargetBadge, TargetSelect, type ReviewerTarget } from "./reviewer-target";
 import { TextField } from "./text-field";
 import {
@@ -213,11 +212,15 @@ export function PipelineBranchWell({
   taken,
   blocked = false,
   label = "If conditions are met",
+  badge = "Check the blocks in this branch",
   continueLabel = "Otherwise, skip this branch and check the next block",
   children,
 }: {
   /* The branch's name, for the well's accessible label. */
   name: string;
+  /* What the elbow's chip says the request does: check the branch's
+   * blocks, or continue in a delegated pipeline. */
+  badge?: ReactNode;
   /* 1 for a branch on a pipeline's own rail, 2 for one inside it, and so
    * on; decides the well's surface level. */
   depth: number;
@@ -256,7 +259,7 @@ export function PipelineBranchWell({
             icon={<CornerDownRightIcon width={13} height={13} />}
             className="min-w-0 max-w-full"
           >
-            <span className="truncate">Check the blocks in this branch</span>
+            <span className="truncate">{badge}</span>
           </Badge>
         </span>
       </div>
@@ -427,105 +430,26 @@ function FixedOutcomeBlockCard<Block extends FixedOutcomeBlockDraft>({
 /* Rail framing: entry, sections, connectors, terminus              */
 /* ---------------------------------------------------------------- */
 
-/* The rail's head. With an agent slug it names the agent whose requests
- * enter this pipeline; without one, every agent's request does. */
-export function PipelineEntryCard({ agentSlug }: { agentSlug?: string }) {
+/* The rail's head: where requests enter this pipeline. The entry
+ * pipeline takes every request an agent submits; any other pipeline
+ * takes what delegate blocks hand it, which the description says. */
+export function PipelineEntryCard({
+  title = "Approval requests start here",
+  description = "An agent submits a request to withHuman.",
+}: {
+  title?: ReactNode;
+  description?: ReactNode;
+} = {}) {
   return (
     <div className="flex flex-col gap-2">
       <p className="text-micro text-ink-muted">Requests move down this pipeline, one block at a time.</p>
       <div className="flex items-center gap-3 rounded-lg border-hairline border-edge bg-surface px-4 py-2.5 shadow-sm">
         <InboxIcon width={14} height={14} className="shrink-0 text-accent" />
         <div className="min-w-0 flex-1">
-          <p className="text-label text-ink">Approval requests start here</p>
-          <p className="mt-0.5 text-micro text-ink-muted">
-            {agentSlug ? (
-              <>
-                From agent{" "}
-                <Referenced reference={{ kind: "agent", slug: agentSlug, name: agentSlug }} inline>
-                  <span className="font-mono text-[12px] text-ink">{agentSlug}</span>
-                </Referenced>
-              </>
-            ) : (
-              "An agent submits a request to withHuman."
-            )}
-          </p>
+          <p className="text-label text-ink">{title}</p>
+          <p className="mt-0.5 text-micro text-ink-muted">{description}</p>
         </div>
       </div>
-    </div>
-  );
-}
-
-/* A whole section folded to one row: title, count, and nothing else.
- * Used in an agent's pipeline editor, where the organization blocks run
- * first but are not being edited; expanding reveals read-only rows. */
-export function PipelineFoldedSection({
-  title,
-  summary,
-  positionLabel,
-  badge,
-  action,
-  expanded,
-  onExpandedChange,
-  children,
-}: {
-  title: ReactNode;
-  summary: string;
-  /* The positions occupied by the blocks inside this section. */
-  positionLabel?: string;
-  badge?: ReactNode;
-  /* For example an Edit button, when the principal may edit it. */
-  action?: ReactNode;
-  expanded: boolean;
-  onExpandedChange: (expanded: boolean) => void;
-  children?: ReactNode;
-}) {
-  return (
-    <div className="rounded-md border-hairline border-dashed border-edge-strong bg-canvas">
-      <div
-        role="button"
-        tabIndex={0}
-        aria-expanded={expanded}
-        onClick={() => onExpandedChange(!expanded)}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" || event.key === " ") {
-            event.preventDefault();
-            onExpandedChange(!expanded);
-          }
-        }}
-        className={cn(
-          "flex w-full cursor-pointer items-center gap-2.5 rounded-md px-4 py-2 text-left",
-          "transition-colors duration-100 hover:bg-fill-hover/50",
-          expanded && "rounded-b-none",
-        )}
-      >
-        {positionLabel ? (
-          <span className="flex h-6 min-w-6 shrink-0 items-center justify-center rounded-full border-hairline border-edge px-1.5 font-mono text-[11px] text-ink-muted">
-            {positionLabel}
-          </span>
-        ) : null}
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <span className="text-label font-medium text-ink-secondary">{title}</span>
-            {badge}
-          </div>
-          <p className="mt-0.5 text-micro text-ink-muted">{summary}</p>
-        </div>
-        {action ? (
-          <span
-            className="ml-auto shrink-0"
-            onClick={(event) => event.stopPropagation()}
-            onKeyDown={(event) => event.stopPropagation()}
-          >
-            {action}
-          </span>
-        ) : null}
-      </div>
-      {expanded ? (
-        /* Recessed well, so the surface rows inside keep contrast. */
-        <div className="flex flex-col gap-0 rounded-b-md border-t-hairline border-edge bg-canvas px-4 py-3">
-          {children}
-        </div>
-      ) : null}
     </div>
   );
 }
@@ -605,7 +529,7 @@ function FixedOutcomeBlockSummaryCard({
  * default in place, like a block in editing mode: as part of a pipeline
  * draft, or, with onSave, on its own with Save and Cancel beside the
  * picker, the way the overview changes the default without opening the
- * organization pipeline. Actions render a block-style menu at the edge.
+ * entry pipeline. Actions render a block-style menu at the edge.
  */
 export function PipelineTerminusCard({
   target,

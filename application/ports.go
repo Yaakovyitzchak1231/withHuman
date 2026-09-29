@@ -184,11 +184,29 @@ type ApprovalWorkflowOutboxRepository interface {
 	MarkApprovalWorkflowStarted(ctx context.Context, input MarkApprovalWorkflowStartedInput) error
 }
 
+// PipelineKeyResolver reports which pipeline keys exist and which are
+// active. Pipeline revisions consult it before a document that delegates
+// to a pipeline becomes durable or active.
+type PipelineKeyResolver interface {
+	ResolvePipelineKeys(context.Context, ResolvePipelineKeysInput) (ResolvedPipelineKeys, error)
+}
+
 // RequestApprovalPipelineRepository owns immutable block snapshots and
-// monotonically revisioned pipelines. Every lookup and mutation is scoped by
-// organization. Active switches use the expected active revision as their
-// optimistic concurrency precondition.
+// monotonically revisioned pipelines addressed by pipeline key. Every
+// lookup and mutation is scoped by organization. Active switches use the
+// expected active revision as their optimistic concurrency precondition.
+// A pipeline comes into being through CreateRequestApprovalPipeline
+// (the entry pipeline through the organization's activation), which
+// writes its first revision active, and ends through
+// ArchiveRequestApprovalPipeline, which stamps every revision at once. An
+// archived pipeline stays readable but is never active, resolves as
+// missing, refuses new revisions, and keeps its key.
 type RequestApprovalPipelineRepository interface {
+	PipelineKeyResolver
+	// CreateRequestApprovalPipeline creates the pipeline and its first,
+	// active revision. A key that was ever used refuses with
+	// domain.ErrRequestApprovalPipelineExists.
+	CreateRequestApprovalPipeline(context.Context, CreateRequestApprovalPipelineInput) (domain.RequestApprovalPipelineRevision, error)
 	CreateRequestApprovalPipelineRevision(context.Context, CreateRequestApprovalPipelineRevisionInput) (domain.RequestApprovalPipelineRevision, error)
 	ListRequestApprovalPipelineSummaries(context.Context, ListRequestApprovalPipelineSummariesInput) ([]domain.RequestApprovalPipelineSummary, error)
 	GetRequestApprovalPipelineRevision(context.Context, GetRequestApprovalPipelineRevisionInput) (domain.RequestApprovalPipelineRevision, error)
@@ -199,6 +217,17 @@ type RequestApprovalPipelineRepository interface {
 	GetRequestApprovalPipelineRevisionByID(context.Context, GetRequestApprovalPipelineRevisionByIDInput) (domain.RequestApprovalPipelineRevision, error)
 	GetRequestApprovalBlocks(context.Context, GetRequestApprovalBlocksInput) ([]domain.RequestApprovalBlock, error)
 	ActivateRequestApprovalPipelineRevision(context.Context, ActivateRequestApprovalPipelineRevisionInput) (domain.RequestApprovalPipelineRevision, error)
+	// ArchiveRequestApprovalPipeline archives the pipeline, revisions
+	// included, and answers the archived revisions. The entry pipeline
+	// refuses with domain.ErrRequestApprovalPipelineEntry, a pipeline an
+	// active revision delegates to with
+	// domain.RequestApprovalPipelineInUseError, and an archived one with
+	// domain.ErrRequestApprovalPipelineArchived.
+	ArchiveRequestApprovalPipeline(context.Context, ArchiveRequestApprovalPipelineInput) ([]domain.RequestApprovalPipelineRevision, error)
+	// ListRequestApprovalPipelineUses discovers the active pipeline
+	// revisions whose delegate blocks name the pipeline. The same set
+	// refuses ArchiveRequestApprovalPipeline.
+	ListRequestApprovalPipelineUses(context.Context, ListRequestApprovalPipelineUsesInput) ([]domain.PipelineUse, error)
 }
 
 // RoutingTargetResolver reports which path targets exist: user targets

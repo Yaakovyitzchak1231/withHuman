@@ -199,6 +199,14 @@ export {
   type BranchBlockCardProps,
   type BranchBlockDraft,
 } from "./components/branch-block";
+export {
+  DelegateBlockCard,
+  DelegateBlockSummaryCard,
+  summarizeDelegate,
+  type DelegateBlockCardProps,
+  type DelegateBlockDraft,
+  type PipelineOption,
+} from "./components/delegate-block";
 export { wellTone } from "./lib/well";
 export {
   ConditionBuilder,
@@ -230,7 +238,6 @@ export {
   PipelineConditionExits,
   PipelineConnector,
   PipelineEntryCard,
-  PipelineFoldedSection,
   PipelineTerminusCard,
   PolicyBlockCard,
   PolicyBlockSummaryCard,

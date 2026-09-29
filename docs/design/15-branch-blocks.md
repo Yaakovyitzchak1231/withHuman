@@ -2,6 +2,8 @@
 
 Status: accepted · Last updated: 2026-09-23
 
+> **Amended 2026-09-29.** The `delegate` block (`when` + `pipeline_key`) is a branch whose body is another pipeline; it shares the branch cursor, the `enter` evidence and the `end_of_branch` closing event. See [16-pipeline-delegation.md](16-pipeline-delegation.md).
+
 > **Prototype.** Same caveat as
 > [00-general-design.md](00-general-design.md): everything here can change
 > without migration paths or backwards-compatibility constraints. Optimize for

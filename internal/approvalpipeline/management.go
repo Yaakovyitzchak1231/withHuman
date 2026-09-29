@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/google/uuid"
@@ -21,6 +22,7 @@ type ManagementService struct {
 	repository application.RequestApprovalPipelineRepository
 	compiled   *CompiledPipelineState
 	paths      application.EscalationPathResolver
+	pipelines  application.PipelineKeyResolver
 	clock      application.Clock
 }
 
@@ -34,6 +36,16 @@ type ManagementOption func(*ManagementService)
 // refuses activating a revision whose path has no active revision.
 func WithEscalationPathResolver(resolver application.EscalationPathResolver) ManagementOption {
 	return func(service *ManagementService) { service.paths = resolver }
+}
+
+// WithPipelineKeyResolver checks that every pipeline a document delegates
+// to exists before the document becomes durable, and reports each
+// target's state in References. Without it delegate targets are accepted
+// unchecked at creation; the repository still refuses activating a
+// revision whose target has no active revision, and the executor still
+// hands a request to a person when a target cannot be resolved.
+func WithPipelineKeyResolver(resolver application.PipelineKeyResolver) ManagementOption {
+	return func(service *ManagementService) { service.pipelines = resolver }
 }
 
 func NewManagementService(repository application.RequestApprovalPipelineRepository, compiled *CompiledPipelineState, clock application.Clock, options ...ManagementOption) *ManagementService {
@@ -66,8 +78,7 @@ type PreviewSample struct {
 	Request BlockRequest
 	Agent   BlockAgent
 	// PreviousMetadata seeds what earlier blocks returned, keyed
-	// "<scope>/<block_key>", so a stitched effective-pipeline test can
-	// carry the organization preview's metadata into the agent-type one.
+	// "<pipeline_key>/<block_key>", exactly as the executor namespaces it.
 	PreviousMetadata map[string]json.RawMessage
 }
 
@@ -76,19 +87,24 @@ type PreviewResult struct {
 	ReasonCode       string
 	TerminalBlockKey string
 	Blocks           []PreviewBlockResult
-	// EscalationPath is the path a human outcome would be handed to within
-	// this scope alone: the terminal block's, else the document's default.
-	// EscalationPathReason names which; empty with no_escalation means the
-	// other scope's default or the queue decides.
-	EscalationPath       string
-	EscalationPathReason string
+	// EscalationPath is the path a human outcome would be handed to: the
+	// terminal block's, else the default of the pipeline the request was
+	// in, else the defaults of the pipelines that delegated into it.
+	// EscalationPathReason names which, and EscalationPathPipelineKey the
+	// pipeline that supplied it; no_escalation means the queue decides.
+	EscalationPath            string
+	EscalationPathReason      string
+	EscalationPathPipelineKey string
 }
 
 // PreviewBlockResult is one step of a preview, in execution order. A branch
-// appears when its condition is evaluated (BlockEnter or BlockNext) and, if
-// nothing inside it decided, once more at its end with EndOfBranch set.
+// or delegate appears when its condition is evaluated (BlockEnter or
+// BlockNext) and, if nothing inside it decided, once more at its end with
+// EndOfBranch set. PipelineKey names the pipeline the block belongs to: the
+// previewed document's key, or a delegated pipeline's.
 type PreviewBlockResult struct {
 	BlockKey    string
+	PipelineKey string
 	Position    int
 	Outcome     BlockOutcome
 	Reason      string
@@ -98,10 +114,9 @@ type PreviewBlockResult struct {
 	EndOfBranch bool
 }
 
-// List is the pipelines index, narrowed to the agent types the caller
-// holds pipeline.read at; the organization pipeline is listed only for an
-// organization-wide grant. Status leaves the scopes archived with the
-// last agent of their type out unless it says otherwise.
+// List is the pipelines index, narrowed to the pipelines the caller holds
+// pipeline.read at. Status leaves archived pipelines out unless it says
+// otherwise.
 func (service *ManagementService) List(ctx context.Context, principal domain.Principal, status application.PipelineStatus, limit int) ([]domain.RequestApprovalPipelineSummary, error) {
 	if err := requirePipelineMember(principal); err != nil {
 		return nil, err
@@ -118,16 +133,13 @@ func (service *ManagementService) List(ctx context.Context, principal domain.Pri
 	})
 }
 
-func (service *ManagementService) GetActive(ctx context.Context, principal domain.Principal, agentSlug domain.AgentSlug) (PipelineRevision, error) {
-	if err := authorizePipelineManagement(principal, domain.PermissionPipelineRead, domain.AgentResource(agentSlug)); err != nil {
-		return PipelineRevision{}, err
-	}
-	if err := validateScope(agentSlug); err != nil {
+func (service *ManagementService) GetActive(ctx context.Context, principal domain.Principal, pipelineKey string) (PipelineRevision, error) {
+	if err := authorizePipelineManagement(principal, domain.PermissionPipelineRead, pipelineKey); err != nil {
 		return PipelineRevision{}, err
 	}
 	revision, err := service.repository.GetActiveRequestApprovalPipelineRevision(ctx, application.GetActiveRequestApprovalPipelineRevisionInput{
 		OrganizationID: principal.OrganizationID,
-		AgentSlug:      agentSlug,
+		PipelineKey:    pipelineKey,
 	})
 	if err != nil {
 		return PipelineRevision{}, err
@@ -135,34 +147,28 @@ func (service *ManagementService) GetActive(ctx context.Context, principal domai
 	return service.loadRevisionBlocks(ctx, revision)
 }
 
-// ListRevisions returns one page of the scope's history, newest first;
+// ListRevisions returns one page of the pipeline's history, newest first;
 // cursor is the previous page's NextCursor, empty for the first page.
-func (service *ManagementService) ListRevisions(ctx context.Context, principal domain.Principal, agentSlug domain.AgentSlug, limit int, cursor string) (application.RevisionPage[domain.RequestApprovalPipelineRevision], error) {
+func (service *ManagementService) ListRevisions(ctx context.Context, principal domain.Principal, pipelineKey string, limit int, cursor string) (application.RevisionPage[domain.RequestApprovalPipelineRevision], error) {
 	var page application.RevisionPage[domain.RequestApprovalPipelineRevision]
-	if err := authorizePipelineManagement(principal, domain.PermissionPipelineRead, domain.AgentResource(agentSlug)); err != nil {
-		return page, err
-	}
-	if err := validateScope(agentSlug); err != nil {
+	if err := authorizePipelineManagement(principal, domain.PermissionPipelineRead, pipelineKey); err != nil {
 		return page, err
 	}
 	return service.repository.ListRequestApprovalPipelineRevisions(ctx, application.ListRequestApprovalPipelineRevisionsInput{
 		OrganizationID: principal.OrganizationID,
-		AgentSlug:      agentSlug,
+		PipelineKey:    pipelineKey,
 		Limit:          limit,
 		Cursor:         cursor,
 	})
 }
 
-func (service *ManagementService) GetRevision(ctx context.Context, principal domain.Principal, agentSlug domain.AgentSlug, revision int64) (PipelineRevision, error) {
-	if err := authorizePipelineManagement(principal, domain.PermissionPipelineRead, domain.AgentResource(agentSlug)); err != nil {
-		return PipelineRevision{}, err
-	}
-	if err := validateScope(agentSlug); err != nil {
+func (service *ManagementService) GetRevision(ctx context.Context, principal domain.Principal, pipelineKey string, revision int64) (PipelineRevision, error) {
+	if err := authorizePipelineManagement(principal, domain.PermissionPipelineRead, pipelineKey); err != nil {
 		return PipelineRevision{}, err
 	}
 	stored, err := service.repository.GetRequestApprovalPipelineRevision(ctx, application.GetRequestApprovalPipelineRevisionInput{
 		OrganizationID: principal.OrganizationID,
-		AgentSlug:      agentSlug,
+		PipelineKey:    pipelineKey,
 		Revision:       revision,
 	})
 	if err != nil {
@@ -171,31 +177,42 @@ func (service *ManagementService) GetRevision(ctx context.Context, principal dom
 	return service.loadRevisionBlocks(ctx, stored)
 }
 
-func (service *ManagementService) CreateRevision(ctx context.Context, principal domain.Principal, agentSlug domain.AgentSlug, definitions []approvalblock.Definition, defaultEscalationPath string) (PipelineRevision, error) {
-	if err := authorizePipelineManagement(principal, domain.PermissionPipelineWrite, domain.AgentResource(agentSlug)); err != nil {
+// Uses lists the active pipeline revisions whose delegate blocks name the
+// pipeline: what archiving it would have to refuse.
+func (service *ManagementService) Uses(ctx context.Context, principal domain.Principal, pipelineKey string) ([]domain.PipelineUse, error) {
+	if err := authorizePipelineManagement(principal, domain.PermissionPipelineRead, pipelineKey); err != nil {
+		return nil, err
+	}
+	return service.repository.ListRequestApprovalPipelineUses(ctx, application.ListRequestApprovalPipelineUsesInput{
+		OrganizationID: principal.OrganizationID, PipelineKey: pipelineKey,
+	})
+}
+
+// Create brings a pipeline into being with its first revision, active at
+// once. Creating a pipeline is an organization-wide act: the caller holds
+// pipeline.write at the organization, since no narrower scope exists yet.
+func (service *ManagementService) Create(ctx context.Context, principal domain.Principal, pipelineKey, name string, definitions []approvalblock.Definition, defaultEscalationPath string) (PipelineRevision, error) {
+	if err := requirePipelineMember(principal); err != nil {
 		return PipelineRevision{}, err
 	}
-	if err := validateScope(agentSlug); err != nil {
+	if err := authorization.Check(principal, domain.PermissionPipelineWrite, domain.OrganizationResource()); err != nil {
 		return PipelineRevision{}, err
 	}
-	if _, err := service.compiled.registry.compileDefinitions(definitions); err != nil {
+	if err := validatePipelineKey(pipelineKey); err != nil {
 		return PipelineRevision{}, err
 	}
-	all := flattenDefinitions(definitions)
-	if err := service.requireBlockDependencies(ctx, principal.OrganizationID, all); err != nil {
-		return PipelineRevision{}, err
+	if pipelineKey == domain.EntryPipelineKey {
+		return PipelineRevision{}, domain.ErrRequestApprovalPipelineEntry
 	}
-	if err := service.requireEscalationPaths(ctx, principal.OrganizationID, all, defaultEscalationPath); err != nil {
-		return PipelineRevision{}, err
-	}
-	blocks, err := service.compiled.registry.snapshotInputs(definitions)
+	blocks, err := service.prepareDocument(ctx, principal.OrganizationID, pipelineKey, definitions, defaultEscalationPath)
 	if err != nil {
 		return PipelineRevision{}, err
 	}
-	revision, err := service.repository.CreateRequestApprovalPipelineRevision(ctx, application.CreateRequestApprovalPipelineRevisionInput{
+	revision, err := service.repository.CreateRequestApprovalPipeline(ctx, application.CreateRequestApprovalPipelineInput{
 		ID:                    domain.ID(uuid.NewString()),
 		OrganizationID:        principal.OrganizationID,
-		AgentSlug:             agentSlug,
+		PipelineKey:           pipelineKey,
+		Name:                  name,
 		Blocks:                blocks,
 		DefaultEscalationPath: defaultEscalationPath,
 		CreatedByActorID:      principal.ManagementActorID(),
@@ -207,11 +224,65 @@ func (service *ManagementService) CreateRevision(ctx context.Context, principal 
 	return service.loadRevisionBlocks(ctx, revision)
 }
 
-func (service *ManagementService) Activate(ctx context.Context, principal domain.Principal, agentSlug domain.AgentSlug, revision int64, expectedActiveRevision int64) (PipelineRevision, error) {
-	if err := authorizePipelineManagement(principal, domain.PermissionPipelineActivate, domain.AgentResource(agentSlug)); err != nil {
+// CreateRevision appends an inactive revision to a live pipeline. An empty
+// name keeps the active revision's.
+func (service *ManagementService) CreateRevision(ctx context.Context, principal domain.Principal, pipelineKey, name string, definitions []approvalblock.Definition, defaultEscalationPath string) (PipelineRevision, error) {
+	if err := authorizePipelineManagement(principal, domain.PermissionPipelineWrite, pipelineKey); err != nil {
 		return PipelineRevision{}, err
 	}
-	target, err := service.GetRevision(ctx, principal, agentSlug, revision)
+	if strings.TrimSpace(name) == "" {
+		active, err := service.repository.GetActiveRequestApprovalPipelineRevision(ctx, application.GetActiveRequestApprovalPipelineRevisionInput{
+			OrganizationID: principal.OrganizationID, PipelineKey: pipelineKey,
+		})
+		if err != nil {
+			return PipelineRevision{}, err
+		}
+		name = active.Name
+	}
+	blocks, err := service.prepareDocument(ctx, principal.OrganizationID, pipelineKey, definitions, defaultEscalationPath)
+	if err != nil {
+		return PipelineRevision{}, err
+	}
+	revision, err := service.repository.CreateRequestApprovalPipelineRevision(ctx, application.CreateRequestApprovalPipelineRevisionInput{
+		ID:                    domain.ID(uuid.NewString()),
+		OrganizationID:        principal.OrganizationID,
+		PipelineKey:           pipelineKey,
+		Name:                  name,
+		Blocks:                blocks,
+		DefaultEscalationPath: defaultEscalationPath,
+		CreatedByActorID:      principal.ManagementActorID(),
+		Now:                   service.clock.Now(),
+	})
+	if err != nil {
+		return PipelineRevision{}, err
+	}
+	return service.loadRevisionBlocks(ctx, revision)
+}
+
+// prepareDocument compiles a document and checks everything it references
+// exists, then turns it into snapshot inputs.
+func (service *ManagementService) prepareDocument(ctx context.Context, organizationID domain.ID, pipelineKey string, definitions []approvalblock.Definition, defaultEscalationPath string) ([]application.RequestApprovalBlockSnapshotInput, error) {
+	if _, err := service.compiled.registry.compileDefinitions(definitions); err != nil {
+		return nil, err
+	}
+	all := flattenDefinitions(definitions)
+	if err := service.requireBlockDependencies(ctx, organizationID, all); err != nil {
+		return nil, err
+	}
+	if err := service.requireEscalationPaths(ctx, organizationID, all, defaultEscalationPath); err != nil {
+		return nil, err
+	}
+	if err := service.requireDelegateTargets(ctx, organizationID, pipelineKey, all); err != nil {
+		return nil, err
+	}
+	return service.compiled.registry.snapshotInputs(definitions)
+}
+
+func (service *ManagementService) Activate(ctx context.Context, principal domain.Principal, pipelineKey string, revision int64, expectedActiveRevision int64) (PipelineRevision, error) {
+	if err := authorizePipelineManagement(principal, domain.PermissionPipelineActivate, pipelineKey); err != nil {
+		return PipelineRevision{}, err
+	}
+	target, err := service.GetRevision(ctx, principal, pipelineKey, revision)
 	if err != nil {
 		return PipelineRevision{}, err
 	}
@@ -221,12 +292,13 @@ func (service *ManagementService) Activate(ctx context.Context, principal domain
 	if err := service.requireBlockDependencies(ctx, principal.OrganizationID, flattenDefinitions(pipelineDefinitions(target.Blocks))); err != nil {
 		return PipelineRevision{}, err
 	}
-	// Escalation paths and webhook endpoints are checked by the repository
-	// inside the activating transaction, under the same locks an archive or
-	// delete takes, so the answer cannot go stale before the switch.
+	// Escalation paths, webhook endpoints, and delegated pipelines are
+	// checked by the repository inside the activating transaction, under
+	// the same locks an archive takes, so the answer cannot go stale
+	// before the switch; the delegation graph is checked there too.
 	activated, err := service.repository.ActivateRequestApprovalPipelineRevision(ctx, application.ActivateRequestApprovalPipelineRevisionInput{
 		OrganizationID:         principal.OrganizationID,
-		AgentSlug:              agentSlug,
+		PipelineKey:            pipelineKey,
 		Revision:               revision,
 		ExpectedActiveRevision: expectedActiveRevision,
 		ActorID:                principal.ManagementActorID(),
@@ -239,77 +311,109 @@ func (service *ManagementService) Activate(ctx context.Context, principal domain
 	return target, nil
 }
 
-func (service *ManagementService) Preview(ctx context.Context, principal domain.Principal, agentSlug domain.AgentSlug, definitions []approvalblock.Definition, defaultEscalationPath string, sample PreviewSample) (PreviewResult, error) {
-	if err := authorizePipelineManagement(principal, domain.PermissionPipelineWrite, domain.AgentResource(agentSlug)); err != nil {
+// Archive ends a pipeline: every revision is stamped and the active one
+// deactivated. The entry pipeline and a pipeline an active revision
+// delegates to refuse.
+func (service *ManagementService) Archive(ctx context.Context, principal domain.Principal, pipelineKey string) ([]domain.RequestApprovalPipelineRevision, error) {
+	if err := authorizePipelineManagement(principal, domain.PermissionPipelineActivate, pipelineKey); err != nil {
+		return nil, err
+	}
+	return service.repository.ArchiveRequestApprovalPipeline(ctx, application.ArchiveRequestApprovalPipelineInput{
+		OrganizationID: principal.OrganizationID, PipelineKey: pipelineKey,
+		ActorID: principal.ManagementActorID(), Now: service.clock.Now(),
+	})
+}
+
+// Preview executes a transient document for pipelineKey against a sample
+// without persisting anything. Delegate blocks expand to their targets'
+// current active revisions, so the preview walks what a request would; a
+// skipped delegate calls nothing.
+func (service *ManagementService) Preview(ctx context.Context, principal domain.Principal, pipelineKey string, definitions []approvalblock.Definition, defaultEscalationPath string, sample PreviewSample) (PreviewResult, error) {
+	if err := authorizePipelineManagement(principal, domain.PermissionPipelineWrite, pipelineKey); err != nil {
 		return PreviewResult{}, err
 	}
-	if err := validateScope(agentSlug); err != nil {
-		return PreviewResult{}, err
-	}
-	if err := validatePreviewSample(agentSlug, sample); err != nil {
+	if err := validatePreviewSample(sample); err != nil {
 		return PreviewResult{}, err
 	}
 	compiled, err := service.compiled.registry.compileDefinitions(definitions)
 	if err != nil {
 		return PreviewResult{}, err
 	}
-
-	result := PreviewResult{Outcome: BlockHuman, ReasonCode: "end_of_pipeline", Blocks: make([]PreviewBlockResult, 0, len(compiled))}
 	if err := service.requireBlockDependencies(ctx, principal.OrganizationID, flattenDefinitions(definitions)); err != nil {
 		return PreviewResult{}, err
 	}
 	if err := validOptionalEscalationPath(defaultEscalationPath); err != nil {
 		return PreviewResult{}, err
 	}
-	// The path a human outcome resolves to within this scope; the
-	// terminal block overrides the default below.
-	result.EscalationPathReason = domain.RoutingReasonNoEscalation
-	if defaultEscalationPath != "" {
-		result.EscalationPath, result.EscalationPathReason = defaultEscalationPath, domain.RoutingReasonPipelineDefault
+	root := &compiledPipeline{
+		Revision:  domain.RequestApprovalPipelineRevision{OrganizationID: principal.OrganizationID, PipelineKey: pipelineKey, DefaultEscalationPath: defaultEscalationPath},
+		Blocks:    compiled,
+		Snapshots: previewSnapshots(definitions),
+		Delegates: delegateKeys(compiled),
 	}
+	effective, err := service.compiled.Effective(ctx, root, func(ctx context.Context, key string) (domain.RequestApprovalPipelineRevision, error) {
+		return service.repository.GetActiveRequestApprovalPipelineRevision(ctx, application.GetActiveRequestApprovalPipelineRevisionInput{
+			OrganizationID: principal.OrganizationID, PipelineKey: key,
+		})
+	})
+	if err != nil {
+		if errors.Is(err, domain.ErrNotFound) {
+			return PreviewResult{}, fmt.Errorf("delegate target has no active revision: %v: %w", err, domain.ErrRequestApprovalPipelineNotFound)
+		}
+		if ctx.Err() != nil {
+			return PreviewResult{}, ctx.Err()
+		}
+		return PreviewResult{}, invalidPipelineDocument("effective pipeline cannot be built", err)
+	}
+
+	result := PreviewResult{Outcome: BlockHuman, ReasonCode: "end_of_pipeline", Blocks: make([]PreviewBlockResult, 0, len(effective.Blocks))}
 	previous := make(map[string]json.RawMessage, len(sample.PreviousMetadata))
 	for key, value := range sample.PreviousMetadata {
 		previous[key] = value
 	}
-	// Preview runs one scope in isolation, so metadata is namespaced by
-	// that scope exactly as the executor namespaces it.
-	scope := domain.PipelineScopeName(agentSlug)
 	input := RequestApprovalBlockInput{OrganizationID: principal.OrganizationID, Preview: true, Request: sample.Request, Agent: sample.Agent, PreviousMetadata: previous, Budget: &BlockExecutionBudget{}}
-	cursor := newBranchCursor(compiled, 0)
+	var terminal terminalBlock
+	escalationPath, routeFrom := "", 0
+	cursor := newBranchCursor(effective.Blocks, 0)
+walk:
 	for {
 		step, index := cursor.next()
 		if step == stepDone {
-			return result, nil
+			break
 		}
-		block := compiled[index]
+		block, snapshot := effective.Blocks[index], effective.Snapshots[index]
 		if step == stepBranchEnd {
-			// Nothing inside the entered branch decided: it asks a human
-			// with its own reason and path, and nothing after it runs.
+			// Nothing inside the entered branch or delegated pipeline
+			// decided: a human is asked, and nothing after it runs.
 			result.Blocks = append(result.Blocks, PreviewBlockResult{
-				BlockKey: block.Key, Position: index, Outcome: BlockHuman, Reason: block.Reason, EndOfBranch: true,
+				BlockKey: block.Key, PipelineKey: effective.keyAt(index), Position: index, Outcome: BlockHuman, Reason: block.Reason, EndOfBranch: true,
 			})
 			result.Outcome, result.ReasonCode, result.TerminalBlockKey = BlockHuman, "end_of_branch", block.Key
-			if block.EscalationPath != "" {
-				result.EscalationPath, result.EscalationPathReason = block.EscalationPath, domain.RoutingReasonBlockEscalation
+			terminal = effective.terminalAt(snapshot, index)
+			if block.Delegate {
+				routeFrom = effective.target(index)
+			} else {
+				escalationPath, routeFrom = block.EscalationPath, effective.Owner[index]
 			}
-			return result, nil
+			break
 		}
+		input.PipelineKey = effective.keyAt(index)
 		var evaluated RequestApprovalBlockResult
-		if block.Branch {
+		if block.container() {
 			evaluated = executeBranchCondition(ctx, block.Executor, input)
 		} else {
 			evaluated = ExecuteRequestApprovalBlock(ctx, block.Executor, input)
 		}
 		result.Blocks = append(result.Blocks, PreviewBlockResult{
-			BlockKey: block.Key, Position: index, Outcome: evaluated.Outcome,
+			BlockKey: block.Key, PipelineKey: effective.keyAt(index), Position: index, Outcome: evaluated.Outcome,
 			Reason: evaluated.Reason, Metadata: evaluated.Metadata, Evidence: evaluated.Evidence,
 			ErrorCode: evaluated.ErrorCode,
 		})
 		switch {
-		case block.Branch && evaluated.Outcome == BlockEnter:
+		case block.container() && evaluated.Outcome == BlockEnter:
 			cursor.enter()
 			continue
-		case block.Branch && evaluated.Outcome == BlockNext:
+		case block.container() && evaluated.Outcome == BlockNext:
 			cursor.skip()
 			continue
 		case evaluated.Outcome == BlockNext:
@@ -318,27 +422,85 @@ func (service *ManagementService) Preview(ctx context.Context, principal domain.
 				if marshalErr != nil {
 					return PreviewResult{}, marshalErr
 				}
-				input.PreviousMetadata[scope+"/"+block.Key] = encoded
+				input.PreviousMetadata[effective.keyAt(index)+"/"+block.Key] = encoded
 			}
 			cursor.advance()
 			continue
 		}
 		result.Outcome = evaluated.Outcome
-		result.ReasonCode = "block_outcome"
-		if evaluated.ErrorCode != "" {
-			result.ReasonCode = "block_error"
-		}
+		result.ReasonCode = completionReason(evaluated)
 		result.TerminalBlockKey = block.Key
-		switch {
-		case evaluated.Outcome != BlockHuman:
-			result.EscalationPath, result.EscalationPathReason = "", ""
-		case block.EscalationPath != "" && !block.Branch:
-			// A branch whose condition failed keeps the default: its
-			// own path is for its end only.
-			result.EscalationPath, result.EscalationPathReason = block.EscalationPath, domain.RoutingReasonBlockEscalation
+		terminal = effective.terminalAt(snapshot, index)
+		routeFrom = effective.Owner[index]
+		if !block.container() {
+			// A branch or delegate whose condition failed keeps the
+			// default: a branch's own path is for its end only.
+			escalationPath = block.EscalationPath
 		}
+		break walk
+	}
+	if result.Outcome != BlockHuman {
 		return result, nil
 	}
+	route, section := routeSection(effective, terminal, escalationPath, routeFrom)
+	result.EscalationPath, result.EscalationPathReason = route.PathKey, route.Reason
+	if section >= 0 {
+		result.EscalationPathPipelineKey = effective.Sections[section].Key
+	}
+	return result, nil
+}
+
+// previewSnapshots stands in for stored snapshots when a transient
+// document is executed: only the fields the walk reads.
+func previewSnapshots(definitions []approvalblock.Definition) []domain.RequestApprovalBlock {
+	all := flattenDefinitions(definitions)
+	snapshots := make([]domain.RequestApprovalBlock, len(all))
+	for index, definition := range all {
+		snapshots[index] = domain.RequestApprovalBlock{BlockKey: definition.ID, Name: definition.Name, BlockType: string(definition.Type)}
+	}
+	return snapshots
+}
+
+// requireDelegateTargets checks that every pipeline the document delegates
+// to exists and is live, and that none is the document's own pipeline. A
+// revision may be created against a target whose graph position would
+// refuse activation; the repository checks the graph when activating.
+func (service *ManagementService) requireDelegateTargets(ctx context.Context, organizationID domain.ID, pipelineKey string, definitions []approvalblock.Definition) error {
+	keys := delegateTargetKeys(definitions)
+	if len(keys) == 0 {
+		return nil
+	}
+	if slices.Contains(keys, pipelineKey) {
+		return invalidPipelineDocument(fmt.Sprintf("pipeline %q cannot delegate to itself", pipelineKey), nil)
+	}
+	if service.pipelines == nil {
+		return nil
+	}
+	resolved, err := service.pipelines.ResolvePipelineKeys(ctx, application.ResolvePipelineKeysInput{
+		OrganizationID: organizationID, PipelineKeys: keys,
+	})
+	if err != nil {
+		return err
+	}
+	if len(resolved.Missing) > 0 {
+		return fmt.Errorf("delegate blocks reference pipelines %v: %w", resolved.Missing, domain.ErrRequestApprovalPipelineNotFound)
+	}
+	return nil
+}
+
+// delegateTargetKeys lists the distinct pipeline keys the delegate blocks
+// name, in block order.
+func delegateTargetKeys(definitions []approvalblock.Definition) []string {
+	keys := make([]string, 0)
+	for _, definition := range definitions {
+		if definition.Type != approvalblock.TypeDelegate || definition.Delegate == nil {
+			continue
+		}
+		if !slices.Contains(keys, definition.Delegate.PipelineKey) {
+			keys = append(keys, definition.Delegate.PipelineKey)
+		}
+	}
+	return keys
 }
 
 func validOptionalEscalationPath(key string) error {
@@ -403,8 +565,21 @@ func escalationPathKeys(definitions []approvalblock.Definition, defaultEscalatio
 type RevisionReferences struct {
 	EscalationPaths  []EscalationPathReference
 	WebhookEndpoints []WebhookEndpointReference
+	Pipelines        []PipelineReference
 	Blocks           []BlockReference
 	Activatable      bool
+}
+
+// PipelineReference is one pipeline the revision's delegate blocks hand
+// requests to. Exists is false when the pipeline has no live revision
+// (never created, or archived); Active when a revision is active, in
+// which case Name is that revision's name.
+type PipelineReference struct {
+	PipelineKey string
+	Name        string
+	BlockKeys   []string
+	Exists      bool
+	Active      bool
 }
 
 // EscalationPathReference is one path the revision names. BlockKeys are
@@ -446,8 +621,8 @@ const (
 
 // References reports what one revision depends on and whether each
 // dependency is in place right now.
-func (service *ManagementService) References(ctx context.Context, principal domain.Principal, agentSlug domain.AgentSlug, revision int64) (RevisionReferences, error) {
-	target, err := service.GetRevision(ctx, principal, agentSlug, revision)
+func (service *ManagementService) References(ctx context.Context, principal domain.Principal, pipelineKey string, revision int64) (RevisionReferences, error) {
+	target, err := service.GetRevision(ctx, principal, pipelineKey, revision)
 	if err != nil {
 		return RevisionReferences{}, err
 	}
@@ -455,6 +630,7 @@ func (service *ManagementService) References(ctx context.Context, principal doma
 	references := RevisionReferences{
 		EscalationPaths:  make([]EscalationPathReference, 0),
 		WebhookEndpoints: make([]WebhookEndpointReference, 0),
+		Pipelines:        make([]PipelineReference, 0),
 		Blocks:           make([]BlockReference, 0),
 		Activatable:      true,
 	}
@@ -462,6 +638,9 @@ func (service *ManagementService) References(ctx context.Context, principal doma
 		return RevisionReferences{}, err
 	}
 	if err := service.referencedWebhookEndpoints(ctx, principal.OrganizationID, definitions, &references); err != nil {
+		return RevisionReferences{}, err
+	}
+	if err := service.referencedPipelines(ctx, principal.OrganizationID, definitions, &references); err != nil {
 		return RevisionReferences{}, err
 	}
 	if err := service.referencedBlockProblems(ctx, principal.OrganizationID, definitions, &references); err != nil {
@@ -555,6 +734,53 @@ func (service *ManagementService) referencedWebhookEndpoints(ctx context.Context
 			references.Activatable = false
 		}
 		references.WebhookEndpoints = append(references.WebhookEndpoints, reference)
+	}
+	return nil
+}
+
+func (service *ManagementService) referencedPipelines(ctx context.Context, organizationID domain.ID, definitions []approvalblock.Definition, references *RevisionReferences) error {
+	keys := delegateTargetKeys(definitions)
+	if len(keys) == 0 {
+		return nil
+	}
+	missing, inactive := map[string]struct{}{}, map[string]struct{}{}
+	if service.pipelines != nil {
+		resolved, err := service.pipelines.ResolvePipelineKeys(ctx, application.ResolvePipelineKeysInput{
+			OrganizationID: organizationID, PipelineKeys: keys,
+		})
+		if err != nil {
+			return err
+		}
+		for _, key := range resolved.Missing {
+			missing[key] = struct{}{}
+		}
+		for _, key := range resolved.Inactive {
+			inactive[key] = struct{}{}
+		}
+	}
+	for _, key := range keys {
+		reference := PipelineReference{PipelineKey: key, BlockKeys: make([]string, 0)}
+		for _, definition := range definitions {
+			if definition.Type == approvalblock.TypeDelegate && definition.Delegate != nil && definition.Delegate.PipelineKey == key {
+				reference.BlockKeys = append(reference.BlockKeys, definition.ID)
+			}
+		}
+		_, isMissing := missing[key]
+		_, isInactive := inactive[key]
+		reference.Exists = !isMissing
+		reference.Active = !isMissing && !isInactive
+		if reference.Active {
+			active, err := service.repository.GetActiveRequestApprovalPipelineRevision(ctx, application.GetActiveRequestApprovalPipelineRevisionInput{
+				OrganizationID: organizationID, PipelineKey: key,
+			})
+			if err != nil && !errors.Is(err, domain.ErrNotFound) {
+				return err
+			}
+			reference.Name = active.Name
+		} else {
+			references.Activatable = false
+		}
+		references.Pipelines = append(references.Pipelines, reference)
 	}
 	return nil
 }
@@ -726,30 +952,26 @@ func firstDuplicateConditionID(condition approvalblock.Condition, seen map[strin
 	return ""
 }
 
-func validatePreviewSample(agentSlug domain.AgentSlug, sample PreviewSample) error {
+func validatePreviewSample(sample PreviewSample) error {
 	if strings.TrimSpace(sample.Request.Tool) == "" {
 		return invalidPipelineDocument("sample request tool is required", nil)
 	}
 	if strings.TrimSpace(sample.Agent.Name) == "" {
 		return invalidPipelineDocument("sample agent name is required", nil)
 	}
-	// The organization scope applies to every agent, so its preview
-	// accepts any valid sample agent slug; an agent scope must match.
-	if agentSlug == "" {
-		if !domain.AgentSlug(sample.Agent.Slug).Valid() {
-			return invalidPipelineDocument("sample agent slug must match ^[a-z0-9][a-z0-9._-]{0,62}$", nil)
-		}
-	} else if domain.AgentSlug(sample.Agent.Slug) != agentSlug {
-		return invalidPipelineDocument("sample agent slug must match the path agent slug", nil)
+	// Every pipeline applies to every agent, so a preview accepts any
+	// valid sample agent slug.
+	if !domain.AgentSlug(sample.Agent.Slug).Valid() {
+		return invalidPipelineDocument("sample agent slug must match ^[a-z0-9][a-z0-9._-]{0,62}$", nil)
 	}
 	var arguments map[string]json.RawMessage
 	if err := json.Unmarshal(sample.Request.Arguments, &arguments); err != nil || arguments == nil {
 		return invalidPipelineDocument("sample request arguments must be a JSON object", err)
 	}
 	for key, value := range sample.PreviousMetadata {
-		scope, blockKey, found := strings.Cut(key, "/")
-		if !found || (scope != domain.PipelineScopeOrganization && scope != domain.PipelineScopeAgent) || blockKey == "" {
-			return invalidPipelineDocument("sample previous metadata keys must be <scope>/<block_key>", nil)
+		pipelineKey, blockKey, found := strings.Cut(key, "/")
+		if !found || !domain.ValidPipelineKey(pipelineKey) || blockKey == "" {
+			return invalidPipelineDocument("sample previous metadata keys must be <pipeline_key>/<block_key>", nil)
 		}
 		var object map[string]json.RawMessage
 		if err := json.Unmarshal(value, &object); err != nil || object == nil {
@@ -769,20 +991,20 @@ func requirePipelineMember(principal domain.Principal) error {
 }
 
 // authorizePipelineManagement admits a member holding the permission on
-// the pipeline's scope: the agent type, or the organization for the
-// organization pipeline.
-func authorizePipelineManagement(principal domain.Principal, permission domain.Permission, resource domain.Resource) error {
+// the pipeline: at the pipeline's own scope, or the organization.
+func authorizePipelineManagement(principal domain.Principal, permission domain.Permission, pipelineKey string) error {
 	if err := requirePipelineMember(principal); err != nil {
 		return err
 	}
-	return authorization.Check(principal, permission, resource)
+	if err := validatePipelineKey(pipelineKey); err != nil {
+		return err
+	}
+	return authorization.Check(principal, permission, domain.PipelineResource(pipelineKey))
 }
 
-// validateScope accepts the pipeline scope address: an empty agent type is
-// the organization scope, anything else must be a valid agent type.
-func validateScope(agentSlug domain.AgentSlug) error {
-	if !domain.ValidPipelineScope(agentSlug) {
-		return invalidPipelineDocument("agent slug must match ^[a-z0-9][a-z0-9._-]{0,62}$", nil)
+func validatePipelineKey(pipelineKey string) error {
+	if !domain.ValidPipelineKey(pipelineKey) {
+		return invalidPipelineDocument("pipeline key must match ^[a-z0-9][a-z0-9._-]{0,62}$", nil)
 	}
 	return nil
 }

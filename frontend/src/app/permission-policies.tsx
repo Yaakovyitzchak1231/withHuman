@@ -42,6 +42,7 @@ export const SCOPE_LABELS: Record<ScopeKind, string> = {
   organization: "Organization",
   team: "Teams",
   agent: "Agents",
+  pipeline: "Pipelines",
 };
 export type PermissionPolicyDraft = Omit<
   PermissionPolicyInput,
@@ -79,11 +80,11 @@ export function mayDelegate(
     draft.resource_ids.every(
       (id) =>
         can(principal, permission, {
-          kind: draft.scope_kind as "team" | "agent",
+          kind: draft.scope_kind as Exclude<ScopeKind, "organization">,
           id,
         }) &&
         can(principal, "permission_policy.write", {
-          kind: draft.scope_kind as "team" | "agent",
+          kind: draft.scope_kind as Exclude<ScopeKind, "organization">,
           id,
         }),
     )
@@ -344,8 +345,8 @@ export function PermissionPolicyFields({
   );
 }
 
-/* A team by id, an agent by slug (its id under this scope kind); the
- * organization scope never lists resources. */
+/* A team by id, an agent by slug, a pipeline by key (its id under this
+ * scope kind); the organization scope never lists resources. */
 function ResourceLabel({ resource }: { resource: PermissionResource }) {
   if (resource.kind === "team")
     return (
@@ -357,6 +358,12 @@ function ResourceLabel({ resource }: { resource: PermissionResource }) {
     return (
       <ReferenceChip
         reference={{ kind: "agent", slug: resource.id, name: resource.name }}
+      />
+    );
+  if (resource.kind === "pipeline")
+    return (
+      <ReferenceChip
+        reference={{ kind: "pipeline", pipelineKey: resource.id, name: resource.name }}
       />
     );
   return <Badge>{resource.name}</Badge>;

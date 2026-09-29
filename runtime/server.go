@@ -346,7 +346,7 @@ func NewServer(ctx context.Context, options ServerOptions) (*Server, error) {
 	pipelineExecution := approvalpipeline.NewExecutionService(store, store, compiledPipelines, clock)
 	routingEvaluation := reviewrouting.NewEvaluationService(store, clock, logger)
 	approvalService := approvals.NewService(store, store, store, pipelineExecution, routingEvaluation, orchestrator, plan, clock)
-	pipelineService := approvalpipeline.NewManagementService(store, compiledPipelines, clock, approvalpipeline.WithEscalationPathResolver(store))
+	pipelineService := approvalpipeline.NewManagementService(store, compiledPipelines, clock, approvalpipeline.WithEscalationPathResolver(store), approvalpipeline.WithPipelineKeyResolver(store))
 	routingService := reviewrouting.NewManagementService(store, store, clock)
 	teamEscalationService := teamescalation.NewService(store, store, clock)
 	authService.RegisterOnboarding(store)

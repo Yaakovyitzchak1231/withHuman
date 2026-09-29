@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -19,11 +20,13 @@ const (
 	pipelineCompletedEvent = "request_approval_pipeline.completed"
 )
 
-// ExecutionService selects and executes the active immutable pipeline. On
-// the synchronous request path it runs blocks until the first asynchronous
-// one and suspends there; a worker resumes the suspended pipeline and runs
-// every remaining block inline. CompiledState is shared with startup
-// readiness and the management control plane.
+// ExecutionService selects and executes the effective pipeline: the entry
+// pipeline's active revision with every delegated pipeline's active
+// revision spliced in. On the synchronous request path it runs blocks until
+// the first asynchronous one and suspends there; a worker resumes the
+// suspended pipeline on the pinned revisions and runs every remaining block
+// inline. CompiledState is shared with startup readiness and the management
+// control plane.
 type ExecutionService struct {
 	pipelines executionPipelineRepository
 	agents    executionAgentRepository
@@ -49,21 +52,14 @@ func NewExecutionService(pipelines executionPipelineRepository, agents execution
 	}
 }
 
-// executionSection is one selected scope of the effective pipeline in
-// execution order: the organization section first, then the agent-type
-// section for the authenticated agent type.
-type executionSection struct {
-	Scope    string
-	Revision domain.RequestApprovalPipelineRevision
-	Compiled *compiledPipeline
-}
-
-// terminalBlock identifies the block whose outcome ended execution.
+// terminalBlock identifies the block whose outcome ended execution and
+// where it sits in the effective pipeline.
 type terminalBlock struct {
-	ID    domain.ID
-	Key   string
-	Name  string
-	Scope string
+	ID          domain.ID
+	Key         string
+	Name        string
+	PipelineKey string
+	Position    int
 }
 
 // AbandonReasonCode is the completion reason written when the asynchronous
@@ -72,11 +68,11 @@ const AbandonReasonCode = "block_error"
 
 // Evaluate prepares the complete atomic initialization write without
 // performing persistence or starting durable orchestration. The effective
-// pipeline is the organization section's blocks followed by the agent-type
-// section's blocks; either section may be absent, the first terminal outcome
-// wins, and falling through the combined list requires a human. Reaching an
-// asynchronous block suspends the pipeline: the request is committed as
-// pending with a suspension the worker resumes.
+// pipeline is the entry pipeline's blocks with every delegate's target
+// spliced in; the first terminal outcome wins, and running out of the
+// entry pipeline requires a human. Reaching an asynchronous block suspends
+// the pipeline: the request is committed as pending with a suspension the
+// worker resumes.
 func (service *ExecutionService) Evaluate(ctx context.Context, request domain.ApprovalRequest) (application.InitializeApprovalInput, error) {
 	if err := (application.StartApprovalInput{Request: request}).Validate(); err != nil {
 		return application.InitializeApprovalInput{}, err
@@ -93,54 +89,46 @@ func (service *ExecutionService) Evaluate(ctx context.Context, request domain.Ap
 		return application.InitializeApprovalInput{}, err
 	}
 	startedAt := service.clock.Now()
-	sections := make([]executionSection, 0, 2)
-	for _, scope := range []domain.AgentSlug{"", request.AgentSlug} {
-		revision, err := service.pipelines.GetActiveRequestApprovalPipelineRevision(ctx, application.GetActiveRequestApprovalPipelineRevisionInput{
-			OrganizationID: request.OrganizationID,
-			AgentSlug:      scope,
-		})
-		if errors.Is(err, domain.ErrNotFound) {
-			continue
-		}
-		if err != nil {
-			return application.InitializeApprovalInput{}, err
-		}
-		sections = append(sections, executionSection{Scope: domain.PipelineScopeName(scope), Revision: revision})
-	}
-	if len(sections) == 0 {
+	entry, effective, err := service.resolveEffective(ctx, request.OrganizationID, nil)
+	switch {
+	case errors.Is(err, domain.ErrNotFound):
+		// A defensive path the product never reaches: every organization
+		// is seeded with an entry pipeline.
 		completed, marshalErr := pipelineCompletedAuditEvent(request, evaluationID, nil, service.compiled.Fingerprint(), BlockHuman, "no_active_revision", terminalBlock{}, 0, 0, 0, startedAt, service.clock.Now())
 		if marshalErr != nil {
 			return application.InitializeApprovalInput{}, marshalErr
 		}
 		events = append(events, completed)
 		result := initializationInput(request, nil, events)
-		result.HumanReview = humanReviewRoute(nil, terminalBlock{}, "")
+		result.HumanReview = &application.HumanReviewRoute{Reason: domain.RoutingReasonNoEscalation}
 		return result, nil
+	case errors.Is(err, errCompiledPipelineCacheUnavailable):
+		// Never execute a partial effective pipeline: a target that cannot
+		// be resolved or compiled hands the whole request to a human.
+		pins := []pinnedPipeline{{Key: entry.PipelineKey, ID: entry.ID, Revision: entry.Revision, Name: entry.Name}}
+		started, marshalErr := pipelineStartedAuditEvent(request, evaluationID, pins, len(entry.BlockIDs), service.compiled.Fingerprint(), startedAt)
+		if marshalErr != nil {
+			return application.InitializeApprovalInput{}, marshalErr
+		}
+		completed, marshalErr := pipelineCompletedAuditEvent(request, evaluationID, pins, service.compiled.Fingerprint(), BlockHuman, "compiled_cache_unavailable", terminalBlock{}, 0, 0, 0, startedAt, service.clock.Now())
+		if marshalErr != nil {
+			return application.InitializeApprovalInput{}, marshalErr
+		}
+		events = append(events, started, completed)
+		result := initializationInput(request, nil, events)
+		result.HumanReview = entryDefaultRoute(entry)
+		return result, nil
+	case err != nil:
+		return application.InitializeApprovalInput{}, err
 	}
 
-	started, err := pipelineStartedAuditEvent(request, evaluationID, sections, service.compiled.Fingerprint(), startedAt)
+	started, err := pipelineStartedAuditEvent(request, evaluationID, effective.pins(), len(effective.Blocks), service.compiled.Fingerprint(), startedAt)
 	if err != nil {
 		return application.InitializeApprovalInput{}, err
 	}
 	events = append(events, started)
-	if err := service.loadCompiled(ctx, sections); err != nil {
-		if !errors.Is(err, errCompiledPipelineCacheUnavailable) {
-			return application.InitializeApprovalInput{}, err
-		}
-		// Never execute a partial effective pipeline: any section that
-		// cannot load compiled state hands the whole request to a human.
-		completed, marshalErr := pipelineCompletedAuditEvent(request, evaluationID, sections, service.compiled.Fingerprint(), BlockHuman, "compiled_cache_unavailable", terminalBlock{}, 0, 0, 0, startedAt, service.clock.Now())
-		if marshalErr != nil {
-			return application.InitializeApprovalInput{}, marshalErr
-		}
-		events = append(events, completed)
-		result := initializationInput(request, nil, events)
-		result.HumanReview = humanReviewRoute(sections, terminalBlock{}, "")
-		return result, nil
-	}
-
 	run := &pipelineRun{
-		request: request, evaluationID: evaluationID, sections: sections, startedAt: startedAt,
+		request: request, evaluationID: evaluationID, effective: effective, startedAt: startedAt,
 		input: newBlockInput(request, agent, nil),
 	}
 	run.input.EvaluationID = evaluationID
@@ -172,7 +160,7 @@ func (service *ExecutionService) Evaluate(ctx context.Context, request domain.Ap
 	}
 	result := initializationInput(request, decision, events)
 	if decision == nil {
-		result.HumanReview = humanReviewRoute(run.sections, run.terminal, run.escalationPath)
+		result.HumanReview = humanReviewRoute(run.effective, run.terminal, run.escalationPath, run.routeFrom)
 	}
 	return result, nil
 }
@@ -188,22 +176,19 @@ func (service *ExecutionService) Resume(ctx context.Context, request domain.Appr
 	if err != nil {
 		return application.ResumeApprovalInput{}, err
 	}
-	sections, err := service.pinnedSections(ctx, suspension)
+	_, effective, err := service.resolveEffective(ctx, suspension.OrganizationID, suspension.PinnedRevisions)
+	if errors.Is(err, errCompiledPipelineCacheUnavailable) {
+		return service.Abandon(ctx, request, suspension, "compiled_cache_unavailable")
+	}
 	if err != nil {
 		return application.ResumeApprovalInput{}, err
 	}
 	run := &pipelineRun{
-		request: request, evaluationID: suspension.EvaluationID, sections: sections, startedAt: suspension.StartedAt,
+		request: request, evaluationID: suspension.EvaluationID, effective: effective, startedAt: suspension.StartedAt,
 		input:           newBlockInput(request, agent, suspension.PreviousMetadata),
 		attemptedBlocks: suspension.AttemptedBlockCount, totalAttempts: suspension.TotalAttempts, totalCost: suspension.TotalCost,
 	}
 	run.input.EvaluationID = suspension.EvaluationID
-	if err := service.loadCompiled(ctx, sections); err != nil {
-		if !errors.Is(err, errCompiledPipelineCacheUnavailable) {
-			return application.ResumeApprovalInput{}, err
-		}
-		return service.Abandon(ctx, request, suspension, "compiled_cache_unavailable")
-	}
 	if _, err := service.runBlocks(ctx, run, suspension.ResumePosition, false); err != nil {
 		return application.ResumeApprovalInput{}, err
 	}
@@ -220,20 +205,21 @@ func (service *ExecutionService) Resume(ctx context.Context, request domain.Appr
 		Decision: decision, AuditEvents: events, Now: service.clock.Now(),
 	}
 	if decision == nil {
-		result.HumanReview = humanReviewRoute(run.sections, run.terminal, run.escalationPath)
+		result.HumanReview = humanReviewRoute(run.effective, run.terminal, run.escalationPath, run.routeFrom)
 	}
 	return result, nil
 }
 
 // Abandon prepares the resume write for a suspended pipeline whose
 // asynchronous segment could not run: the pipeline completes with the
-// reason code and the request goes to a human.
+// reason code and the request goes to a human on the entry pipeline's
+// default, the only default known without flattening the run.
 func (service *ExecutionService) Abandon(ctx context.Context, request domain.ApprovalRequest, suspension domain.PipelineSuspension, reasonCode string) (application.ResumeApprovalInput, error) {
-	sections, err := service.pinnedSections(ctx, suspension)
+	entry, pins, err := service.pinnedPipelines(ctx, suspension)
 	if err != nil {
 		return application.ResumeApprovalInput{}, err
 	}
-	completed, err := pipelineCompletedAuditEvent(request, suspension.EvaluationID, sections, service.compiled.Fingerprint(), BlockHuman, reasonCode, terminalBlock{},
+	completed, err := pipelineCompletedAuditEvent(request, suspension.EvaluationID, pins, service.compiled.Fingerprint(), BlockHuman, reasonCode, terminalBlock{},
 		suspension.AttemptedBlockCount, suspension.TotalAttempts, suspension.TotalCost, suspension.StartedAt, service.clock.Now())
 	if err != nil {
 		return application.ResumeApprovalInput{}, err
@@ -241,7 +227,7 @@ func (service *ExecutionService) Abandon(ctx context.Context, request domain.App
 	return application.ResumeApprovalInput{
 		OrganizationID: request.OrganizationID, RequestID: request.ID, EvaluationID: suspension.EvaluationID,
 		AuditEvents: []domain.AuditEvent{completed}, Now: service.clock.Now(),
-		HumanReview: humanReviewRoute(sections, terminalBlock{}, ""),
+		HumanReview: entryDefaultRoute(entry),
 	}, nil
 }
 
@@ -259,40 +245,87 @@ func (service *ExecutionService) loadAgent(ctx context.Context, request domain.A
 	return agent, nil
 }
 
-// pinnedSections reloads the immutable revisions a suspension pinned, in
-// execution order, whether or not they are still active.
-func (service *ExecutionService) pinnedSections(ctx context.Context, suspension domain.PipelineSuspension) ([]executionSection, error) {
-	sections := make([]executionSection, 0, 2)
-	for _, pinned := range []struct {
-		scope string
-		id    domain.ID
-	}{{domain.PipelineScopeOrganization, suspension.OrganizationPipelineID}, {domain.PipelineScopeAgent, suspension.AgentPipelineID}} {
-		if pinned.id == "" {
-			continue
+// resolveEffective loads the entry revision and then the closure of every
+// delegate target, flattened into one effective pipeline. With pinned nil
+// it selects each key's active revision; otherwise every key must be
+// pinned and each pinned revision must belong to its key. The entry
+// revision comes back even when the closure fails, so the caller can
+// route by its default. A missing entry is domain.ErrNotFound when
+// selecting actives and domain.ErrInvalid for a pin; a target that is
+// missing, archived, uncompilable, cyclic, too deep, or too large is
+// errCompiledPipelineCacheUnavailable, so a run never executes a partial
+// effective pipeline.
+func (service *ExecutionService) resolveEffective(ctx context.Context, organizationID domain.ID, pinned map[string]domain.ID) (domain.RequestApprovalPipelineRevision, *effectivePipeline, error) {
+	load := func(ctx context.Context, key string) (domain.RequestApprovalPipelineRevision, error) {
+		if pinned == nil {
+			return service.pipelines.GetActiveRequestApprovalPipelineRevision(ctx, application.GetActiveRequestApprovalPipelineRevisionInput{
+				OrganizationID: organizationID, PipelineKey: key,
+			})
 		}
-		revision, err := service.pipelines.GetRequestApprovalPipelineRevisionByID(ctx, application.GetRequestApprovalPipelineRevisionByIDInput{
-			OrganizationID: suspension.OrganizationID, RevisionID: pinned.id,
+		id, ok := pinned[key]
+		if !ok {
+			return domain.RequestApprovalPipelineRevision{}, fmt.Errorf("suspension pins no revision of pipeline %q: %w", key, domain.ErrNotFound)
+		}
+		return service.pipelines.GetRequestApprovalPipelineRevisionByID(ctx, application.GetRequestApprovalPipelineRevisionByIDInput{
+			OrganizationID: organizationID, RevisionID: id,
 		})
-		if err != nil {
-			return nil, err
+	}
+	entry, err := load(ctx, domain.EntryPipelineKey)
+	if err != nil {
+		if pinned != nil && errors.Is(err, domain.ErrNotFound) {
+			return domain.RequestApprovalPipelineRevision{}, nil, fmt.Errorf("suspension pins no entry pipeline revision: %w", domain.ErrInvalid)
 		}
-		sections = append(sections, executionSection{Scope: pinned.scope, Revision: revision})
+		return domain.RequestApprovalPipelineRevision{}, nil, err
 	}
-	if len(sections) == 0 {
-		return nil, fmt.Errorf("suspension pins no pipeline revision: %w", domain.ErrInvalid)
+	root, err := service.compiled.Get(ctx, entry)
+	if err != nil {
+		return entry, nil, err
 	}
-	return sections, nil
+	effective, err := service.compiled.Effective(ctx, root, load)
+	if err != nil {
+		if ctx.Err() != nil {
+			return entry, nil, ctx.Err()
+		}
+		var tooDeep domain.PipelineDelegationTooDeepError
+		var cycle domain.PipelineDelegationCycleError
+		if errors.Is(err, domain.ErrNotFound) || errors.Is(err, errCompiledPipelineCacheUnavailable) ||
+			errors.Is(err, domain.ErrEffectivePipelineTooLarge) || errors.As(err, &tooDeep) || errors.As(err, &cycle) || errors.Is(err, domain.ErrInvalid) {
+			return entry, nil, fmt.Errorf("%v: %w", err, errCompiledPipelineCacheUnavailable)
+		}
+		return entry, nil, err
+	}
+	return entry, effective, nil
 }
 
-func (service *ExecutionService) loadCompiled(ctx context.Context, sections []executionSection) error {
-	for index := range sections {
-		compiled, err := service.compiled.Get(ctx, sections[index].Revision)
-		if err != nil {
-			return err
-		}
-		sections[index].Compiled = compiled
+// pinnedPipelines reloads the revisions a suspension pinned, the entry
+// first, for the record of a run that could not be flattened.
+func (service *ExecutionService) pinnedPipelines(ctx context.Context, suspension domain.PipelineSuspension) (domain.RequestApprovalPipelineRevision, []pinnedPipeline, error) {
+	if suspension.EntryPipelineID() == "" {
+		return domain.RequestApprovalPipelineRevision{}, nil, fmt.Errorf("suspension pins no entry pipeline revision: %w", domain.ErrInvalid)
 	}
-	return nil
+	keys := make([]string, 0, len(suspension.PinnedRevisions))
+	for key := range suspension.PinnedRevisions {
+		if key != domain.EntryPipelineKey {
+			keys = append(keys, key)
+		}
+	}
+	slices.Sort(keys)
+	keys = append([]string{domain.EntryPipelineKey}, keys...)
+	var entry domain.RequestApprovalPipelineRevision
+	pins := make([]pinnedPipeline, 0, len(keys))
+	for _, key := range keys {
+		revision, err := service.pipelines.GetRequestApprovalPipelineRevisionByID(ctx, application.GetRequestApprovalPipelineRevisionByIDInput{
+			OrganizationID: suspension.OrganizationID, RevisionID: suspension.PinnedRevisions[key],
+		})
+		if err != nil {
+			return domain.RequestApprovalPipelineRevision{}, nil, err
+		}
+		if key == domain.EntryPipelineKey {
+			entry = revision
+		}
+		pins = append(pins, pinnedPipeline{Key: key, ID: revision.ID, Revision: revision.Revision, Name: revision.Name})
+	}
+	return entry, pins, nil
 }
 
 func newBlockInput(request domain.ApprovalRequest, agent domain.Agent, previous map[string]json.RawMessage) RequestApprovalBlockInput {
@@ -317,15 +350,19 @@ func newBlockInput(request domain.ApprovalRequest, agent domain.Agent, previous 
 type pipelineRun struct {
 	request      domain.ApprovalRequest
 	evaluationID domain.ID
-	sections     []executionSection
+	effective    *effectivePipeline
 	startedAt    time.Time
 	input        RequestApprovalBlockInput
 
-	events          []domain.AuditEvent
-	outcome         BlockOutcome
-	reasonCode      string
-	terminal        terminalBlock
-	escalationPath  string
+	events         []domain.AuditEvent
+	outcome        BlockOutcome
+	reasonCode     string
+	terminal       terminalBlock
+	escalationPath string
+	// routeFrom indexes the section whose default, then the defaults of
+	// the pipelines that delegated into it, a human outcome without a
+	// path of its own inherits.
+	routeFrom       int
 	attemptedBlocks int
 	totalAttempts   int
 	totalCost       uint64
@@ -333,87 +370,86 @@ type pipelineRun struct {
 
 // suspensionPoint is the block execution stopped in front of.
 type suspensionPoint struct {
-	position int
-	block    domain.RequestApprovalBlock
-	scope    string
+	position    int
+	block       domain.RequestApprovalBlock
+	pipelineKey string
 }
 
-// runBlocks executes blocks in combined pre-order starting at startPosition.
-// A branch whose condition matches is entered and one that does not is
-// skipped whole; a branch that runs out of blocks ends the run with a human.
-// With suspendAsync, execution stops in front of the first asynchronous
-// block it reaches and reports it; otherwise every block runs inline.
+// runBlocks executes the effective pipeline in pre-order starting at
+// startPosition. A branch or delegate whose condition matches is entered
+// and one that does not is skipped whole; a branch that runs out of blocks
+// ends the run with a human, and so does a delegated pipeline that runs
+// out. With suspendAsync, execution stops in front of the first
+// asynchronous block it reaches and reports it; otherwise every block runs
+// inline.
 func (service *ExecutionService) runBlocks(ctx context.Context, run *pipelineRun, startPosition int, suspendAsync bool) (*suspensionPoint, error) {
 	run.outcome = BlockHuman
 	run.reasonCode = "end_of_pipeline"
-	end := 0
-	for _, section := range run.sections {
-		blocks := section.Compiled.Blocks
-		base := end
-		end += len(blocks)
-		if startPosition >= end {
-			continue
-		}
-		cursor := newBranchCursor(blocks, max(startPosition-base, 0))
-		for {
-			step, index := cursor.next()
-			if step == stepDone {
-				break
-			}
-			block, snapshot, position := blocks[index], section.Compiled.Snapshots[index], base+index
-			if step == stepBranchEnd {
-				return nil, service.endBranch(run, section, snapshot, block, position)
-			}
-			if block.Branch {
-				evaluated := executeBranchCondition(ctx, block.Executor, run.input)
-				if err := service.record(run, section, snapshot, position, evaluated); err != nil {
-					return nil, err
-				}
-				switch evaluated.Outcome {
-				case BlockEnter:
-					cursor.enter()
-				case BlockNext:
-					cursor.skip()
-				default:
-					// A condition that cannot be evaluated hands the request
-					// to a person on the pipeline default: the branch's own
-					// path is for its end only.
-					run.finish(section, snapshot, evaluated, "")
-					return nil, nil
-				}
-				continue
-			}
-			if suspendAsync && block.Asynchronous {
-				return &suspensionPoint{position: position, block: snapshot, scope: section.Scope}, nil
-			}
-			evaluated := ExecuteRequestApprovalBlock(ctx, block.Executor, run.input)
-			if err := service.record(run, section, snapshot, position, evaluated); err != nil {
-				return nil, err
-			}
-			if evaluated.Outcome == BlockNext {
-				if len(evaluated.Metadata) > 0 {
-					metadata, err := json.Marshal(evaluated.Metadata)
-					if err != nil {
-						return nil, err
-					}
-					run.input.PreviousMetadata[section.Scope+"/"+snapshot.BlockKey] = metadata
-				}
-				cursor.advance()
-				continue
-			}
-			run.finish(section, snapshot, evaluated, block.EscalationPath)
+	run.routeFrom = 0
+	effective := run.effective
+	cursor := newBranchCursor(effective.Blocks, startPosition)
+	for {
+		step, index := cursor.next()
+		if step == stepDone {
 			return nil, nil
 		}
+		block, snapshot := effective.Blocks[index], effective.Snapshots[index]
+		if step == stepBranchEnd {
+			if block.Delegate {
+				return nil, service.endDelegate(run, snapshot, index)
+			}
+			return nil, service.endBranch(run, snapshot, block, index)
+		}
+		run.input.PipelineKey = effective.keyAt(index)
+		if block.container() {
+			evaluated := executeBranchCondition(ctx, block.Executor, run.input)
+			if err := service.record(run, snapshot, index, evaluated); err != nil {
+				return nil, err
+			}
+			switch evaluated.Outcome {
+			case BlockEnter:
+				cursor.enter()
+			case BlockNext:
+				cursor.skip()
+			default:
+				// A condition that cannot be evaluated hands the request
+				// to a person on the default of the pipeline holding the
+				// block: a branch's own path is for its end only, and a
+				// delegate's target is never entered.
+				run.finish(snapshot, index, evaluated, "")
+				return nil, nil
+			}
+			continue
+		}
+		if suspendAsync && block.Asynchronous {
+			return &suspensionPoint{position: index, block: snapshot, pipelineKey: effective.keyAt(index)}, nil
+		}
+		evaluated := ExecuteRequestApprovalBlock(ctx, block.Executor, run.input)
+		if err := service.record(run, snapshot, index, evaluated); err != nil {
+			return nil, err
+		}
+		if evaluated.Outcome == BlockNext {
+			if len(evaluated.Metadata) > 0 {
+				metadata, err := json.Marshal(evaluated.Metadata)
+				if err != nil {
+					return nil, err
+				}
+				run.input.PreviousMetadata[effective.keyAt(index)+"/"+snapshot.BlockKey] = metadata
+			}
+			cursor.advance()
+			continue
+		}
+		run.finish(snapshot, index, evaluated, block.EscalationPath)
+		return nil, nil
 	}
-	return nil, nil
 }
 
 // record counts one attempted block and appends its evaluated event.
-func (service *ExecutionService) record(run *pipelineRun, section executionSection, snapshot domain.RequestApprovalBlock, position int, evaluated RequestApprovalBlockResult) error {
+func (service *ExecutionService) record(run *pipelineRun, snapshot domain.RequestApprovalBlock, position int, evaluated RequestApprovalBlockResult) error {
 	run.attemptedBlocks++
 	run.totalAttempts += attemptCount(evaluated)
 	run.totalCost += evaluated.Evidence.Cost
-	event, err := blockEvaluatedAuditEvent(run.request, run.evaluationID, section, snapshot, position, evaluated, service.clock.Now())
+	event, err := blockEvaluatedAuditEvent(run.request, run.evaluationID, run.effective, snapshot, position, evaluated, service.clock.Now())
 	if err != nil {
 		return err
 	}
@@ -425,50 +461,67 @@ func (service *ExecutionService) record(run *pipelineRun, section executionSecti
 // request goes to a human with the branch's reason and escalation path. The
 // closing event is evidence rather than an attempt, so the counters the
 // completion reports are unchanged.
-func (service *ExecutionService) endBranch(run *pipelineRun, section executionSection, snapshot domain.RequestApprovalBlock, block compiledBlock, position int) error {
-	event, err := branchEndedAuditEvent(run.request, run.evaluationID, section, snapshot, position, block.Reason, service.clock.Now())
+func (service *ExecutionService) endBranch(run *pipelineRun, snapshot domain.RequestApprovalBlock, block compiledBlock, position int) error {
+	event, err := branchEndedAuditEvent(run.request, run.evaluationID, run.effective, snapshot, position, block.Reason, service.clock.Now())
 	if err != nil {
 		return err
 	}
 	run.events = append(run.events, event)
 	run.outcome = BlockHuman
 	run.reasonCode = "end_of_branch"
-	run.terminal = terminalBlock{ID: snapshot.ID, Key: snapshot.BlockKey, Name: snapshot.Name, Scope: section.Scope}
+	run.terminal = run.effective.terminalAt(snapshot, position)
 	run.escalationPath = block.EscalationPath
+	run.routeFrom = run.effective.Owner[position]
+	return nil
+}
+
+// endDelegate finishes a run that a delegated pipeline could not decide:
+// the request goes to a human on the target pipeline's default, else the
+// defaults of the pipelines that delegated into it. The delegate block is
+// the terminal block and its closing event carries no reason, because the
+// target owns its end.
+func (service *ExecutionService) endDelegate(run *pipelineRun, snapshot domain.RequestApprovalBlock, position int) error {
+	event, err := branchEndedAuditEvent(run.request, run.evaluationID, run.effective, snapshot, position, "", service.clock.Now())
+	if err != nil {
+		return err
+	}
+	run.events = append(run.events, event)
+	run.outcome = BlockHuman
+	run.reasonCode = "end_of_branch"
+	run.terminal = run.effective.terminalAt(snapshot, position)
+	run.escalationPath = ""
+	run.routeFrom = run.effective.target(position)
 	return nil
 }
 
 // finish records the block whose outcome ended the run.
-func (run *pipelineRun) finish(section executionSection, snapshot domain.RequestApprovalBlock, evaluated RequestApprovalBlockResult, escalationPath string) {
+func (run *pipelineRun) finish(snapshot domain.RequestApprovalBlock, position int, evaluated RequestApprovalBlockResult, escalationPath string) {
 	run.outcome = evaluated.Outcome
 	run.reasonCode = completionReason(evaluated)
-	run.terminal = terminalBlock{ID: snapshot.ID, Key: snapshot.BlockKey, Name: snapshot.Name, Scope: section.Scope}
+	run.terminal = run.effective.terminalAt(snapshot, position)
 	run.escalationPath = escalationPath
+	run.routeFrom = run.effective.Owner[position]
+}
+
+func (effective *effectivePipeline) terminalAt(snapshot domain.RequestApprovalBlock, position int) terminalBlock {
+	return terminalBlock{ID: snapshot.ID, Key: snapshot.BlockKey, Name: snapshot.Name, PipelineKey: effective.keyAt(position), Position: position}
 }
 
 func (run *pipelineRun) suspension(position int, now time.Time) domain.PipelineSuspension {
-	suspension := domain.PipelineSuspension{
+	return domain.PipelineSuspension{
 		RequestID: run.request.ID, OrganizationID: run.request.OrganizationID, EvaluationID: run.evaluationID,
-		ResumePosition: position, PreviousMetadata: run.input.PreviousMetadata,
+		PinnedRevisions: run.effective.pinned(),
+		ResumePosition:  position, PreviousMetadata: run.input.PreviousMetadata,
 		AttemptedBlockCount: run.attemptedBlocks, TotalAttempts: run.totalAttempts, TotalCost: run.totalCost,
 		StartedAt: run.startedAt, SuspendedAt: now,
 	}
-	for _, section := range run.sections {
-		switch section.Scope {
-		case domain.PipelineScopeOrganization:
-			suspension.OrganizationPipelineID = section.Revision.ID
-		case domain.PipelineScopeAgent:
-			suspension.AgentPipelineID = section.Revision.ID
-		}
-	}
-	return suspension
 }
 
 // completion builds the completed event and, for an automatic outcome, the
 // decision and its audit event.
 func (service *ExecutionService) completion(run *pipelineRun) (domain.AuditEvent, *domain.Decision, domain.AuditEvent, error) {
 	completedAt := service.clock.Now()
-	completed, err := pipelineCompletedAuditEvent(run.request, run.evaluationID, run.sections, service.compiled.Fingerprint(), run.outcome, run.reasonCode, run.terminal,
+	completed, err := pipelineCompletedAuditEvent(run.request, run.evaluationID, run.effective.pins(), service.compiled.Fingerprint(), run.outcome, run.reasonCode, run.terminal,
 		run.attemptedBlocks, run.totalAttempts, run.totalCost, run.startedAt, completedAt)
 	if err != nil {
 		return domain.AuditEvent{}, nil, domain.AuditEvent{}, err
@@ -493,46 +546,53 @@ func initializationInput(request domain.ApprovalRequest, decision *domain.Decisi
 }
 
 // humanReviewRoute resolves where a request that needs a human goes: the
-// escalation path the terminal block named, else the effective pipeline
-// default (the agent-type section's, then the organization's), else none,
-// which leaves the request to any authorized reviewer.
-func humanReviewRoute(sections []executionSection, terminal terminalBlock, escalationPath string) *application.HumanReviewRoute {
+// escalation path the terminal block named, else the default of the
+// pipeline the request was in when it needed a human, then the defaults
+// of the pipelines that delegated into it, nearest first, else none, which
+// leaves the request to any authorized reviewer.
+func humanReviewRoute(effective *effectivePipeline, terminal terminalBlock, escalationPath string, routeFrom int) *application.HumanReviewRoute {
+	route, _ := routeSection(effective, terminal, escalationPath, routeFrom)
+	return route
+}
+
+// routeSection is humanReviewRoute plus the index of the section that
+// supplied the path, -1 for none.
+func routeSection(effective *effectivePipeline, terminal terminalBlock, escalationPath string, routeFrom int) (*application.HumanReviewRoute, int) {
 	if escalationPath != "" {
+		owner := effective.Owner[terminal.Position]
 		return &application.HumanReviewRoute{
 			PathKey:            escalationPath,
 			Reason:             domain.RoutingReasonBlockEscalation,
-			PipelineRevisionID: sectionRevisionID(sections, terminal.Scope),
+			PipelineRevisionID: effective.Sections[owner].Revision.ID,
 			BlockID:            terminal.ID,
-		}
+		}, owner
 	}
-	return defaultReviewRoute(sections)
+	for index := routeFrom; index >= 0; index = effective.Sections[index].Enclosing {
+		path := effective.Sections[index].Revision.DefaultEscalationPath
+		if path == "" {
+			continue
+		}
+		return &application.HumanReviewRoute{
+			PathKey: path, Reason: domain.RoutingReasonPipelineDefault,
+			PipelineRevisionID: effective.Sections[index].Revision.ID,
+		}, index
+	}
+	return &application.HumanReviewRoute{Reason: domain.RoutingReasonNoEscalation}, -1
 }
 
-// defaultReviewRoute is the effective pipeline default alone: what a
-// fall-through request and a human exit that names no path inherit.
-func defaultReviewRoute(sections []executionSection) *application.HumanReviewRoute {
-	for _, scope := range []string{domain.PipelineScopeAgent, domain.PipelineScopeOrganization} {
-		for _, section := range sections {
-			if section.Scope != scope || section.Revision.DefaultEscalationPath == "" {
-				continue
-			}
-			return &application.HumanReviewRoute{
-				PathKey: section.Revision.DefaultEscalationPath, Reason: domain.RoutingReasonPipelineDefault,
-				PipelineRevisionID: section.Revision.ID,
-			}
-		}
+// entryDefaultRoute is the entry pipeline's default alone: what a request
+// inherits when the run never entered another pipeline, or could not be
+// flattened at all.
+func entryDefaultRoute(entry domain.RequestApprovalPipelineRevision) *application.HumanReviewRoute {
+	if entry.DefaultEscalationPath == "" {
+		return &application.HumanReviewRoute{Reason: domain.RoutingReasonNoEscalation}
 	}
-	return &application.HumanReviewRoute{Reason: domain.RoutingReasonNoEscalation}
+	return &application.HumanReviewRoute{
+		PathKey: entry.DefaultEscalationPath, Reason: domain.RoutingReasonPipelineDefault,
+		PipelineRevisionID: entry.ID,
+	}
 }
 
-func sectionRevisionID(sections []executionSection, scope string) domain.ID {
-	for _, section := range sections {
-		if section.Scope == scope {
-			return section.Revision.ID
-		}
-	}
-	return ""
-}
 func approvalCreatedEvents(request domain.ApprovalRequest) ([]domain.AuditEvent, error) {
 	data, err := json.Marshal(map[string]any{
 		"agent_instance_id": request.AgentInstanceID,
@@ -549,37 +609,36 @@ func approvalCreatedEvents(request domain.ApprovalRequest) ([]domain.AuditEvent,
 	}}, nil
 }
 
-// sectionAuditData records each scope's pinned revision explicitly, with
-// null values for a scope that had no active revision.
-func sectionAuditData(data map[string]any, sections []executionSection) {
-	data["organization_pipeline_id"] = nil
-	data["organization_revision"] = nil
-	data["agent_pipeline_id"] = nil
-	data["agent_revision"] = nil
-	for _, section := range sections {
-		data[section.Scope+"_pipeline_id"] = section.Revision.ID
-		data[section.Scope+"_revision"] = section.Revision.Revision
+// pipelinesAuditData records the run's pipelines: the entry revision and
+// every pipeline a delegate names, whether or not the request entered it.
+func pipelinesAuditData(data map[string]any, pins []pinnedPipeline) {
+	pipelines := make([]map[string]any, 0, len(pins))
+	for _, pin := range pins {
+		if pin.Key == domain.EntryPipelineKey {
+			data["entry_pipeline_id"] = pin.ID
+			data["entry_revision"] = pin.Revision
+		}
+		pipelines = append(pipelines, map[string]any{
+			"pipeline_key": pin.Key, "pipeline_id": pin.ID, "revision": pin.Revision, "name": pin.Name,
+		})
 	}
+	data["pipelines"] = pipelines
 }
 
-func pipelineStartedAuditEvent(request domain.ApprovalRequest, evaluationID domain.ID, sections []executionSection, runtimeFingerprint string, occurredAt time.Time) (domain.AuditEvent, error) {
-	blockCount := 0
-	for _, section := range sections {
-		blockCount += len(section.Revision.BlockIDs)
-	}
+func pipelineStartedAuditEvent(request domain.ApprovalRequest, evaluationID domain.ID, pins []pinnedPipeline, blockCount int, runtimeFingerprint string, occurredAt time.Time) (domain.AuditEvent, error) {
 	data := map[string]any{
 		"pipeline_evaluation_id": evaluationID,
 		"agent_slug":             request.AgentSlug,
 		"block_count":            blockCount,
 		"runtime_fingerprint":    runtimeFingerprint,
 	}
-	sectionAuditData(data, sections)
+	pipelinesAuditData(data, pins)
 	encoded, err := json.Marshal(data)
 	return systemApprovalAuditEvent(request, pipelineStartedEvent, encoded, occurredAt), err
 }
 
-func blockEvaluatedAuditEvent(request domain.ApprovalRequest, evaluationID domain.ID, section executionSection, block domain.RequestApprovalBlock, position int, result RequestApprovalBlockResult, occurredAt time.Time) (domain.AuditEvent, error) {
-	fields := blockEvaluatedFields(evaluationID, section, block, position, result.Outcome, result.Reason)
+func blockEvaluatedAuditEvent(request domain.ApprovalRequest, evaluationID domain.ID, effective *effectivePipeline, block domain.RequestApprovalBlock, position int, result RequestApprovalBlockResult, occurredAt time.Time) (domain.AuditEvent, error) {
+	fields := blockEvaluatedFields(evaluationID, effective, block, position, result.Outcome, result.Reason)
 	fields["attempt_count"] = attemptCount(result)
 	fields["cost"] = result.Evidence.Cost
 	fields["error_code"] = result.ErrorCode
@@ -592,11 +651,12 @@ func blockEvaluatedAuditEvent(request domain.ApprovalRequest, evaluationID domai
 	return systemApprovalAuditEvent(request, blockEvaluatedEvent, data, occurredAt), err
 }
 
-// branchEndedAuditEvent is the closing evaluated event of a branch a request
-// entered and ran out of: a human outcome with the branch's reason, made
-// without evaluating anything.
-func branchEndedAuditEvent(request domain.ApprovalRequest, evaluationID domain.ID, section executionSection, block domain.RequestApprovalBlock, position int, reason string, occurredAt time.Time) (domain.AuditEvent, error) {
-	fields := blockEvaluatedFields(evaluationID, section, block, position, BlockHuman, reason)
+// branchEndedAuditEvent is the closing evaluated event of a branch, or a
+// delegate whose target, a request entered and ran out of: a human outcome
+// with the branch's reason (none for a delegate), made without evaluating
+// anything.
+func branchEndedAuditEvent(request domain.ApprovalRequest, evaluationID domain.ID, effective *effectivePipeline, block domain.RequestApprovalBlock, position int, reason string, occurredAt time.Time) (domain.AuditEvent, error) {
+	fields := blockEvaluatedFields(evaluationID, effective, block, position, BlockHuman, reason)
 	fields["attempt_count"] = 0
 	fields["cost"] = 0
 	fields["error_code"] = ""
@@ -607,10 +667,11 @@ func branchEndedAuditEvent(request domain.ApprovalRequest, evaluationID domain.I
 	return systemApprovalAuditEvent(request, blockEvaluatedEvent, data, occurredAt), err
 }
 
-func blockEvaluatedFields(evaluationID domain.ID, section executionSection, block domain.RequestApprovalBlock, position int, outcome BlockOutcome, reason string) map[string]any {
-	return map[string]any{
+func blockEvaluatedFields(evaluationID domain.ID, effective *effectivePipeline, block domain.RequestApprovalBlock, position int, outcome BlockOutcome, reason string) map[string]any {
+	section := effective.Sections[effective.Owner[position]]
+	fields := map[string]any{
 		"pipeline_evaluation_id": evaluationID,
-		"scope":                  section.Scope,
+		"pipeline_key":           section.Key,
 		"pipeline_id":            section.Revision.ID,
 		"revision":               section.Revision.Revision,
 		"block_id":               block.ID,
@@ -624,27 +685,33 @@ func blockEvaluatedFields(evaluationID domain.ID, section executionSection, bloc
 		// say why a human was asked without reading the pipeline.
 		"reason": reason,
 	}
+	if target := effective.target(position); target >= 0 {
+		fields["target_pipeline_key"] = effective.Sections[target].Key
+		fields["target_pipeline_id"] = effective.Sections[target].Revision.ID
+		fields["target_revision"] = effective.Sections[target].Revision.Revision
+	}
+	return fields
 }
 
 // pipelineSuspendedAuditEvent records where the synchronous segment stopped
 // and which block the worker will run first.
 func pipelineSuspendedAuditEvent(request domain.ApprovalRequest, run *pipelineRun, point suspensionPoint, occurredAt time.Time) (domain.AuditEvent, error) {
 	data := map[string]any{
-		"pipeline_evaluation_id": run.evaluationID,
-		"agent_slug":             request.AgentSlug,
-		"resume_position":        point.position,
-		"suspended_block_id":     point.block.ID,
-		"suspended_block_key":    point.block.BlockKey,
-		"suspended_block_type":   point.block.BlockType,
-		"suspended_block_scope":  point.scope,
-		"attempted_block_count":  run.attemptedBlocks,
+		"pipeline_evaluation_id":       run.evaluationID,
+		"agent_slug":                   request.AgentSlug,
+		"resume_position":              point.position,
+		"suspended_block_id":           point.block.ID,
+		"suspended_block_key":          point.block.BlockKey,
+		"suspended_block_type":         point.block.BlockType,
+		"suspended_block_pipeline_key": point.pipelineKey,
+		"attempted_block_count":        run.attemptedBlocks,
 	}
-	sectionAuditData(data, run.sections)
+	pipelinesAuditData(data, run.effective.pins())
 	encoded, err := json.Marshal(data)
 	return systemApprovalAuditEvent(request, pipelineSuspendedEvent, encoded, occurredAt), err
 }
 
-func pipelineCompletedAuditEvent(request domain.ApprovalRequest, evaluationID domain.ID, sections []executionSection, runtimeFingerprint string, outcome BlockOutcome, reasonCode string, terminal terminalBlock, attemptedBlocks, totalAttempts int, totalCost uint64, startedAt, completedAt time.Time) (domain.AuditEvent, error) {
+func pipelineCompletedAuditEvent(request domain.ApprovalRequest, evaluationID domain.ID, pins []pinnedPipeline, runtimeFingerprint string, outcome BlockOutcome, reasonCode string, terminal terminalBlock, attemptedBlocks, totalAttempts int, totalCost uint64, startedAt, completedAt time.Time) (domain.AuditEvent, error) {
 	duration := completedAt.Sub(startedAt)
 	if duration < 0 {
 		duration = 0
@@ -659,15 +726,15 @@ func pipelineCompletedAuditEvent(request domain.ApprovalRequest, evaluationID do
 		"total_cost":             totalCost,
 		"duration_ms":            duration.Milliseconds(),
 	}
-	if len(sections) > 0 {
-		sectionAuditData(data, sections)
+	if len(pins) > 0 {
+		pipelinesAuditData(data, pins)
 		data["runtime_fingerprint"] = runtimeFingerprint
 	}
 	if terminal.ID != "" {
 		data["terminal_block_id"] = terminal.ID
 		data["terminal_block_key"] = terminal.Key
 		data["terminal_block_name"] = terminal.Name
-		data["terminal_block_scope"] = terminal.Scope
+		data["terminal_block_pipeline_key"] = terminal.PipelineKey
 	}
 	encoded, err := json.Marshal(data)
 	return systemApprovalAuditEvent(request, pipelineCompletedEvent, encoded, completedAt), err

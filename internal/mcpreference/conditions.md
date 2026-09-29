@@ -30,9 +30,10 @@ Fields are JSON pointers into the request:
   matches them.
 - `/request/arguments/...`: the tool call's arguments, any depth.
 - `/agent/slug`, `/agent/name`: the requesting agent (strings).
-- `/previous_metadata/organization/<block id>/...` and
-  `/previous_metadata/agent/<block id>/...`: metadata an earlier block
-  returned (a `webhook`, or a kind the deployment adds).
+- `/previous_metadata/<pipeline key>/<block id>/...`: metadata an
+  earlier block returned (a `webhook`, or a kind the deployment adds),
+  under the key of the pipeline that holds it (`entry`, or a delegated
+  pipeline's).
 
 ## Operators
 

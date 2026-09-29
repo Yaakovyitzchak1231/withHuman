@@ -73,7 +73,7 @@ func TestExecutionRequestPathSharesBoundedCompilationMiss(t *testing.T) {
 	now := time.Unix(10_000, 0).UTC()
 	repository := newMemoryPipelineRepository()
 	management := NewManagementService(repository, NewCompiledPipelineState(repository, NewBlockRegistry()), fixedPipelineClock{now: now})
-	created, err := management.CreateRevision(context.Background(), pipelineManagerPrincipal("organization-1"), "billing", []approvalblock.Definition{
+	created, err := management.CreateRevision(context.Background(), pipelineManagerPrincipal("organization-1"), "entry", pipelineName("entry"), []approvalblock.Definition{
 		pipelineDefinition("approve", approvalblock.Approve, approvalblock.Field("/request/tool").Equals("deploy")),
 	}, "")
 	if err != nil {
@@ -89,7 +89,7 @@ func TestExecutionRequestPathSharesBoundedCompilationMiss(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := repository.ActivateRequestApprovalPipelineRevision(context.Background(), application.ActivateRequestApprovalPipelineRevisionInput{
-		OrganizationID: "organization-1", AgentSlug: "billing", Revision: created.Revision.Revision,
+		OrganizationID: "organization-1", PipelineKey: "entry", Revision: created.Revision.Revision,
 		ExpectedActiveRevision: 1, ActorID: "membership-1", Now: now,
 	}); err != nil {
 		t.Fatal(err)
@@ -132,7 +132,7 @@ func TestExecutionRequestPathSharesBoundedCompilationMiss(t *testing.T) {
 
 func TestCompiledPipelineStateBoundsCompilationAndFailsRequestToHuman(t *testing.T) {
 	now := time.Unix(11_000, 0).UTC()
-	repository := activeExecutionPipeline(t, now, "billing", []approvalblock.Definition{
+	repository := activeExecutionPipeline(t, now, "entry", []approvalblock.Definition{
 		pipelineDefinition("approve", approvalblock.Approve, approvalblock.Field("/request/tool").Equals("deploy")),
 	})
 	state := NewCompiledPipelineState(repository, NewBlockRegistry())
@@ -179,13 +179,13 @@ func TestManagementRefreshesActivationRollbackAndDeactivation(t *testing.T) {
 	}
 	management := NewManagementService(repository, state, fixedPipelineClock{now: now})
 	principal := pipelineManagerPrincipal("organization-1")
-	first, err := management.CreateRevision(context.Background(), principal, "billing", []approvalblock.Definition{
+	first, err := management.CreateRevision(context.Background(), principal, "billing", pipelineName("billing"), []approvalblock.Definition{
 		pipelineDefinition("first", approvalblock.Approve, approvalblock.Field("/request/tool").Equals("deploy")),
 	}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := management.CreateRevision(context.Background(), principal, "billing", []approvalblock.Definition{
+	second, err := management.CreateRevision(context.Background(), principal, "billing", pipelineName("billing"), []approvalblock.Definition{
 		pipelineDefinition("second", approvalblock.Human, approvalblock.Field("/request/tool").Equals("deploy")),
 	}, "")
 	if err != nil {
@@ -214,7 +214,7 @@ func TestCompiledPipelineStateSeparatesRuntimeFingerprints(t *testing.T) {
 		t.Fatal(err)
 	}
 	revision, err := repository.GetActiveRequestApprovalPipelineRevision(context.Background(), application.GetActiveRequestApprovalPipelineRevisionInput{
-		OrganizationID: "organization-1", AgentSlug: "billing",
+		OrganizationID: "organization-1", PipelineKey: "billing",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -244,7 +244,7 @@ func TestCompiledPipelineStateRejectsTenantOrRevisionIdentityMismatch(t *testing
 		t.Fatal(err)
 	}
 	revision, err := repository.GetActiveRequestApprovalPipelineRevision(context.Background(), application.GetActiveRequestApprovalPipelineRevisionInput{
-		OrganizationID: "organization-1", AgentSlug: "billing",
+		OrganizationID: "organization-1", PipelineKey: "billing",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -297,16 +297,16 @@ func (repository *countingCompiledPipelineRepository) GetRequestApprovalBlocks(c
 	return repository.repository.GetRequestApprovalBlocks(ctx, input)
 }
 
-func createActivePipeline(t *testing.T, repository *memoryPipelineRepository, agentSlug domain.AgentSlug, blockKey string) {
+func createActivePipeline(t *testing.T, repository *memoryPipelineRepository, pipelineKey string, blockKey string) {
 	t.Helper()
 	management := NewManagementService(repository, NewCompiledPipelineState(repository, NewBlockRegistry()), fixedPipelineClock{now: time.Unix(9_000, 0).UTC()})
-	created, err := management.CreateRevision(context.Background(), pipelineManagerPrincipal("organization-1"), agentSlug, []approvalblock.Definition{
+	created, err := management.CreateRevision(context.Background(), pipelineManagerPrincipal("organization-1"), pipelineKey, pipelineName(pipelineKey), []approvalblock.Definition{
 		pipelineDefinition(blockKey, approvalblock.Approve, approvalblock.Field("/request/tool").Equals("deploy")),
 	}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := management.Activate(context.Background(), pipelineManagerPrincipal("organization-1"), agentSlug, created.Revision.Revision, 1); err != nil {
+	if _, err := management.Activate(context.Background(), pipelineManagerPrincipal("organization-1"), pipelineKey, created.Revision.Revision, 1); err != nil {
 		t.Fatal(err)
 	}
 }

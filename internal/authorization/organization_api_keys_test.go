@@ -8,8 +8,8 @@ import (
 )
 
 func TestOrganizationKeyCannotBroadenScopeOrAcquireHumanPowers(t *testing.T) {
-	actor := domain.Principal{ActorType: domain.ActorHuman}.WithGrants([]domain.Grant{{Permission: domain.PermissionPipelineWrite, ScopeKind: domain.ScopeAgent, ScopeID: "payments"}, {Permission: domain.PermissionPolicyWrite, ScopeKind: domain.ScopeAgent, ScopeID: "payments"}})
-	for _, scope := range []domain.Scope{{Kind: domain.ScopeOrganization}, {Kind: domain.ScopeAgent, ID: "other"}} {
+	actor := domain.Principal{ActorType: domain.ActorHuman}.WithGrants([]domain.Grant{{Permission: domain.PermissionPipelineWrite, ScopeKind: domain.ScopePipeline, ScopeID: "payments"}, {Permission: domain.PermissionPolicyWrite, ScopeKind: domain.ScopePipeline, ScopeID: "payments"}})
+	for _, scope := range []domain.Scope{{Kind: domain.ScopeOrganization}, {Kind: domain.ScopePipeline, ID: "other"}} {
 		err := domain.ValidateOrganizationKeyPolicies(actor, []domain.PermissionPolicySpec{{Permissions: []domain.Permission{domain.PermissionPipelineWrite}, ScopeKind: scope.Kind, ResourceIDs: func() []string {
 			if scope.ID == "" {
 				return nil
@@ -20,7 +20,7 @@ func TestOrganizationKeyCannotBroadenScopeOrAcquireHumanPowers(t *testing.T) {
 			t.Fatalf("scope %v: %v", scope, err)
 		}
 	}
-	if err := domain.ValidateOrganizationKeyPolicies(actor, []domain.PermissionPolicySpec{{Permissions: []domain.Permission{domain.PermissionPipelineWrite}, ScopeKind: domain.ScopeAgent, ResourceIDs: []string{"payments"}}}); err != nil {
+	if err := domain.ValidateOrganizationKeyPolicies(actor, []domain.PermissionPolicySpec{{Permissions: []domain.Permission{domain.PermissionPipelineWrite}, ScopeKind: domain.ScopePipeline, ResourceIDs: []string{"payments"}}}); err != nil {
 		t.Fatal(err)
 	}
 	p := domain.Principal{ActorType: domain.ActorAPIKey, Auth: domain.AuthContext{Method: domain.AuthMethodAPIKey}}.WithGrants(domain.OrganizationGrants(domain.HumanPermissions()))

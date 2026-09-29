@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { BlockDraft, BranchDraft } from "./pipeline-blocks";
 import { dropIndex, PipelineRail, RailProvider, useRailEditor, type RailState } from "./pipeline-rail";
-import { runFromPreviews } from "./pipeline-replay";
+import { runFromPreview } from "./pipeline-replay";
 import { pipelineReachability, walkDrafts } from "./pipeline-tree";
 
 beforeEach(() => vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} }));
@@ -49,7 +49,6 @@ function state(drafts: BlockDraft[], overrides: Partial<RailState> = {}): RailSt
   return {
     mode: "view",
     section: "agent",
-    offset: 0,
     reachability: pipelineReachability(drafts),
     directory: [],
     endpoints: [],
@@ -91,15 +90,6 @@ describe("the rail", () => {
     for (const chip of ["1", "2", "2.1", "3"]) expect(screen.getByText(chip)).toBeTruthy();
   });
 
-  it("offsets positions past the sections that run first", () => {
-    render(
-      <RailProvider value={state(blocks(), { offset: 2 })}>
-        <PipelineRail blocks={blocks()} lastLabel="Otherwise" />
-      </RailProvider>,
-    );
-    for (const chip of ["3", "4", "4.1", "5"]) expect(screen.getByText(chip)).toBeTruthy();
-  });
-
   it("draws a branch's blocks and end in its well, and the skip row after it", () => {
     const { container } = render(
       <RailProvider value={state(blocks())}>
@@ -120,28 +110,25 @@ describe("the rail", () => {
     const drafts = [cel("first"), branch("refunds", "Refunds", [cel("small")])];
     render(
       <RailProvider value={state(drafts)}>
-        <PipelineRail blocks={drafts} lastLabel="Otherwise, continue to the agent's pipeline" />
+        <PipelineRail blocks={drafts} lastLabel="Otherwise, ask the default reviewers" />
       </RailProvider>,
     );
     expect(screen.queryByText("Otherwise, skip this branch and check the next block")).toBeNull();
-    expect(screen.getByText("Otherwise, continue to the agent's pipeline")).toBeTruthy();
+    expect(screen.getByText("Otherwise, ask the default reviewers")).toBeTruthy();
   });
 
   it("rings the end card when the test ran out of the branch", () => {
-    const run = runFromPreviews([{
-      section: "agent",
-      preview: {
-        outcome: "human",
-        reason_code: "end_of_branch",
-        terminal_block_id: "refunds",
-        blocks: [
-          { block_id: "first", position: 0, outcome: "next", cost: 1, trace: [] },
-          { block_id: "refunds", position: 1, outcome: "enter", cost: 1, trace: [] },
-          { block_id: "small", position: 2, outcome: "next", cost: 1, trace: [] },
-          { block_id: "refunds", position: 1, outcome: "human", end_of_branch: true, cost: 0, trace: [] },
-        ],
-      },
-    }]);
+    const run = runFromPreview({
+      outcome: "human",
+      reason_code: "end_of_branch",
+      terminal_block_id: "refunds",
+      blocks: [
+        { block_id: "first", pipeline_key: "agent", position: 0, outcome: "next", cost: 1, trace: [] },
+        { block_id: "refunds", pipeline_key: "agent", position: 1, outcome: "enter", cost: 1, trace: [] },
+        { block_id: "small", pipeline_key: "agent", position: 2, outcome: "next", cost: 1, trace: [] },
+        { block_id: "refunds", pipeline_key: "agent", position: 1, outcome: "human", end_of_branch: true, cost: 0, trace: [] },
+      ],
+    });
     render(
       <RailProvider value={state(blocks(), { run, cursor: run.steps.length })}>
         <PipelineRail blocks={blocks()} lastLabel="Otherwise" />
@@ -153,6 +140,67 @@ describe("the rail", () => {
     const elbow = screen.getByRole("group", { name: "Blocks in “Refunds”" }).parentElement?.previousElementSibling as HTMLElement;
     expect(within(elbow).getByText("If conditions are met").className.split(" ")).toContain("text-ink");
     expect(screen.getByText("Otherwise, skip this branch and check the next block").className.split(" ")).toContain("text-ink-muted");
+  });
+});
+
+describe("a delegate on the rail", () => {
+  const delegate = (): BlockDraft => ({
+    kind: "delegate",
+    id: "to-billing",
+    name: "Billing requests",
+    enabled: true,
+    when: { id: "d-when", all: [{ id: "d-leaf", field: "/agent/slug", operator: "equals", value: "billing" }] },
+    pipelineKey: "billing",
+  });
+
+  it("draws the target's active blocks read only in its well, under the target's key", () => {
+    const drafts = [delegate(), cel("last", "Deny deletes")];
+    const run = runFromPreview({
+      outcome: "approve",
+      reason_code: "block_outcome",
+      terminal_block_id: "small",
+      blocks: [
+        { block_id: "to-billing", pipeline_key: "entry", position: 0, outcome: "enter", cost: 1, trace: [] },
+        { block_id: "small", pipeline_key: "billing", position: 1, outcome: "approve", cost: 1, trace: [] },
+      ],
+    });
+    render(
+      <RailProvider
+        value={state(drafts, {
+          section: "entry",
+          pipelines: [{ key: "billing", name: "Billing", active: true }],
+          delegates: { billing: { name: "Billing", blocks: [cel("small", "Approve small refunds")], defaultTarget: null } },
+          run,
+          cursor: run.steps.length,
+        })}
+      >
+        <PipelineRail blocks={drafts} lastLabel="Otherwise" />
+      </RailProvider>,
+    );
+    const well = screen.getByRole("group", { name: "Blocks in “Billing”" });
+    expect(within(well).getByText("Approve small refunds")).toBeTruthy();
+    expect(within(well).getByText("No block in “Billing” decided.")).toBeTruthy();
+    /* The target's block is terminal because the replay keyed it to the
+     * target pipeline, not to the pipeline being viewed. */
+    const card = within(well).getByText("Approve small refunds").closest("[data-block-card]") as HTMLElement;
+    expect(card.className).toContain("ring-approve");
+    expect(screen.getByText("Otherwise, skip this pipeline and check the next block")).toBeTruthy();
+  });
+
+  it("names a target it cannot show, and refuses to draw a cycle", () => {
+    render(
+      <RailProvider value={state([delegate()], { section: "entry" })}>
+        <PipelineRail blocks={[delegate()]} lastLabel="Otherwise" />
+      </RailProvider>,
+    );
+    expect(screen.getByText(/You cannot view that pipeline/)).toBeTruthy();
+    cleanup();
+    render(
+      <RailProvider value={state([delegate()], { section: "billing", enclosing: ["entry"] })}>
+        <PipelineRail blocks={[delegate()]} lastLabel="Otherwise" />
+      </RailProvider>,
+    );
+    expect(screen.getByText("Cycle")).toBeTruthy();
   });
 });
 

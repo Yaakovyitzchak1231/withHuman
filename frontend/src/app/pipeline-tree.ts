@@ -46,10 +46,9 @@ export function countDrafts(drafts: BlockDraft[]): number {
   return walkDrafts(drafts).length;
 }
 
-/* The chip a block carries: "3", or "3.2.1" inside branches. offset
- * shifts the top-level position past the sections that run first. */
-export function positionLabel(path: number[], offset = 0): string {
-  return [path[0] + offset, ...path.slice(1)].join(".");
+/* The chip a block carries: "3", or "3.2.1" inside branches. */
+export function positionLabel(path: number[]): string {
+  return path.join(".");
 }
 
 /* A rail's blocks: the top rail for null, else the named branch's. */
@@ -187,11 +186,11 @@ export function unwrapBranch(drafts: BlockDraft[], id: string): BlockDraft[] {
   ]);
 }
 
-/* Every condition the tree tests: each Conditions block's and each
- * branch's, at any depth. */
+/* Every condition the tree tests: each Conditions block's, each
+ * branch's and each delegate's, at any depth. */
 export function allConditions(drafts: BlockDraft[]): ConditionNode[] {
   return walkDrafts(drafts).flatMap(({ block }) =>
-    block.kind === "cel" || block.kind === "branch" ? [block.when] : [],
+    block.kind === "cel" || block.kind === "branch" || block.kind === "delegate" ? [block.when] : [],
   );
 }
 
@@ -219,23 +218,23 @@ export function changedBlockCount(baseline: BlockDraft[], draft: BlockDraft[]): 
 /* Which blocks no request can reach. An enabled Always matches every
  * request that gets to it, so the blocks after it on its rail never
  * run; inside a branch that also leaves the branch's end unused. Only
- * an Always on the section's own rail stops the section: one inside a
+ * an Always on the pipeline's own rail stops the pipeline: one inside a
  * branch stops only that branch, because requests that skip the branch
  * go on. An unreachable branch passes its blocker to everything inside
- * it. Blocks are keyed by id, which is unique within a section;
- * sections are computed separately, since the organization and an agent
- * may share a key. */
+ * it. A delegate is a leaf here: what its target does is the target's
+ * own business, and requests that skip it go on. Blocks are keyed by
+ * id, which is unique within a pipeline; a delegated pipeline's
+ * reachability is computed on its own. */
 export interface Reachability {
   /* The Always that makes each unreachable block unreachable. */
   blockedBy: Map<string, BlockDraft>;
   /* Branches whose end no request reaches, with the Always responsible. */
   endBlockedBy: Map<string, BlockDraft>;
-  /* The Always on the section's own rail that ends it, or the one from a
-   * section that ran first. */
+  /* The Always on the pipeline's own rail that ends it. */
   stoppedBy?: BlockDraft;
 }
 
-export function pipelineReachability(drafts: BlockDraft[], preceding?: BlockDraft): Reachability {
+export function pipelineReachability(drafts: BlockDraft[]): Reachability {
   const blockedBy = new Map<string, BlockDraft>();
   const endBlockedBy = new Map<string, BlockDraft>();
   const walkRail = (rail: BlockDraft[], inherited: BlockDraft | undefined): BlockDraft | undefined => {
@@ -250,6 +249,6 @@ export function pipelineReachability(drafts: BlockDraft[], preceding?: BlockDraf
     }
     return stop;
   };
-  const stoppedBy = walkRail(drafts, preceding);
+  const stoppedBy = walkRail(drafts, undefined);
   return { blockedBy, endBlockedBy, stoppedBy };
 }

@@ -51,10 +51,9 @@ func TestManagementPreviewCompilesExecutesAndDoesNotPersist(t *testing.T) {
 	}
 }
 
-// The sample names the agent by slug like a real request does: an agent
-// scope's preview must be for that agent, the organization scope's
-// preview accepts any well-formed slug, and conditions read it as
-// agent.slug.
+// The sample names the agent by slug like a real request does: every
+// pipeline applies to every agent, so any well-formed slug previews, and
+// conditions read it as agent.slug.
 func TestManagementPreviewValidatesTheSampleAgentSlug(t *testing.T) {
 	repository := newMemoryPipelineRepository()
 	service := NewManagementService(repository, NewCompiledPipelineState(repository, NewBlockRegistry()), fixedPipelineClock{now: time.Unix(150, 0).UTC()})
@@ -69,11 +68,8 @@ func TestManagementPreviewValidatesTheSampleAgentSlug(t *testing.T) {
 		}
 	}
 
-	if _, err := service.Preview(context.Background(), principal, "billing", definitions, "", sample("support")); !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("agent scope preview with another agent's slug returned %v, want invalid", err)
-	}
-	if _, err := service.Preview(context.Background(), principal, "", definitions, "", sample("Billing Team")); !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("organization preview with a malformed slug returned %v, want invalid", err)
+	if _, err := service.Preview(context.Background(), principal, "entry", definitions, "", sample("Billing Team")); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("preview with a malformed slug returned %v, want invalid", err)
 	}
 	if _, err := service.Preview(context.Background(), principal, "billing", definitions, "", PreviewSample{
 		Request: BlockRequest{Tool: "stripe.refund", Arguments: json.RawMessage(`{}`)},
@@ -89,12 +85,12 @@ func TestManagementPreviewValidatesTheSampleAgentSlug(t *testing.T) {
 	if result.Outcome != BlockDeny || result.TerminalBlockKey != "deny-billing" {
 		t.Fatalf("condition on agent.slug did not match the sample: %+v", result)
 	}
-	result, err = service.Preview(context.Background(), principal, "", definitions, "", sample("support"))
+	result, err = service.Preview(context.Background(), principal, "entry", definitions, "", sample("support"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if result.Outcome != BlockHuman || result.ReasonCode != "end_of_pipeline" || len(result.Blocks) != 1 || result.Blocks[0].Outcome != BlockNext {
-		t.Fatalf("organization preview for another agent matched the billing condition: %+v", result)
+		t.Fatalf("preview for another agent matched the billing condition: %+v", result)
 	}
 }
 
@@ -108,7 +104,7 @@ func TestManagementCreatesInactiveRevisionAndValidatesBeforeWriting(t *testing.T
 		pipelineDefinition("second", approvalblock.Human, approvalblock.Field("/request/tool").NotEquals("deploy")),
 	}
 
-	created, err := service.CreateRevision(context.Background(), principal, "release", definitions, "")
+	created, err := service.CreateRevision(context.Background(), principal, "release", pipelineName("release"), definitions, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +119,7 @@ func TestManagementCreatesInactiveRevisionAndValidatesBeforeWriting(t *testing.T
 	}
 
 	definitions[0].Enabled = false
-	if _, err := service.CreateRevision(context.Background(), principal, "release", definitions, ""); !errors.Is(err, domain.ErrInvalid) {
+	if _, err := service.CreateRevision(context.Background(), principal, "release", pipelineName("release"), definitions, ""); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("disabled stored block returned %v, want invalid", err)
 	}
 	if repository.createCalls != 1 {
@@ -135,7 +131,7 @@ func TestManagementActivationCompilesThenUsesExpectedActiveRevision(t *testing.T
 	repository := newMemoryPipelineRepository()
 	service := NewManagementService(repository, NewCompiledPipelineState(repository, NewBlockRegistry()), fixedPipelineClock{now: time.Unix(300, 0).UTC()})
 	principal := pipelineManagerPrincipal("organization-1")
-	created, err := service.CreateRevision(context.Background(), principal, "billing", []approvalblock.Definition{
+	created, err := service.CreateRevision(context.Background(), principal, "billing", pipelineName("billing"), []approvalblock.Definition{
 		pipelineDefinition("small-refund", approvalblock.Approve, approvalblock.Field("/request/arguments/amount").LessThan(1000)),
 	}, "")
 	if err != nil {
@@ -150,7 +146,7 @@ func TestManagementActivationCompilesThenUsesExpectedActiveRevision(t *testing.T
 		t.Fatalf("stale activate returned %v, want precondition failed", err)
 	}
 
-	corruptTarget, err := service.CreateRevision(context.Background(), principal, "billing", []approvalblock.Definition{
+	corruptTarget, err := service.CreateRevision(context.Background(), principal, "billing", pipelineName("billing"), []approvalblock.Definition{
 		pipelineDefinition("large-refund", approvalblock.Human, approvalblock.Field("/request/arguments/amount").GreaterThanOrEqual(1000)),
 	}, "")
 	if err != nil {
@@ -190,7 +186,7 @@ func (clock fixedPipelineClock) Now() time.Time { return clock.now }
 
 type memoryPipelineRepository struct {
 	listInput     application.ListRequestApprovalPipelineSummariesInput
-	revisions     map[domain.AgentSlug][]domain.RequestApprovalPipelineRevision
+	revisions     map[string][]domain.RequestApprovalPipelineRevision
 	blocks        map[domain.ID]domain.RequestApprovalBlock
 	createCalls   int
 	activateCalls int
@@ -200,39 +196,70 @@ type memoryPipelineRepository struct {
 
 func newMemoryPipelineRepository() *memoryPipelineRepository {
 	return &memoryPipelineRepository{
-		revisions: make(map[domain.AgentSlug][]domain.RequestApprovalPipelineRevision),
+		revisions: make(map[string][]domain.RequestApprovalPipelineRevision),
 		blocks:    make(map[domain.ID]domain.RequestApprovalBlock),
 	}
 }
 
-// CreateRequestApprovalPipelineRevision mirrors the store: a scope is born
-// with an empty active revision 1 (written when its first agent or the
-// organization is created), so the first authored revision is number 2.
-func (repository *memoryPipelineRepository) CreateRequestApprovalPipelineRevision(_ context.Context, input application.CreateRequestApprovalPipelineRevisionInput) (domain.RequestApprovalPipelineRevision, error) {
-	repository.createCalls++
-	if len(repository.revisions[input.AgentSlug]) == 0 {
-		repository.revisions[input.AgentSlug] = []domain.RequestApprovalPipelineRevision{{
-			ID: domain.ID("seed-" + string(input.AgentSlug)), OrganizationID: input.OrganizationID, AgentSlug: input.AgentSlug,
-			Revision: 1, IsActive: true, BlockIDs: []domain.ID{}, CreatedByActorID: input.CreatedByActorID, CreatedAt: input.Now,
-		}}
+// seed mirrors the store: a pipeline is born with an empty active revision
+// 1 (the entry pipeline with the organization, any other with its create),
+// so the first authored revision is number 2. The memory repository seeds
+// a key on its first revision so fixtures need not create every pipeline
+// explicitly.
+func (repository *memoryPipelineRepository) seed(input application.CreateRequestApprovalPipelineRevisionInput) {
+	if len(repository.revisions[input.PipelineKey]) > 0 {
+		return
 	}
+	repository.revisions[input.PipelineKey] = []domain.RequestApprovalPipelineRevision{{
+		ID: domain.ID("seed-" + input.PipelineKey), OrganizationID: input.OrganizationID, PipelineKey: input.PipelineKey, Name: input.Name,
+		Revision: 1, IsActive: true, BlockIDs: []domain.ID{}, CreatedByActorID: input.CreatedByActorID, CreatedAt: input.Now,
+	}}
+}
+
+func (repository *memoryPipelineRepository) CreateRequestApprovalPipeline(_ context.Context, input application.CreateRequestApprovalPipelineInput) (domain.RequestApprovalPipelineRevision, error) {
+	if len(repository.revisions[input.PipelineKey]) > 0 {
+		return domain.RequestApprovalPipelineRevision{}, domain.ErrRequestApprovalPipelineExists
+	}
+	repository.createCalls++
 	revision := domain.RequestApprovalPipelineRevision{
-		ID: input.ID, OrganizationID: input.OrganizationID, AgentSlug: input.AgentSlug,
-		Revision: int64(len(repository.revisions[input.AgentSlug]) + 1), BlockIDs: make([]domain.ID, len(input.Blocks)),
+		ID: input.ID, OrganizationID: input.OrganizationID, PipelineKey: input.PipelineKey, Name: input.Name,
+		Revision: 1, IsActive: true, BlockIDs: repository.storeBlocks(input.OrganizationID, input.CreatedByActorID, input.Now, input.Blocks),
 		DefaultEscalationPath: input.DefaultEscalationPath,
 		CreatedByActorID:      input.CreatedByActorID, CreatedAt: input.Now,
 	}
-	for index, inputBlock := range input.Blocks {
-		revision.BlockIDs[index] = inputBlock.ID
+	repository.revisions[input.PipelineKey] = []domain.RequestApprovalPipelineRevision{revision}
+	return revision, nil
+}
+
+func (repository *memoryPipelineRepository) CreateRequestApprovalPipelineRevision(_ context.Context, input application.CreateRequestApprovalPipelineRevisionInput) (domain.RequestApprovalPipelineRevision, error) {
+	repository.createCalls++
+	repository.seed(input)
+	revisions := repository.revisions[input.PipelineKey]
+	if revisions[len(revisions)-1].ArchivedAt != nil {
+		return domain.RequestApprovalPipelineRevision{}, domain.ErrRequestApprovalPipelineArchived
+	}
+	revision := domain.RequestApprovalPipelineRevision{
+		ID: input.ID, OrganizationID: input.OrganizationID, PipelineKey: input.PipelineKey, Name: input.Name,
+		Revision: int64(len(revisions) + 1), BlockIDs: repository.storeBlocks(input.OrganizationID, input.CreatedByActorID, input.Now, input.Blocks),
+		DefaultEscalationPath: input.DefaultEscalationPath,
+		CreatedByActorID:      input.CreatedByActorID, CreatedAt: input.Now,
+	}
+	repository.revisions[input.PipelineKey] = append(revisions, revision)
+	return revision, nil
+}
+
+func (repository *memoryPipelineRepository) storeBlocks(organizationID, actorID domain.ID, now time.Time, inputs []application.RequestApprovalBlockSnapshotInput) []domain.ID {
+	ids := make([]domain.ID, len(inputs))
+	for index, inputBlock := range inputs {
+		ids[index] = inputBlock.ID
 		repository.blocks[inputBlock.ID] = domain.RequestApprovalBlock{
-			ID: inputBlock.ID, OrganizationID: input.OrganizationID, BlockKey: inputBlock.BlockKey,
+			ID: inputBlock.ID, OrganizationID: organizationID, BlockKey: inputBlock.BlockKey,
 			Name: inputBlock.Name, BlockType: inputBlock.BlockType, ConfigVersion: inputBlock.ConfigVersion,
 			Config: inputBlock.Config, TimeoutMS: inputBlock.TimeoutMS, MaxAttempts: inputBlock.MaxAttempts,
-			ContentHash: "hash-" + inputBlock.BlockKey, CreatedByActorID: input.CreatedByActorID, CreatedAt: input.Now,
+			ContentHash: "hash-" + inputBlock.BlockKey, CreatedByActorID: actorID, CreatedAt: now,
 		}
 	}
-	repository.revisions[input.AgentSlug] = append(repository.revisions[input.AgentSlug], revision)
-	return revision, nil
+	return ids
 }
 
 func (repository *memoryPipelineRepository) GetRequestApprovalPipelineRevisionByID(_ context.Context, input application.GetRequestApprovalPipelineRevisionByIDInput) (domain.RequestApprovalPipelineRevision, error) {
@@ -250,22 +277,24 @@ func (repository *memoryPipelineRepository) ListRequestApprovalPipelineSummaries
 	repository.listCalls++
 	repository.listInput = input
 	result := make([]domain.RequestApprovalPipelineSummary, 0, len(repository.revisions))
-	for agentSlug, revisions := range repository.revisions {
+	for key, revisions := range repository.revisions {
 		latest := revisions[len(revisions)-1]
 		var active *int64
+		name := latest.Name
 		for _, revision := range revisions {
 			if revision.IsActive {
 				number := revision.Revision
 				active = &number
+				name = revision.Name
 			}
 		}
-		result = append(result, domain.RequestApprovalPipelineSummary{AgentSlug: agentSlug, ActiveRevision: active, LatestRevision: latest.Revision, RevisionCount: int64(len(revisions)), LatestCreatedAt: latest.CreatedAt})
+		result = append(result, domain.RequestApprovalPipelineSummary{PipelineKey: key, Name: name, ActiveRevision: active, LatestRevision: latest.Revision, RevisionCount: int64(len(revisions)), LatestCreatedAt: latest.CreatedAt, ArchivedAt: latest.ArchivedAt})
 	}
 	return result, nil
 }
 
 func (repository *memoryPipelineRepository) GetRequestApprovalPipelineRevision(_ context.Context, input application.GetRequestApprovalPipelineRevisionInput) (domain.RequestApprovalPipelineRevision, error) {
-	for _, revision := range repository.revisions[input.AgentSlug] {
+	for _, revision := range repository.revisions[input.PipelineKey] {
 		if revision.OrganizationID == input.OrganizationID && revision.Revision == input.Revision {
 			return revision, nil
 		}
@@ -274,7 +303,7 @@ func (repository *memoryPipelineRepository) GetRequestApprovalPipelineRevision(_
 }
 
 func (repository *memoryPipelineRepository) ListRequestApprovalPipelineRevisions(_ context.Context, input application.ListRequestApprovalPipelineRevisionsInput) (application.RevisionPage[domain.RequestApprovalPipelineRevision], error) {
-	revisions := append([]domain.RequestApprovalPipelineRevision(nil), repository.revisions[input.AgentSlug]...)
+	revisions := append([]domain.RequestApprovalPipelineRevision(nil), repository.revisions[input.PipelineKey]...)
 	return application.RevisionPage[domain.RequestApprovalPipelineRevision]{Revisions: revisions, TotalCount: int64(len(revisions))}, nil
 }
 
@@ -297,7 +326,7 @@ func (repository *memoryPipelineRepository) ListActiveRequestApprovalPipelineRev
 }
 
 func (repository *memoryPipelineRepository) GetActiveRequestApprovalPipelineRevision(_ context.Context, input application.GetActiveRequestApprovalPipelineRevisionInput) (domain.RequestApprovalPipelineRevision, error) {
-	for _, revision := range repository.revisions[input.AgentSlug] {
+	for _, revision := range repository.revisions[input.PipelineKey] {
 		if revision.OrganizationID == input.OrganizationID && revision.IsActive {
 			return revision, nil
 		}
@@ -320,7 +349,7 @@ func (repository *memoryPipelineRepository) GetRequestApprovalBlocks(_ context.C
 
 func (repository *memoryPipelineRepository) ActivateRequestApprovalPipelineRevision(_ context.Context, input application.ActivateRequestApprovalPipelineRevisionInput) (domain.RequestApprovalPipelineRevision, error) {
 	repository.activateCalls++
-	revisions := repository.revisions[input.AgentSlug]
+	revisions := repository.revisions[input.PipelineKey]
 	activeIndex := -1
 	for index := range revisions {
 		if revisions[index].IsActive {
@@ -333,7 +362,7 @@ func (repository *memoryPipelineRepository) ActivateRequestApprovalPipelineRevis
 	for index := range revisions {
 		revisions[index].IsActive = revisions[index].Revision == input.Revision
 	}
-	repository.revisions[input.AgentSlug] = revisions
+	repository.revisions[input.PipelineKey] = revisions
 	for _, revision := range revisions {
 		if revision.Revision == input.Revision {
 			return revision, nil
@@ -341,6 +370,74 @@ func (repository *memoryPipelineRepository) ActivateRequestApprovalPipelineRevis
 	}
 	return domain.RequestApprovalPipelineRevision{}, domain.ErrNotFound
 }
+
+func (repository *memoryPipelineRepository) ArchiveRequestApprovalPipeline(ctx context.Context, input application.ArchiveRequestApprovalPipelineInput) ([]domain.RequestApprovalPipelineRevision, error) {
+	if input.PipelineKey == domain.EntryPipelineKey {
+		return nil, domain.ErrRequestApprovalPipelineEntry
+	}
+	revisions := repository.revisions[input.PipelineKey]
+	if len(revisions) == 0 {
+		return nil, domain.ErrNotFound
+	}
+	if revisions[0].ArchivedAt != nil {
+		return nil, domain.ErrRequestApprovalPipelineArchived
+	}
+	uses, _ := repository.ListRequestApprovalPipelineUses(ctx, application.ListRequestApprovalPipelineUsesInput{OrganizationID: input.OrganizationID, PipelineKey: input.PipelineKey})
+	if len(uses) > 0 {
+		return nil, domain.RequestApprovalPipelineInUseError{PipelineKey: input.PipelineKey, Uses: uses}
+	}
+	now := input.Now
+	for index := range revisions {
+		revisions[index].IsActive = false
+		revisions[index].ArchivedAt = &now
+	}
+	repository.revisions[input.PipelineKey] = revisions
+	return append([]domain.RequestApprovalPipelineRevision(nil), revisions...), nil
+}
+
+func (repository *memoryPipelineRepository) ListRequestApprovalPipelineUses(_ context.Context, input application.ListRequestApprovalPipelineUsesInput) ([]domain.PipelineUse, error) {
+	uses := make([]domain.PipelineUse, 0)
+	for key, revisions := range repository.revisions {
+		for _, revision := range revisions {
+			if !revision.IsActive {
+				continue
+			}
+			for _, id := range revision.BlockIDs {
+				block := repository.blocks[id]
+				if block.BlockType != string(approvalblock.TypeDelegate) {
+					continue
+				}
+				var config approvalblock.DelegateConfig
+				if err := json.Unmarshal(block.Config, &config); err == nil && config.PipelineKey == input.PipelineKey {
+					uses = append(uses, domain.PipelineUse{PipelineID: revision.ID, PipelineKey: key, Revision: revision.Revision, BlockKey: block.BlockKey})
+				}
+			}
+		}
+	}
+	return uses, nil
+}
+
+func (repository *memoryPipelineRepository) ResolvePipelineKeys(_ context.Context, input application.ResolvePipelineKeysInput) (application.ResolvedPipelineKeys, error) {
+	var resolved application.ResolvedPipelineKeys
+	for _, key := range input.PipelineKeys {
+		revisions := repository.revisions[key]
+		if len(revisions) == 0 || revisions[0].ArchivedAt != nil {
+			resolved.Missing = append(resolved.Missing, key)
+			continue
+		}
+		active := false
+		for _, revision := range revisions {
+			active = active || revision.IsActive
+		}
+		if !active {
+			resolved.Inactive = append(resolved.Inactive, key)
+		}
+	}
+	return resolved, nil
+}
+
+// pipelineName is the display name test fixtures give a pipeline key.
+func pipelineName(key string) string { return "Pipeline " + key }
 
 func pipelineManagerPrincipal(organizationID domain.ID) domain.Principal {
 	return domain.Principal{
@@ -358,7 +455,7 @@ func pipelineDefinition(id string, outcome approvalblock.Outcome, condition appr
 }
 
 // The pipelines index carries the caller's pipeline.read scope: every
-// pipeline for an organization-wide grant, the bound agents for a
+// pipeline for an organization-wide grant, the bound pipelines for a
 // scoped one, and forbidden when the permission is held nowhere.
 func TestListNarrowsToTheReadScope(t *testing.T) {
 	repository := newMemoryPipelineRepository()
@@ -371,11 +468,11 @@ func TestListNarrowsToTheReadScope(t *testing.T) {
 	if !repository.listInput.Scope.All {
 		t.Fatalf("organization-wide grant must list everything: %#v", repository.listInput.Scope)
 	}
-	scoped := principal.WithGrants([]domain.Grant{{Permission: domain.PermissionPipelineRead, ScopeKind: domain.ScopeAgent, ScopeID: "refund-bot"}})
+	scoped := principal.WithGrants([]domain.Grant{{Permission: domain.PermissionPipelineRead, ScopeKind: domain.ScopePipeline, ScopeID: "refund-bot"}})
 	if _, err := service.List(context.Background(), scoped, "", 50); err != nil {
 		t.Fatalf("scoped read: %v", err)
 	}
-	if ids := repository.listInput.Scope.IDs(domain.ScopeAgent); repository.listInput.Scope.All || len(ids) != 1 || ids[0] != "refund-bot" {
+	if ids := repository.listInput.Scope.IDs(domain.ScopePipeline); repository.listInput.Scope.All || len(ids) != 1 || ids[0] != "refund-bot" {
 		t.Fatalf("scoped grant must narrow the query: %#v", repository.listInput.Scope)
 	}
 	unscoped := principal.WithGrants(domain.OrganizationGrants([]domain.Permission{domain.PermissionRequestRead}))
@@ -410,7 +507,7 @@ func TestManagementReferencesReportEachDependencyState(t *testing.T) {
 	// Creation only requires the paths to exist, so the missing default
 	// must be introduced after the revision is stored.
 	resolver.resolved = application.ResolvedEscalationPaths{}
-	created, err := service.CreateRevision(context.Background(), principal, "billing", []approvalblock.Definition{review, second, fine}, "gone")
+	created, err := service.CreateRevision(context.Background(), principal, "billing", pipelineName("billing"), []approvalblock.Definition{review, second, fine}, "gone")
 	if err != nil {
 		t.Fatal(err)
 	}

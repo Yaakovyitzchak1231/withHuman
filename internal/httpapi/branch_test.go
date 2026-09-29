@@ -19,7 +19,7 @@ func TestPipelineRevisionNestsBranchBlocks(t *testing.T) {
 	insideID := domain.ID("22222222-2222-4222-8222-222222222222")
 	repository := &pipelineHTTPRepository{
 		revision: domain.RequestApprovalPipelineRevision{
-			ID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", OrganizationID: "organization-1", AgentSlug: "billing",
+			ID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", OrganizationID: "organization-1", PipelineKey: "billing", Name: "Billing",
 			Revision: 1, BlockIDs: []domain.ID{branchID, insideID}, CreatedByActorID: "membership-1", CreatedAt: now,
 		},
 		blocks: []domain.RequestApprovalBlock{
@@ -37,7 +37,7 @@ func TestPipelineRevisionNestsBranchBlocks(t *testing.T) {
 	}
 	router := pipelineManagementTestRouter(repository, pipelineHTTPPrincipal())
 	response := httptest.NewRecorder()
-	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/request-approval-pipelines/agents/billing/revisions/1", nil))
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/request-approval-pipelines/billing/revisions/1", nil))
 	if response.Code != http.StatusOK {
 		t.Fatalf("got status %d: %s", response.Code, response.Body.String())
 	}
@@ -90,7 +90,7 @@ func TestPipelinePreviewReportsBranchSteps(t *testing.T) {
 		}],
 		"sample":{"request":{"tool":"stripe.refund","arguments":{"amount_cents":5000}},"agent":{"slug":"billing","name":"billing-agent"}}
 	}`
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/request-approval-pipelines/agents/billing/preview", strings.NewReader(body))
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/request-approval-pipelines/billing/preview", strings.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, request)
@@ -120,7 +120,7 @@ func TestPipelinePreviewReportsBranchSteps(t *testing.T) {
 	}
 
 	nestedUnknown := strings.Replace(body, `"on_match":"approve"`, `"on_match":"approve","surprise":1`, 1)
-	request = httptest.NewRequest(http.MethodPost, "/api/v1/request-approval-pipelines/agents/billing/preview", strings.NewReader(nestedUnknown))
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/request-approval-pipelines/billing/preview", strings.NewReader(nestedUnknown))
 	request.Header.Set("Content-Type", "application/json")
 	response = httptest.NewRecorder()
 	router.ServeHTTP(response, request)

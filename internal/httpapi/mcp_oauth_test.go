@@ -239,7 +239,7 @@ func TestMCPOAuthFlowWithTheSDKClient(t *testing.T) {
 	if err != nil || len(listed.Tools) == 0 {
 		t.Fatalf("tools/list with the OAuth key: %v", err)
 	}
-	result, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: "get_pipeline", Arguments: map[string]any{}})
+	result, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: "get_pipeline", Arguments: map[string]any{"pipeline_key": "entry"}})
 	if err != nil || result.IsError {
 		t.Fatalf("get_pipeline with the OAuth key: %v %s", err, mcpText(result))
 	}

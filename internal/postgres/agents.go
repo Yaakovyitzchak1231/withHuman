@@ -109,9 +109,6 @@ func (s *Store) createAgent(ctx context.Context, input application.CreateAgentIn
 		agentSlug, name, string(input.Kind), now); err != nil {
 		return agentIdentityConflict(err)
 	}
-	if err := s.ensureRequestApprovalPipelineScope(ctx, tx, organizationID, agentSlug, membershipID, now); err != nil {
-		return err
-	}
 	data, _ := json.Marshal(map[string]any{"agent_slug": agentSlug, "name": name, "kind": input.Kind})
 	if err := s.appendManagementAuditEvent(ctx, tx, domain.AuditEvent{OrganizationID: organizationID, EventType: "agent.created", ActorType: domain.ActorHuman, ActorID: membershipID, SubjectType: "agent", SubjectID: agent.ID, Data: data, OccurredAt: now}); err != nil {
 		return err
@@ -640,9 +637,8 @@ func (s *Store) RenameAgent(ctx context.Context, input application.RenameAgentIn
 // ArchiveAgent retires the agent: a status beside the active/disabled
 // switch that only restore reverses. Every live credential and
 // provisioner token is revoked, since nothing of the agent resolves while
-// it is archived, and the instances and history stay for the record. The
-// agent's approval pipeline is archived in the same transaction, under
-// the scope's lock.
+// it is archived, and the instances and history stay for the record.
+// Organization keys scoped to the agent lose their assignments with it.
 func (s *Store) ArchiveAgent(ctx context.Context, input application.ArchiveAgentInput) (domain.Agent, error) {
 	if err := input.Validate(); err != nil {
 		return domain.Agent{}, err
@@ -654,9 +650,6 @@ func (s *Store) ArchiveAgent(ctx context.Context, input application.ArchiveAgent
 	defer tx.Rollback(ctx)
 	previous, agentSlug, err := lockAgentForWrite(ctx, tx, input.OrganizationID, input.AgentID)
 	if err != nil {
-		return domain.Agent{}, err
-	}
-	if err := lockRequestApprovalPipeline(ctx, tx, input.OrganizationID, agentSlug); err != nil {
 		return domain.Agent{}, err
 	}
 	var name string
@@ -681,12 +674,11 @@ func (s *Store) ArchiveAgent(ctx context.Context, input application.ArchiveAgent
 	if err != nil {
 		return domain.Agent{}, err
 	}
-	pipelineArchived, err := s.archiveRequestApprovalPipelineScope(ctx, tx, input.OrganizationID, agentSlug, actorID, input.Now)
-	if err != nil {
+	if _, err := tx.Exec(ctx, `DELETE FROM role_assignments WHERE organization_id=$1 AND principal_kind='api_key' AND scope_kind='agent' AND scope_id=$2`, input.OrganizationID, string(agentSlug)); err != nil {
 		return domain.Agent{}, err
 	}
 	data, _ := json.Marshal(map[string]any{
-		"agent_slug": agentSlug, "name": name, "previous_status": previous, "pipeline_archived": pipelineArchived,
+		"agent_slug": agentSlug, "name": name, "previous_status": previous,
 		"credentials_revoked": revokedCredentials.RowsAffected(), "provisioners_revoked": revokedProvisioners.RowsAffected(),
 	})
 	if err := s.appendManagementAuditEvent(ctx, tx, domain.AuditEvent{
@@ -703,12 +695,10 @@ func (s *Store) ArchiveAgent(ctx context.Context, input application.ArchiveAgent
 	return s.GetAgent(ctx, application.GetAgentInput{OrganizationID: input.OrganizationID, AgentID: input.AgentID})
 }
 
-// RestoreAgent brings an archived agent back to active, with its approval
-// pipeline: every archived revision is unfrozen and the latest one
-// becomes active again. Credentials and provisioner tokens revoked at
-// archive stay revoked; instances are re-enrolled the ordinary way. The
-// name must still be free among the live agents, since a live agent may
-// have taken it meanwhile.
+// RestoreAgent brings an archived agent back to active. Credentials and
+// provisioner tokens revoked at archive stay revoked; instances are
+// re-enrolled the ordinary way. The name must still be free among the
+// live agents, since a live agent may have taken it meanwhile.
 func (s *Store) RestoreAgent(ctx context.Context, input application.RestoreAgentInput) (domain.Agent, error) {
 	if err := input.Validate(); err != nil {
 		return domain.Agent{}, err
@@ -725,9 +715,6 @@ func (s *Store) RestoreAgent(ctx context.Context, input application.RestoreAgent
 	if status != domain.AgentArchived {
 		return domain.Agent{}, domain.ErrAgentNotArchived
 	}
-	if err := lockRequestApprovalPipeline(ctx, tx, input.OrganizationID, agentSlug); err != nil {
-		return domain.Agent{}, err
-	}
 	var name string
 	if err := tx.QueryRow(ctx, `UPDATE agents SET status = 'active', archived_at = NULL, updated_at = $3
 		WHERE organization_id = $1 AND id = $2 RETURNING name`,
@@ -738,11 +725,7 @@ func (s *Store) RestoreAgent(ctx context.Context, input application.RestoreAgent
 	if err != nil {
 		return domain.Agent{}, err
 	}
-	pipelineRestored, err := s.restoreRequestApprovalPipelineScope(ctx, tx, input.OrganizationID, agentSlug, actorID, input.Now)
-	if err != nil {
-		return domain.Agent{}, err
-	}
-	data, _ := json.Marshal(map[string]any{"agent_slug": agentSlug, "name": name, "pipeline_restored": pipelineRestored})
+	data, _ := json.Marshal(map[string]any{"agent_slug": agentSlug, "name": name})
 	if err := s.appendManagementAuditEvent(ctx, tx, domain.AuditEvent{
 		OrganizationID: input.OrganizationID, EventType: "agent.restored",
 		ActorType: domain.ActorHuman, ActorID: actorID,

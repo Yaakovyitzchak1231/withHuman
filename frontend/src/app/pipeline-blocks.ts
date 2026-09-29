@@ -1,5 +1,6 @@
 import { FIXED_FIELDS, type ConditionNode } from "@/ds/components/condition-builder";
 import type { BranchBlockDraft } from "@/ds/components/branch-block";
+import type { DelegateBlockDraft } from "@/ds/components/delegate-block";
 import type { AlwaysBlockDraft, PolicyBlockDraft } from "@/ds/components/policy-block";
 import type { ReviewerTarget } from "@/ds/components/reviewer-target";
 import type { WebhookBlockDraft } from "@/ds/components/webhook-block";
@@ -8,12 +9,14 @@ import type {
   AlwaysBlockDefinition,
   BranchBlockDefinition,
   CELBlockDefinition,
+  DelegateBlockDefinition,
   WebhookBlockDefinition,
   RequestApprovalBlockDefinition,
   RequestApprovalPipelineDocument,
   RequestApprovalPipelinePreviewSample,
   StoredRequestApprovalBlock,
 } from "../types";
+import { ENTRY_PIPELINE_KEY } from "../types";
 import { api } from "../api";
 import {
   blockKind,
@@ -33,11 +36,16 @@ import { positionLabel, walkDrafts } from "./pipeline-tree";
  * can hold every block type: core's own, a kind the edition registered
  * (kind "edition", read through the registry), and a kind this bundle
  * does not know (kind "unknown", shown read-only and written back as
- * stored). A branch draft holds drafts of its own, to any depth.
+ * stored). A branch draft holds drafts of its own, to any depth; a
+ * delegate draft names another pipeline instead.
  */
 
 export interface BranchDraft extends BranchBlockDraft<BlockDraft> {
   kind: "branch";
+}
+
+export interface DelegateDraft extends DelegateBlockDraft {
+  kind: "delegate";
 }
 
 /* A stored block of a type no kind in this bundle knows: an edition's
@@ -54,6 +62,7 @@ export type BlockDraft =
   | ({ kind: "cel" } & PolicyBlockDraft)
   | ({ kind: "webhook" } & WebhookBlockDraft)
   | BranchDraft
+  | DelegateDraft
   | EditionBlockDraft
   | UnknownBlockDraft;
 
@@ -65,7 +74,7 @@ export function blockTypeOf(draft: BlockDraft): string {
 /* Every block type this bundle can read: core's kinds and the
  * registered ones, in the order a message lists them. */
 export function knownBlockTypes(): string[] {
-  return ["always", "branch", "cel", "webhook", ...extensions.blockKinds.map((kind) => kind.type)].sort();
+  return ["always", "branch", "cel", "delegate", "webhook", ...extensions.blockKinds.map((kind) => kind.type)].sort();
 }
 
 /* Envelope defaults per core block type; the server enforces the
@@ -75,7 +84,28 @@ export const BLOCK_ENVELOPE_DEFAULTS = {
   cel: { timeout: "50ms", max_attempts: 1 },
   webhook: { timeout: "5s", max_attempts: 3 },
   branch: { timeout: "50ms", max_attempts: 1 },
+  delegate: { timeout: "50ms", max_attempts: 1 },
 } as const;
+
+/* The pipeline key grammar, shared with escalation path and agent
+ * keys. "new" is the create page's route, never a key. */
+export const PIPELINE_KEY_PATTERN = /^[a-z0-9][a-z0-9._-]{0,62}$/;
+export const RESERVED_PIPELINE_KEY = "new";
+
+export function validPipelineKey(key: string): boolean {
+  return PIPELINE_KEY_PATTERN.test(key) && key !== RESERVED_PIPELINE_KEY;
+}
+
+/* A key suggested from a name: lowercase, runs of anything else
+ * collapsed to one dash, trimmed to the pattern's length. */
+export function suggestPipelineKey(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^[^a-z0-9]+/, "")
+    .replace(/-+$/, "")
+    .slice(0, 63);
+}
 
 /* The organization's escalation paths as reviewer targets, the choices
  * every default and human-exit picker offers. Path details are loaded by
@@ -143,6 +173,16 @@ function draftFromBlock(
   block: RequestApprovalBlockDefinition | StoredRequestApprovalBlock,
   directory: ReviewerTarget[],
 ): BlockDraft {
+  if (block.type === "delegate") {
+    return {
+      kind: "delegate",
+      id: block.id,
+      name: block.name,
+      enabled: true,
+      when: editableCondition(block.config.when),
+      pipelineKey: block.config.pipeline_key,
+    };
+  }
   const target = pathTarget(block.config.escalation_path, directory);
   switch (block.type) {
     case "always":
@@ -208,6 +248,21 @@ function draftFromBlock(
 }
 
 function definitionFromDraft(draft: BlockDraft): RequestApprovalBlockDefinition {
+  if (draft.kind === "delegate") {
+    const definition: DelegateBlockDefinition = {
+      id: draft.id,
+      name: draft.name,
+      type: "delegate",
+      enabled: true,
+      timeout: BLOCK_ENVELOPE_DEFAULTS.delegate.timeout,
+      max_attempts: BLOCK_ENVELOPE_DEFAULTS.delegate.max_attempts,
+      config: {
+        when: draft.when as unknown as Record<string, unknown>,
+        pipeline_key: draft.pipelineKey,
+      },
+    };
+    return definition;
+  }
   const escalationPath = pathKeyOf(draft.target);
   switch (draft.kind) {
     case "always": {
@@ -373,6 +428,16 @@ export function newDraftBlock(type: string = "cel"): BlockDraft {
         reason: "",
         target: null,
       };
+    case "delegate":
+      /* No target until one is picked; saving refuses it. */
+      return {
+        kind: "delegate",
+        id: newBlockId(),
+        name: "",
+        enabled: true,
+        when: newCondition(),
+        pipelineKey: "",
+      };
     default:
       return requireBlockKind(type).draft(newBlockId());
   }
@@ -407,6 +472,8 @@ function copyDraft(draft: BlockDraft): BlockDraft {
       return { ...draft, id, allowedOutcomes: [...draft.allowedOutcomes], include: { ...draft.include } };
     case "branch":
       return { ...draft, id, when: copyCondition(draft.when), blocks: draft.blocks.map(copyDraft) };
+    case "delegate":
+      return { ...draft, id, when: copyCondition(draft.when) };
     default:
       return unknownVariant(draft);
   }
@@ -437,18 +504,26 @@ function conditionProblem(node: ConditionNode, blockName: string): string | null
 /* First client-side problem that would make the server reject the
  * document, phrased for a toast; null when the document can ship. The
  * whole tree is checked in execution order, and an unnamed block is
- * called by its position chip ("Block 3.2"), counted from offset: the
- * top-level blocks of the sections that run before this one. */
-export function validateDrafts(drafts: BlockDraft[], { offset = 0 }: { offset?: number } = {}): string | null {
+ * called by its position chip ("Block 3.2"). pipelineKey is the
+ * pipeline being edited, which a delegate may not name. */
+export function validateDrafts(drafts: BlockDraft[], { pipelineKey = "" }: { pipelineKey?: string } = {}): string | null {
   const keys = new Set<string>();
   for (const { block, path } of walkDrafts(drafts)) {
-    const position = `Block ${positionLabel(path, offset)}`;
+    const position = `Block ${positionLabel(path)}`;
     const label = block.name.trim() || position;
     if (keys.has(block.id)) {
       return `${label} reuses the block key “${block.id}”. Every block needs its own key, including blocks inside branches.`;
     }
     keys.add(block.id);
     if (!block.name.trim()) return `${position} needs a name.`;
+    if (block.kind === "delegate") {
+      const problem = conditionProblem(block.when, label);
+      if (problem) return problem;
+      if (!block.pipelineKey) return `${label} needs a pipeline to hand requests to.`;
+      if (block.pipelineKey === ENTRY_PIPELINE_KEY) return `${label} cannot hand requests to the entry pipeline.`;
+      if (block.pipelineKey === pipelineKey) return `${label} cannot hand requests to this pipeline itself.`;
+      continue;
+    }
     if (!block.reason.trim()) return `${label} needs a reason.`;
     switch (block.kind) {
       case "always":
@@ -482,9 +557,8 @@ export function validateDrafts(drafts: BlockDraft[], { offset = 0 }: { offset?: 
   return null;
 }
 
-/* The placeholder sample, naming the agent whose pipeline is under
- * test by slug; the organization pipeline tests with an example slug. */
-export function defaultSample(agentSlug: string): RequestApprovalPipelinePreviewSample {
+/* The placeholder sample, naming an example agent by slug. */
+export function defaultSample(agentSlug = "example"): RequestApprovalPipelinePreviewSample {
   return {
     request: {
       tool: "stripe.refund",
@@ -552,21 +626,32 @@ export function suggestPaths(sampleText: string): string[] {
 
 /*
  * A sample handed from the overview to a pipeline view: the overview's
- * Test request opens the agent's pipeline, which picks the sample up on
+ * Test request opens the entry pipeline, which picks the sample up on
  * mount and replays it on its rail. Held in module state because the
  * sample is transient and never belongs in the address.
  */
-let handedOffSample: { agentSlug: string; text: string } | null = null;
+let handedOffSample: { pipelineKey: string; text: string } | null = null;
 
-export function handOffTestSample(agentSlug: string, text: string): void {
-  handedOffSample = { agentSlug, text };
+export function handOffTestSample(pipelineKey: string, text: string): void {
+  handedOffSample = { pipelineKey, text };
 }
 
-/* The sample handed to this agent's pipeline, or null. Taking it clears
- * it. */
-export function takeTestSample(agentSlug: string): string | null {
-  if (!handedOffSample || handedOffSample.agentSlug !== agentSlug) return null;
+/* The sample handed to this pipeline, or null. Taking it clears it. */
+export function takeTestSample(pipelineKey: string): string | null {
+  if (!handedOffSample || handedOffSample.pipelineKey !== pipelineKey) return null;
   const { text } = handedOffSample;
   handedOffSample = null;
   return text;
+}
+
+/* Every pipeline key the tree's delegate blocks name, in tree order,
+ * each once. */
+export function delegatedKeys(drafts: BlockDraft[]): string[] {
+  const keys: string[] = [];
+  for (const { block } of walkDrafts(drafts)) {
+    if (block.kind === "delegate" && block.pipelineKey && !keys.includes(block.pipelineKey)) {
+      keys.push(block.pipelineKey);
+    }
+  }
+  return keys;
 }

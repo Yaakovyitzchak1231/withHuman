@@ -221,7 +221,7 @@ func TestScopedGrantsAgainstRealPostgres(t *testing.T) {
 	}
 
 	// A member who is admin only at refund-bot (through the Refunds team)
-	// lists only that agent, and never the organization pipeline.
+	// lists only that agent.
 	editor := invite("editor@scoped.example.com", []domain.AssignmentSpec{organizationGrant(domain.RoleAuditorID)})
 	if _, err := store.SetTeamManualMembers(ctx, application.SetTeamManualMembersInput{
 		OrganizationID: orgID, TeamID: refunds.ID, MembershipIDs: []domain.ID{editor.MembershipID},
@@ -245,26 +245,31 @@ func TestScopedGrantsAgainstRealPostgres(t *testing.T) {
 		t.Fatalf("unscoped agent summaries = %d, %v; want 4", len(all), err)
 	}
 
+	// Pipelines are scoped by their own key, not by agent: a grant at
+	// pipeline:refunds narrows the pipelines list to that pipeline alone.
 	blocks := []application.RequestApprovalBlockSnapshotInput{pipelineTestBlock("manual-review", `{"on_match":"human"}`)}
-	for _, agentSlug := range []domain.AgentSlug{"", "refund-bot", "release-bot"} {
-		createPipelineTestRevision(t, ctx, store, orgID, ownerMembershipID, agentSlug, blocks, now)
+	for _, pipelineKey := range []string{"refunds", "releases"} {
+		seedPipelineTestScope(t, ctx, store, orgID, ownerMembershipID, pipelineKey, now)
 	}
+	for _, pipelineKey := range []string{domain.EntryPipelineKey, "refunds", "releases"} {
+		createPipelineTestRevision(t, ctx, store, orgID, ownerMembershipID, pipelineKey, blocks, now)
+	}
+	refundsPipelineOnly := domain.ScopeSet{Scopes: []domain.Scope{{Kind: domain.ScopePipeline, ID: "refunds"}}}
 	pipelines, err := store.ListRequestApprovalPipelineSummaries(ctx, application.ListRequestApprovalPipelineSummariesInput{
-		OrganizationID: orgID, Scope: refundOnly, Limit: 50,
+		OrganizationID: orgID, Scope: refundsPipelineOnly, Limit: 50,
 	})
-	if err != nil || len(pipelines) != 1 || pipelines[0].AgentSlug != "refund-bot" {
-		t.Fatalf("scoped pipeline summaries = %#v, %v; want refund-bot alone", pipelines, err)
+	if err != nil || len(pipelines) != 1 || pipelines[0].PipelineKey != "refunds" {
+		t.Fatalf("scoped pipeline summaries = %#v, %v; want refunds alone", pipelines, err)
 	}
 	pipelines, err = store.ListRequestApprovalPipelineSummaries(ctx, application.ListRequestApprovalPipelineSummariesInput{
 		OrganizationID: orgID, Scope: everywhere, Limit: 50,
 	})
-	// Every agent seeds its own pipeline, so the unscoped list holds the
-	// organization row first plus one row per agent.
-	if err != nil || len(pipelines) < 3 || pipelines[0].AgentSlug != "" {
-		t.Fatalf("unscoped pipeline summaries = %#v, %v; want the organization row first", pipelines, err)
+	// The unscoped list holds the entry pipeline first plus every other.
+	if err != nil || len(pipelines) != 3 || pipelines[0].PipelineKey != domain.EntryPipelineKey {
+		t.Fatalf("unscoped pipeline summaries = %#v, %v; want the entry row first", pipelines, err)
 	}
-	for _, want := range []domain.AgentSlug{"refund-bot", "release-bot"} {
-		if !slices.ContainsFunc(pipelines, func(summary domain.RequestApprovalPipelineSummary) bool { return summary.AgentSlug == want }) {
+	for _, want := range []string{"refunds", "releases"} {
+		if !slices.ContainsFunc(pipelines, func(summary domain.RequestApprovalPipelineSummary) bool { return summary.PipelineKey == want }) {
 			t.Fatalf("unscoped pipeline summaries %#v lack %s", pipelines, want)
 		}
 	}

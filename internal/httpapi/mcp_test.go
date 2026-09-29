@@ -26,9 +26,9 @@ import (
 // re-enters the product API under the key's own authority, and that the
 // compositions (save then activate) and refusals reach the agent intact.
 
-// mcpPipelineStore is an in-memory pipeline scope: revision 1 empty and
+// mcpPipelineStore is an in-memory entry pipeline: revision 1 empty and
 // active, every create appends, activation checks the expected number
-// the way the real store does.
+// the way the real store does. Every other key is unknown.
 type mcpPipelineStore struct {
 	application.RequestApprovalPipelineRepository
 	organization domain.ID
@@ -41,15 +41,15 @@ func newMCPPipelineStore(organization domain.ID) *mcpPipelineStore {
 	return &mcpPipelineStore{
 		organization: organization,
 		revisions: []domain.RequestApprovalPipelineRevision{{
-			ID: domain.ID(uuid.NewString()), OrganizationID: organization, Revision: 1, IsActive: true,
+			ID: domain.ID(uuid.NewString()), OrganizationID: organization, PipelineKey: domain.EntryPipelineKey, Name: "Entry pipeline", Revision: 1, IsActive: true,
 			BlockIDs: []domain.ID{}, CreatedByActorID: "membership-1", CreatedAt: time.Unix(80_000, 0).UTC(),
 		}},
 		blocks: map[domain.ID]domain.RequestApprovalBlock{},
 	}
 }
 
-func (s *mcpPipelineStore) find(slug domain.AgentSlug, revision int64) (domain.RequestApprovalPipelineRevision, bool) {
-	if slug != "" {
+func (s *mcpPipelineStore) find(key string, revision int64) (domain.RequestApprovalPipelineRevision, bool) {
+	if key != domain.EntryPipelineKey {
 		return domain.RequestApprovalPipelineRevision{}, false
 	}
 	for _, candidate := range s.revisions {
@@ -61,11 +61,11 @@ func (s *mcpPipelineStore) find(slug domain.AgentSlug, revision int64) (domain.R
 }
 
 func (s *mcpPipelineStore) CreateRequestApprovalPipelineRevision(_ context.Context, input application.CreateRequestApprovalPipelineRevisionInput) (domain.RequestApprovalPipelineRevision, error) {
-	if input.AgentSlug != "" {
+	if input.PipelineKey != domain.EntryPipelineKey {
 		return domain.RequestApprovalPipelineRevision{}, domain.ErrNotFound
 	}
 	revision := domain.RequestApprovalPipelineRevision{
-		ID: input.ID, OrganizationID: input.OrganizationID, Revision: int64(len(s.revisions) + 1),
+		ID: input.ID, OrganizationID: input.OrganizationID, PipelineKey: input.PipelineKey, Name: input.Name, Revision: int64(len(s.revisions) + 1),
 		BlockIDs: []domain.ID{}, DefaultEscalationPath: input.DefaultEscalationPath, CreatedByActorID: input.CreatedByActorID, CreatedAt: input.Now,
 	}
 	for _, block := range input.Blocks {
@@ -81,7 +81,7 @@ func (s *mcpPipelineStore) CreateRequestApprovalPipelineRevision(_ context.Conte
 }
 
 func (s *mcpPipelineStore) GetActiveRequestApprovalPipelineRevision(_ context.Context, input application.GetActiveRequestApprovalPipelineRevisionInput) (domain.RequestApprovalPipelineRevision, error) {
-	if input.AgentSlug != "" {
+	if input.PipelineKey != domain.EntryPipelineKey {
 		return domain.RequestApprovalPipelineRevision{}, domain.ErrNotFound
 	}
 	for _, revision := range s.revisions {
@@ -93,7 +93,7 @@ func (s *mcpPipelineStore) GetActiveRequestApprovalPipelineRevision(_ context.Co
 }
 
 func (s *mcpPipelineStore) GetRequestApprovalPipelineRevision(_ context.Context, input application.GetRequestApprovalPipelineRevisionInput) (domain.RequestApprovalPipelineRevision, error) {
-	revision, ok := s.find(input.AgentSlug, input.Revision)
+	revision, ok := s.find(input.PipelineKey, input.Revision)
 	if !ok {
 		return domain.RequestApprovalPipelineRevision{}, domain.ErrNotFound
 	}
@@ -118,7 +118,7 @@ func (s *mcpPipelineStore) ListActiveRequestApprovalPipelineRevisions(context.Co
 
 func (s *mcpPipelineStore) ActivateRequestApprovalPipelineRevision(_ context.Context, input application.ActivateRequestApprovalPipelineRevisionInput) (domain.RequestApprovalPipelineRevision, error) {
 	s.activations = append(s.activations, input)
-	target, ok := s.find(input.AgentSlug, input.Revision)
+	target, ok := s.find(input.PipelineKey, input.Revision)
 	if !ok {
 		return domain.RequestApprovalPipelineRevision{}, domain.ErrNotFound
 	}
@@ -318,7 +318,7 @@ func TestMCPListsTheManagementCatalog(t *testing.T) {
 	}
 	for _, want := range []string{
 		"list_agents", "create_agent", "list_members", "list_teams", "get_team", "create_team", "set_team_members",
-		"list_pipelines", "get_pipeline", "list_pipeline_revisions", "get_pipeline_revision", "update_pipeline", "activate_pipeline_revision", "preview_pipeline",
+		"list_pipelines", "get_pipeline", "create_pipeline", "archive_pipeline", "list_pipeline_revisions", "get_pipeline_revision", "update_pipeline", "activate_pipeline_revision", "preview_pipeline",
 		"list_escalation_paths", "get_escalation_path", "list_escalation_path_revisions", "create_escalation_path", "update_escalation_path", "activate_escalation_path_revision", "archive_escalation_path",
 		"list_webhook_endpoints", "get_webhook_endpoint", "save_webhook_endpoint", "read_reference",
 	} {
@@ -335,7 +335,7 @@ func TestMCPListsTheManagementCatalog(t *testing.T) {
 		t.Fatal("read-only hints do not match the tools' effects")
 	}
 	schema, _ := json.Marshal(names["update_pipeline"].InputSchema)
-	for _, property := range []string{`"agent_slug"`, `"blocks"`, `"default_escalation_path"`, `"activate"`} {
+	for _, property := range []string{`"pipeline_key"`, `"name"`, `"blocks"`, `"default_escalation_path"`, `"activate"`} {
 		if !strings.Contains(string(schema), property) {
 			t.Errorf("update_pipeline schema lacks %s: %s", property, schema)
 		}
@@ -349,7 +349,7 @@ func TestMCPUpdatePipelineSavesThenActivatesAgainstTheActiveRevision(t *testing.
 		"id": "hold-everything", "name": "Everything needs a person", "type": "always", "enabled": true, "timeout": "50ms", "max_attempts": 1,
 		"config": map[string]any{"outcome": "human", "reason": "A person decides."},
 	}
-	result := mcpStructured(t, h.call(t, session, "update_pipeline", map[string]any{"blocks": []any{block}}))
+	result := mcpStructured(t, h.call(t, session, "update_pipeline", map[string]any{"pipeline_key": "entry", "blocks": []any{block}}))
 	if result["activated"] != true {
 		t.Fatalf("activated = %v", result["activated"])
 	}
@@ -366,18 +366,18 @@ func TestMCPUpdatePipelineSavesThenActivatesAgainstTheActiveRevision(t *testing.
 	}
 	// A draft stays a draft, and the next activation names the right
 	// active number.
-	draft := mcpStructured(t, h.call(t, session, "update_pipeline", map[string]any{"blocks": []any{}, "activate": false}))
+	draft := mcpStructured(t, h.call(t, session, "update_pipeline", map[string]any{"pipeline_key": "entry", "blocks": []any{}, "activate": false}))
 	if draft["activated"] != false || draft["revision"].(map[string]any)["revision"] != float64(3) {
 		t.Fatalf("draft = %v", draft)
 	}
 	if len(h.store.activations) != 1 {
 		t.Fatal("a draft must not activate")
 	}
-	rollback := mcpStructured(t, h.call(t, session, "activate_pipeline_revision", map[string]any{"revision": 3}))
+	rollback := mcpStructured(t, h.call(t, session, "activate_pipeline_revision", map[string]any{"pipeline_key": "entry", "revision": 3}))
 	if rollback["revision"] != float64(3) || h.store.activations[1].ExpectedActiveRevision != 2 {
 		t.Fatalf("rollback = %v, activations = %+v", rollback, h.store.activations)
 	}
-	current := mcpStructured(t, h.call(t, session, "get_pipeline", nil))
+	current := mcpStructured(t, h.call(t, session, "get_pipeline", map[string]any{"pipeline_key": "entry"}))
 	if current["revision"] != float64(3) {
 		t.Fatalf("get_pipeline = %v", current)
 	}
@@ -387,16 +387,16 @@ func TestMCPRelaysProductAPIRefusals(t *testing.T) {
 	h := newMCPHarness(t)
 	session := h.connect(t, h.token)
 	// A validation refusal keeps the product API's code and message.
-	invalid := h.call(t, session, "update_pipeline", map[string]any{"blocks": []any{map[string]any{"id": "x", "name": "x", "type": "always", "config": map[string]any{"outcome": "maybe"}}}})
+	invalid := h.call(t, session, "update_pipeline", map[string]any{"pipeline_key": "entry", "blocks": []any{map[string]any{"id": "x", "name": "x", "type": "always", "config": map[string]any{"outcome": "maybe"}}}})
 	if !invalid.IsError || !strings.HasPrefix(mcpText(invalid), "invalid_request: ") {
 		t.Fatalf("invalid block = %v %q", invalid.IsError, mcpText(invalid))
 	}
 	if len(h.store.revisions) != 1 {
 		t.Fatal("a refused revision must not be stored")
 	}
-	missing := h.call(t, session, "get_pipeline", map[string]any{"agent_slug": "nobody"})
+	missing := h.call(t, session, "get_pipeline", map[string]any{"pipeline_key": "nobody"})
 	if !missing.IsError || !strings.HasPrefix(mcpText(missing), "not_found: ") {
-		t.Fatalf("unknown agent = %q", mcpText(missing))
+		t.Fatalf("unknown pipeline = %q", mcpText(missing))
 	}
 	// A route the key may not use (teams need a person's session or
 	// key, never an organization key) is refused with the API's code.
@@ -406,7 +406,7 @@ func TestMCPRelaysProductAPIRefusals(t *testing.T) {
 		t.Fatalf("organization key creating a team = %q", mcpText(refused))
 	}
 	// The organization key still reads pipelines.
-	if listed := h.call(t, organization, "get_pipeline", nil); listed.IsError {
+	if listed := h.call(t, organization, "get_pipeline", map[string]any{"pipeline_key": "entry"}); listed.IsError {
 		t.Fatalf("organization key reading the pipeline: %s", mcpText(listed))
 	}
 	unknown := h.call(t, session, "read_reference", map[string]any{"topic": "everything"})

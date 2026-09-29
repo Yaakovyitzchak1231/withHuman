@@ -153,21 +153,21 @@ x-withhuman-permissions:
     dangerous: true
   - key: pipeline.activate
     area: pipeline
-    description: Activate and roll back pipeline revisions
+    description: Activate, roll back, and archive pipelines
     holders: [human, api_key, organization_api_key]
-    resource: agent
+    resource: pipeline
     dangerous: false
   - key: pipeline.read
     area: pipeline
     description: Read request approval pipelines and their revisions
     holders: [human, api_key, organization_api_key]
-    resource: agent
+    resource: pipeline
     dangerous: false
   - key: pipeline.write
     area: pipeline
-    description: Create and preview request approval pipeline revisions
+    description: Create pipelines and preview and create their revisions
     holders: [human, api_key, organization_api_key]
-    resource: agent
+    resource: pipeline
     dangerous: false
   - key: request.claim
     area: request
@@ -1642,8 +1642,10 @@ paths:
       description: >-
         Creates an agent. An agent is a stable identity for one AI system,
         such as a support bot or a deploy assistant. Its slug is the
-        identity: chosen here, never changed, never reused. Every agent
-        owns one approval pipeline, created empty with the agent.
+        identity: chosen here, never changed, never reused. Agents own no
+        pipeline of their own: every request starts in the organization's
+        entry pipeline, and rules for one agent are a branch or a delegate
+        on `agent.slug` there.
 
         Creating an agent does not issue a credential. Register an
         instance, or create a provisioner token, to let it call the API.
@@ -1796,12 +1798,8 @@ paths:
         instances and revoked credentials, and its requests and audit
         trail stay readable. But no instance or provisioner token can be
         created for it and its status cannot change. Its name is freed
-        for a new agent; its slug is not, and never will be.
-
-        The agent's approval pipeline is archived with it: every revision
-        is stamped and the active one deactivated. The archived revisions
-        stay readable but cannot be activated. Restore the agent to bring
-        the pipeline back.
+        for a new agent; its slug is not, and never will be. Pipelines are
+        the organization's, not the agent's, and are untouched.
       parameters:
         - $ref: "#/components/parameters/AgentSlug"
       responses:
@@ -1819,9 +1817,7 @@ paths:
       tags: [Agents]
       security: [{ cookieAuth: [] }, { apiKeyAuth: [] }]
       description: >-
-        Brings an archived agent back to `active`, together with its
-        approval pipeline: every archived revision is unfrozen and the
-        latest one becomes active again. Credentials and provisioner
+        Brings an archived agent back to `active`. Credentials and provisioner
         tokens revoked when the agent was archived stay revoked; register
         instances or connect them again to let it call the API. The name
         must still be free among the organization's live agents.
@@ -2153,16 +2149,16 @@ paths:
     get:
       summary: List pipelines
       description: >-
-        Returns every pipeline in the organization: the organization
-        pipeline and one pipeline per agent. Each entry carries the
-        active revision number and a summary of its history.
+        Returns every pipeline in the organization: the entry pipeline,
+        where every request starts, first, then every pipeline a delegate
+        block can hand requests to. Each entry carries the key, the name,
+        the active revision number and a summary of its history.
 
-        A pipeline exists as soon as the organization or the agent does,
-        and it always has an active revision. An empty revision passes
-        every request through to a person. The one exception is an
-        archived agent: its pipeline is archived with it, has no active
-        revision, carries `archived_at`, and is left out unless `status`
-        says otherwise. Restoring the agent brings it back.
+        A pipeline always has an active revision. An empty revision passes
+        every request that enters the pipeline through to a person. An
+        archived pipeline has no active revision, carries `archived_at`,
+        and is left out unless `status` says otherwise. The list is
+        narrowed to the pipelines you may read.
       operationId: listRequestApprovalPipelines
       x-withhuman-permission: pipeline.read
       x-withhuman-credential-kinds: [session, personal_api_key, organization_api_key]
@@ -2194,226 +2190,50 @@ paths:
         "400": { $ref: "#/components/responses/Error", description: "`status` is not live, archived, or all" }
         "401": { $ref: "#/components/responses/Error", description: "You are not signed in" }
         "403": { $ref: "#/components/responses/Error", description: "You cannot read pipelines" }
-  /api/v1/request-approval-pipelines/organization:
-    get:
-      summary: Retrieve the active organization pipeline
-      description: >-
-        Returns the organization pipeline's active revision, with its
-        blocks in the order they run. The organization pipeline runs first,
-        for every request, before the pipeline of the request's agent.
-
-        The `ETag` header carries the active revision number. Pass it as
-        `If-Match` when you activate another revision.
-      operationId: getActiveOrganizationRequestApprovalPipeline
-      x-withhuman-permission: pipeline.read
-      x-withhuman-credential-kinds: [session, personal_api_key, organization_api_key]
-      tags: [Approval pipelines]
-      security: [{ cookieAuth: [] }, { apiKeyAuth: [] }]
-      responses:
-        "200":
-          description: The active revision
-          headers:
-            ETag:
-              description: The active revision number, quoted
-              schema: { type: string, example: '"3"' }
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/RequestApprovalPipelineRevision" }
-        "401": { $ref: "#/components/responses/Error", description: "You are not signed in" }
-        "403": { $ref: "#/components/responses/Error", description: "You cannot read pipelines" }
-        "404": { $ref: "#/components/responses/Error", description: "No revision is active" }
-  /api/v1/request-approval-pipelines/organization/preview:
     post:
-      summary: Preview an organization pipeline
-      operationId: previewOrganizationRequestApprovalPipeline
+      summary: Create a pipeline
+      description: >-
+        Creates a pipeline that a delegate block in another pipeline can
+        hand requests to, with its first revision active at once. You
+        choose the key; it is taken for good, archived pipelines included,
+        and can never be `entry`, which every organization already has.
+
+        Creating a pipeline is an organization-wide act: it needs
+        `pipeline.write` at the organization. Grant a team `pipeline.read`,
+        `pipeline.write` and `pipeline.activate` at `pipeline:<key>` and
+        they can edit the new pipeline and nothing else.
+      operationId: createRequestApprovalPipeline
       x-withhuman-permission: pipeline.write
       x-withhuman-credential-kinds: [session, personal_api_key, organization_api_key]
       tags: [Approval pipelines]
-      description: >-
-        Runs a pipeline document against a sample request and returns what
-        each block would do and the final outcome. Nothing is saved: not
-        the document, not the sample, not the result. Use it to test a
-        revision before you create it.
-
-        The sample names an agent by slug and name. For the organization
-        pipeline the slug can be any valid slug; for an agent's pipeline it
-        must be that agent's.
       security: [{ cookieAuth: [] }, { apiKeyAuth: [] }]
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/RequestApprovalPipelinePreviewRequest" }
-      responses:
-        "200":
-          description: What the pipeline would do with the sample
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/RequestApprovalPipelinePreview" }
-        "400": { $ref: "#/components/responses/Error", description: "The document or the sample is invalid" }
-        "401": { $ref: "#/components/responses/Error", description: "You are not signed in" }
-        "403": { $ref: "#/components/responses/Error", description: "You cannot edit pipelines" }
-  /api/v1/request-approval-pipelines/organization/revisions:
-    post:
-      summary: Create an organization pipeline revision
-      operationId: createOrganizationRequestApprovalPipelineRevision
-      x-withhuman-permission: pipeline.write
-      x-withhuman-credential-kinds: [session, personal_api_key, organization_api_key]
-      tags: [Approval pipelines]
-      description: >-
-        Creates a new revision of the organization pipeline from a
-        complete document. The document is validated and compiled first.
-        The revision is created inactive, and it never changes. Activate
-        it to put it into use.
-      security: [{ cookieAuth: [] }, { apiKeyAuth: [] }]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/RequestApprovalPipelineDocument" }
+            schema: { $ref: "#/components/schemas/RequestApprovalPipelineCreate" }
       responses:
         "201":
-          description: The new revision, inactive
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/RequestApprovalPipelineRevision" }
-        "400": { $ref: "#/components/responses/Error", description: "The document is invalid" }
-        "401": { $ref: "#/components/responses/Error", description: "You are not signed in" }
-        "403": { $ref: "#/components/responses/Error", description: "You cannot edit pipelines" }
-    get:
-      summary: List organization pipeline revisions
-      description: >-
-        Returns the organization pipeline's revisions, newest first, without their blocks.
-
-        Paging is by cursor. When more revisions follow, the response
-        carries `next_cursor`. Pass it back as `cursor` to get the next
-        page. The last page has no `next_cursor`. `total_count` is how
-        many revisions there are across every page.
-      operationId: listOrganizationRequestApprovalPipelineRevisions
-      x-withhuman-permission: pipeline.read
-      x-withhuman-credential-kinds: [session, personal_api_key, organization_api_key]
-      tags: [Approval pipelines]
-      security: [{ cookieAuth: [] }, { apiKeyAuth: [] }]
-      parameters:
-        - name: cursor
-          in: query
-          description: "The `next_cursor` from the previous page."
-          schema: { type: string }
-        - name: limit
-          in: query
-          description: "How many revisions to return per page. Defaults to 50."
-          schema: { type: integer, minimum: 1, maximum: 200 }
-      responses:
-        "200":
-          description: The revisions, newest first
-          content:
-            application/json:
-              schema:
-                type: object
-                additionalProperties: false
-                required: [revisions, total_count]
-                properties:
-                  revisions:
-                    type: array
-                    description: The revisions on this page, newest first.
-                    items: { $ref: "#/components/schemas/RequestApprovalPipelineRevisionSummary" }
-                  next_cursor:
-                    type: string
-                    description: Present when another page follows.
-                  total_count:
-                    type: integer
-                    format: int64
-                    description: How many revisions the pipeline has, across every page.
-        "400": { $ref: "#/components/responses/Error", description: "`cursor` is not a cursor this endpoint issued" }
-        "401": { $ref: "#/components/responses/Error", description: "You are not signed in" }
-        "403": { $ref: "#/components/responses/Error", description: "You cannot read pipelines" }
-  /api/v1/request-approval-pipelines/organization/revisions/{revision}:
-    get:
-      summary: Retrieve an organization pipeline revision
-      description: Returns one revision of the organization pipeline, active or not, with its blocks in the order they run.
-      operationId: getOrganizationRequestApprovalPipelineRevision
-      x-withhuman-permission: pipeline.read
-      x-withhuman-credential-kinds: [session, personal_api_key, organization_api_key]
-      tags: [Approval pipelines]
-      security: [{ cookieAuth: [] }, { apiKeyAuth: [] }]
-      parameters:
-        - $ref: "#/components/parameters/PipelineRevision"
-      responses:
-        "200":
-          description: The revision
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/RequestApprovalPipelineRevision" }
-        "400": { $ref: "#/components/responses/Error", description: "`revision` is not a positive integer" }
-        "401": { $ref: "#/components/responses/Error", description: "You are not signed in" }
-        "403": { $ref: "#/components/responses/Error", description: "You cannot read pipelines" }
-        "404": { $ref: "#/components/responses/Error", description: "No such revision" }
-  /api/v1/request-approval-pipelines/organization/revisions/{revision}/references:
-    get:
-      summary: Report what an organization pipeline revision depends on
-      operationId: getOrganizationRequestApprovalPipelineRevisionReferences
-      x-withhuman-permission: pipeline.read
-      x-withhuman-credential-kinds: [session, personal_api_key, organization_api_key]
-      description: Reports the escalation paths and webhook endpoints the revision names with their current state, and any block the deployment or plan cannot run, so a rollback can be explained before it is attempted. The activation itself re-checks inside its transaction.
-      security: [{ cookieAuth: [] }, { apiKeyAuth: [] }]
-      parameters:
-        - $ref: "#/components/parameters/PipelineRevision"
-      responses:
-        "200":
-          description: Live state of every dependency
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/PipelineReferences" }
-        "400": { $ref: "#/components/responses/Error" }
-        "401": { $ref: "#/components/responses/Error" }
-        "403": { $ref: "#/components/responses/Error" }
-        "404": { $ref: "#/components/responses/Error" }
-  /api/v1/request-approval-pipelines/organization/revisions/{revision}/activate:
-    post:
-      summary: Activate an organization pipeline revision
-      operationId: activateOrganizationRequestApprovalPipelineRevision
-      x-withhuman-permission: pipeline.activate
-      x-withhuman-credential-kinds: [session, personal_api_key, organization_api_key]
-      tags: [Approval pipelines]
-      description: >-
-        Makes a revision the active one. New requests use it from then on.
-        Activating an older revision is how you roll back.
-
-        Pass the revision you expect to be active in `If-Match`, quoted,
-        as returned in `ETag`. If someone activated another revision in
-        the meantime, the call fails with 412 and nothing changes.
-
-        Every escalation path the revision names, and every webhook
-        endpoint its blocks post to, must have an active revision.
-        Otherwise the call fails with 409 and nothing changes.
-      security: [{ cookieAuth: [] }, { apiKeyAuth: [] }]
-      parameters:
-        - $ref: "#/components/parameters/PipelineRevision"
-        - $ref: "#/components/parameters/ActiveRevisionIfMatch"
-      responses:
-        "200":
-          description: The revision, now active
+          description: The new pipeline's first revision, active
           headers:
             ETag:
               description: The active revision number, quoted
-              schema: { type: string, example: '"3"' }
+              schema: { type: string, example: '"1"' }
           content:
             application/json:
               schema: { $ref: "#/components/schemas/RequestApprovalPipelineRevision" }
-        "400": { $ref: "#/components/responses/Error", description: "`revision` or `If-Match` is malformed" }
+        "400": { $ref: "#/components/responses/Error", description: "The key, the name, or the document is invalid, or a delegate names a pipeline that does not exist (`request_approval_pipeline_not_found`)" }
         "401": { $ref: "#/components/responses/Error", description: "You are not signed in" }
-        "403": { $ref: "#/components/responses/Error", description: "You cannot activate pipelines" }
-        "404": { $ref: "#/components/responses/Error", description: "No such revision" }
-        "409": { $ref: "#/components/responses/Error", description: "An escalation path or webhook endpoint the revision uses has no active revision. `error.code` is `escalation_path_inactive` or `webhook_endpoint_inactive`, and `error.details` lists the keys" }
-        "412": { $ref: "#/components/responses/PreconditionFailed", description: "`If-Match` does not match the active revision" }
-        "428": { $ref: "#/components/responses/PreconditionRequired", description: "The `If-Match` header is missing" }
-  /api/v1/request-approval-pipelines/agents/{agent_slug}:
+        "403": { $ref: "#/components/responses/Error", description: "You cannot create pipelines" }
+        "409": { $ref: "#/components/responses/Error", description: "The key was ever used (`request_approval_pipeline_exists`), or is `entry` (`request_approval_pipeline_entry`)" }
+  /api/v1/request-approval-pipelines/{pipeline_key}:
     get:
-      summary: Retrieve an agent's active pipeline
+      summary: Retrieve a pipeline's active revision
       description: >-
-        Returns the active revision of one agent's pipeline, with its
-        blocks in the order they run. It runs after the organization
-        pipeline, for every request this agent makes.
+        Returns the pipeline's active revision, with its blocks in the
+        order they run. `entry` is the pipeline every request starts in;
+        any other pipeline runs for the requests a delegate block hands
+        to it.
 
         The `ETag` header carries the active revision number. Pass it as
         `If-Match` when you activate another revision.
@@ -2423,7 +2243,7 @@ paths:
       tags: [Approval pipelines]
       security: [{ cookieAuth: [] }, { apiKeyAuth: [] }]
       parameters:
-        - $ref: "#/components/parameters/AgentSlugScope"
+        - $ref: "#/components/parameters/PipelineKey"
       responses:
         "200":
           description: The active revision
@@ -2435,11 +2255,60 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/RequestApprovalPipelineRevision" }
         "401": { $ref: "#/components/responses/Error", description: "You are not signed in" }
-        "403": { $ref: "#/components/responses/Error", description: "You cannot read pipelines" }
-        "404": { $ref: "#/components/responses/Error", description: "No agent with this slug exists, or the agent and its pipeline are archived" }
-  /api/v1/request-approval-pipelines/agents/{agent_slug}/preview:
+        "403": { $ref: "#/components/responses/Error", description: "You cannot read this pipeline" }
+        "404": { $ref: "#/components/responses/Error", description: "No pipeline with this key exists, or it is archived" }
+    delete:
+      summary: Archive a pipeline
+      description: >-
+        Archives the pipeline: every revision is stamped, none is active,
+        and its key stays taken. Its revisions remain readable with
+        `status=archived` or `all`.
+
+        The entry pipeline cannot be archived, and neither can a pipeline
+        that a delegate block in an active revision still hands requests
+        to; remove those blocks first. `GET .../uses` lists them.
+      operationId: archiveRequestApprovalPipeline
+      x-withhuman-permission: pipeline.activate
+      x-withhuman-credential-kinds: [session, personal_api_key, organization_api_key]
+      tags: [Approval pipelines]
+      security: [{ cookieAuth: [] }, { apiKeyAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/PipelineKey"
+      responses:
+        "204": { description: The pipeline is archived }
+        "401": { $ref: "#/components/responses/Error", description: "You are not signed in" }
+        "403": { $ref: "#/components/responses/Error", description: "You cannot archive this pipeline" }
+        "404": { $ref: "#/components/responses/Error", description: "No pipeline with this key exists" }
+        "409": { $ref: "#/components/responses/Error", description: "The pipeline is the entry pipeline (`request_approval_pipeline_entry`), is already archived (`request_approval_pipeline_archived`), or an active revision delegates to it (`request_approval_pipeline_in_use`, with the uses in `error.details`)" }
+  /api/v1/request-approval-pipelines/{pipeline_key}/uses:
+    get:
+      summary: List where a pipeline is delegated to
+      description: Returns the active pipeline revisions whose delegate blocks hand requests to this pipeline. The same set refuses archiving it.
+      operationId: listRequestApprovalPipelineUses
+      x-withhuman-permission: pipeline.read
+      x-withhuman-credential-kinds: [session, personal_api_key, organization_api_key]
+      tags: [Approval pipelines]
+      security: [{ cookieAuth: [] }, { apiKeyAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/PipelineKey"
+      responses:
+        "200":
+          description: The uses
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [uses]
+                properties:
+                  uses:
+                    type: array
+                    items: { $ref: "#/components/schemas/PipelineUse" }
+        "401": { $ref: "#/components/responses/Error", description: "You are not signed in" }
+        "403": { $ref: "#/components/responses/Error", description: "You cannot read this pipeline" }
+  /api/v1/request-approval-pipelines/{pipeline_key}/preview:
     post:
-      summary: Preview an agent's pipeline
+      summary: Preview a pipeline
       operationId: previewRequestApprovalPipeline
       x-withhuman-permission: pipeline.write
       x-withhuman-credential-kinds: [session, personal_api_key, organization_api_key]
@@ -2450,12 +2319,14 @@ paths:
         the document, not the sample, not the result. Use it to test a
         revision before you create it.
 
-        The preview runs this document alone. To see what a request would
-        meet end to end, preview the organization pipeline first and pass
-        its metadata in `previous_metadata`.
+        The document stands in for this pipeline. Delegate blocks expand
+        to their target pipelines' current active revisions, so the
+        preview walks what a request would; a skipped delegate calls
+        nothing. The sample names an agent by slug and name; any valid
+        slug will do, and conditions read it as `agent.slug`.
       security: [{ cookieAuth: [] }, { apiKeyAuth: [] }]
       parameters:
-        - $ref: "#/components/parameters/AgentSlugScope"
+        - $ref: "#/components/parameters/PipelineKey"
       requestBody:
         required: true
         content:
@@ -2467,26 +2338,25 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/RequestApprovalPipelinePreview" }
-        "400": { $ref: "#/components/responses/Error", description: "The document or the sample is invalid" }
+        "400": { $ref: "#/components/responses/Error", description: "The document or the sample is invalid, a delegate names a pipeline with no active revision (`request_approval_pipeline_not_found`), or the delegation would loop" }
         "401": { $ref: "#/components/responses/Error", description: "You are not signed in" }
-        "403": { $ref: "#/components/responses/Error", description: "You cannot edit pipelines" }
-  /api/v1/request-approval-pipelines/agents/{agent_slug}/revisions:
+        "403": { $ref: "#/components/responses/Error", description: "You cannot edit this pipeline" }
+  /api/v1/request-approval-pipelines/{pipeline_key}/revisions:
     post:
-      summary: Create an agent's pipeline revision
+      summary: Create a pipeline revision
       operationId: createRequestApprovalPipelineRevision
       x-withhuman-permission: pipeline.write
       x-withhuman-credential-kinds: [session, personal_api_key, organization_api_key]
       tags: [Approval pipelines]
       description: >-
-        Creates a new revision of one agent's pipeline from a complete
-        document. The document is validated and compiled first. The
+        Creates a new revision of the pipeline from a complete document.
+        The document is validated and compiled first, and every escalation
+        path, webhook endpoint and pipeline it names must exist. The
         revision is created inactive, and it never changes. Activate it to
-        put it into use.
-
-        The pipeline exists from the moment the agent is created.
+        put it into use. Omit `name` to keep the active revision's.
       security: [{ cookieAuth: [] }, { apiKeyAuth: [] }]
       parameters:
-        - $ref: "#/components/parameters/AgentSlugScope"
+        - $ref: "#/components/parameters/PipelineKey"
       requestBody:
         required: true
         content:
@@ -2498,15 +2368,15 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/RequestApprovalPipelineRevision" }
-        "400": { $ref: "#/components/responses/Error", description: "The document is invalid" }
+        "400": { $ref: "#/components/responses/Error", description: "The document is invalid, or a delegate names a pipeline that does not exist (`request_approval_pipeline_not_found`) or this pipeline itself" }
         "401": { $ref: "#/components/responses/Error", description: "You are not signed in" }
-        "403": { $ref: "#/components/responses/Error", description: "You cannot edit pipelines" }
-        "404": { $ref: "#/components/responses/Error", description: "No agent with this slug exists" }
-        "409": { $ref: "#/components/responses/Error", description: "The agent and its pipeline are archived (`request_approval_pipeline_archived`)" }
+        "403": { $ref: "#/components/responses/Error", description: "You cannot edit this pipeline" }
+        "404": { $ref: "#/components/responses/Error", description: "No pipeline with this key exists" }
+        "409": { $ref: "#/components/responses/Error", description: "The pipeline is archived (`request_approval_pipeline_archived`)" }
     get:
-      summary: List an agent's pipeline revisions
+      summary: List pipeline revisions
       description: >-
-        Returns the revisions of one agent's pipeline, newest first, without their blocks.
+        Returns the pipeline's revisions, newest first, without their blocks.
 
         Paging is by cursor. When more revisions follow, the response
         carries `next_cursor`. Pass it back as `cursor` to get the next
@@ -2518,7 +2388,7 @@ paths:
       tags: [Approval pipelines]
       security: [{ cookieAuth: [] }, { apiKeyAuth: [] }]
       parameters:
-        - $ref: "#/components/parameters/AgentSlugScope"
+        - $ref: "#/components/parameters/PipelineKey"
         - name: cursor
           in: query
           description: "The `next_cursor` from the previous page."
@@ -2550,18 +2420,18 @@ paths:
                     description: How many revisions the pipeline has, across every page.
         "400": { $ref: "#/components/responses/Error", description: "`cursor` is not a cursor this endpoint issued" }
         "401": { $ref: "#/components/responses/Error", description: "You are not signed in" }
-        "403": { $ref: "#/components/responses/Error", description: "You cannot read pipelines" }
-  /api/v1/request-approval-pipelines/agents/{agent_slug}/revisions/{revision}:
+        "403": { $ref: "#/components/responses/Error", description: "You cannot read this pipeline" }
+  /api/v1/request-approval-pipelines/{pipeline_key}/revisions/{revision}:
     get:
-      summary: Retrieve an agent's pipeline revision
-      description: Returns one revision of an agent's pipeline, active or not, with its blocks in the order they run.
+      summary: Retrieve a pipeline revision
+      description: Returns one revision of the pipeline, active or not, with its blocks in the order they run.
       operationId: getRequestApprovalPipelineRevision
       x-withhuman-permission: pipeline.read
       x-withhuman-credential-kinds: [session, personal_api_key, organization_api_key]
       tags: [Approval pipelines]
       security: [{ cookieAuth: [] }, { apiKeyAuth: [] }]
       parameters:
-        - $ref: "#/components/parameters/AgentSlugScope"
+        - $ref: "#/components/parameters/PipelineKey"
         - $ref: "#/components/parameters/PipelineRevision"
       responses:
         "200":
@@ -2571,18 +2441,19 @@ paths:
               schema: { $ref: "#/components/schemas/RequestApprovalPipelineRevision" }
         "400": { $ref: "#/components/responses/Error", description: "`revision` is not a positive integer" }
         "401": { $ref: "#/components/responses/Error", description: "You are not signed in" }
-        "403": { $ref: "#/components/responses/Error", description: "You cannot read pipelines" }
+        "403": { $ref: "#/components/responses/Error", description: "You cannot read this pipeline" }
         "404": { $ref: "#/components/responses/Error", description: "No such revision" }
-  /api/v1/request-approval-pipelines/agents/{agent_slug}/revisions/{revision}/references:
+  /api/v1/request-approval-pipelines/{pipeline_key}/revisions/{revision}/references:
     get:
-      summary: Report what an agent pipeline revision depends on
+      summary: Report what a pipeline revision depends on
       operationId: getRequestApprovalPipelineRevisionReferences
       x-withhuman-permission: pipeline.read
       x-withhuman-credential-kinds: [session, personal_api_key, organization_api_key]
-      description: Reports the escalation paths and webhook endpoints the revision names with their current state, and any block the deployment or plan cannot run, so a rollback can be explained before it is attempted. The activation itself re-checks inside its transaction.
+      tags: [Approval pipelines]
+      description: Reports the escalation paths, webhook endpoints and pipelines the revision names with their current state, and any block the deployment or plan cannot run, so a rollback can be explained before it is attempted. The activation itself re-checks inside its transaction.
       security: [{ cookieAuth: [] }, { apiKeyAuth: [] }]
       parameters:
-        - $ref: "#/components/parameters/AgentSlugScope"
+        - $ref: "#/components/parameters/PipelineKey"
         - $ref: "#/components/parameters/PipelineRevision"
       responses:
         "200":
@@ -2594,9 +2465,9 @@ paths:
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
-  /api/v1/request-approval-pipelines/agents/{agent_slug}/revisions/{revision}/activate:
+  /api/v1/request-approval-pipelines/{pipeline_key}/revisions/{revision}/activate:
     post:
-      summary: Activate an agent's pipeline revision
+      summary: Activate a pipeline revision
       operationId: activateRequestApprovalPipelineRevision
       x-withhuman-permission: pipeline.activate
       x-withhuman-credential-kinds: [session, personal_api_key, organization_api_key]
@@ -2609,12 +2480,16 @@ paths:
         as returned in `ETag`. If someone activated another revision in
         the meantime, the call fails with 412 and nothing changes.
 
-        Every escalation path the revision names, and every webhook
-        endpoint its blocks post to, must have an active revision.
+        Every escalation path the revision names, every webhook endpoint
+        its blocks post to, and every pipeline its delegate blocks hand
+        requests to must have an active revision, and the delegation
+        graph must stay a tree: no pipeline may reach itself again, no
+        chain may be deeper than 8 delegations, and the flattened
+        program from the entry pipeline may hold at most 10,000 blocks.
         Otherwise the call fails with 409 and nothing changes.
       security: [{ cookieAuth: [] }, { apiKeyAuth: [] }]
       parameters:
-        - $ref: "#/components/parameters/AgentSlugScope"
+        - $ref: "#/components/parameters/PipelineKey"
         - $ref: "#/components/parameters/PipelineRevision"
         - $ref: "#/components/parameters/ActiveRevisionIfMatch"
       responses:
@@ -2629,9 +2504,9 @@ paths:
               schema: { $ref: "#/components/schemas/RequestApprovalPipelineRevision" }
         "400": { $ref: "#/components/responses/Error", description: "`revision` or `If-Match` is malformed" }
         "401": { $ref: "#/components/responses/Error", description: "You are not signed in" }
-        "403": { $ref: "#/components/responses/Error", description: "You cannot activate pipelines" }
+        "403": { $ref: "#/components/responses/Error", description: "You cannot activate this pipeline" }
         "404": { $ref: "#/components/responses/Error", description: "No such revision" }
-        "409": { $ref: "#/components/responses/Error", description: "An escalation path or webhook endpoint the revision uses has no active revision (`escalation_path_inactive` or `webhook_endpoint_inactive`, with the keys in `error.details`), or the revision or the pipeline was archived with the type's last agent (`request_approval_pipeline_archived`)" }
+        "409": { $ref: "#/components/responses/Error", description: "A reference has no active revision (`escalation_path_inactive`, `webhook_endpoint_inactive`, or `request_approval_pipeline_inactive`, with the keys in `error.details`), the delegation graph would loop (`request_approval_pipeline_delegation_cycle`, the keys on the cycle in `error.details.pipelines`), run too deep (`request_approval_pipeline_delegation_too_deep`) or too large (`request_approval_pipeline_too_large`), or the pipeline is archived (`request_approval_pipeline_archived`)" }
         "412": { $ref: "#/components/responses/PreconditionFailed", description: "`If-Match` does not match the active revision" }
         "428": { $ref: "#/components/responses/PreconditionRequired", description: "The `If-Match` header is missing" }
   /api/v1/escalation-paths:
@@ -4538,7 +4413,7 @@ paths:
       x-withhuman-permission: agent.write
       x-withhuman-credential-kinds: [session, personal_api_key]
       security: [{ cookieAuth: [] }, { apiKeyAuth: [] }]
-      description: Allowed from provisioning until the session ends, once the agents exist. Runs one turn of the setup assistant on the caller's message. The assistant reads, writes, and previews the connected agents' approval pipelines through the management tools, in process and as the caller, and records the test prompt for the last step; it cannot touch other agents, the organization pipeline, paths, teams, or endpoints. The conversation is recorded on the session (`assistant`), one action per tool call as it happens, so the events stream shows progress; the answer arrives when the turn is done. A failed turn is recorded as a failed message and answered 502 onboarding_assistant_failed. 501 setup_assistant_unconfigured without a model (runtime-config's setup_assistant_enabled); 409 onboarding_assistant_busy while the previous message still runs.
+      description: Allowed from provisioning until the session ends, once the agents exist. Runs one turn of the setup assistant on the caller's message. The assistant reads, writes, and previews the connected agents' rules, each a branch of the entry pipeline, through the setup's own tools, in process and as the caller, and records the test prompt for the last step; it cannot touch other agents' branches, the rest of the entry pipeline, other pipelines, paths, teams, or endpoints. The conversation is recorded on the session (`assistant`), one action per tool call as it happens, so the events stream shows progress; the answer arrives when the turn is done. A failed turn is recorded as a failed message and answered 502 onboarding_assistant_failed. 501 setup_assistant_unconfigured without a model (runtime-config's setup_assistant_enabled); 409 onboarding_assistant_busy while the previous message still runs.
       requestBody:
         required: true
         content:
@@ -4585,7 +4460,7 @@ paths:
       x-withhuman-permission: agent.write
       x-withhuman-credential-kinds: [session, personal_api_key]
       security: [{ cookieAuth: [] }, { apiKeyAuth: [] }]
-      description: Allowed from provisioning until the session ends, once the agents exist. The by-hand alternative to the assistant. Replaces the runtime's agent pipeline with the starting shape, the named tools to a human and every other call approved, and picks the test command from them; an empty list makes every call run. Every name must have been discovered for the runtime (400 tool_not_discovered); the runtime must be one the session selected (400 runtime_not_selected).
+      description: Allowed from provisioning until the session ends, once the agents exist. The by-hand alternative to the assistant. Rewrites the runtime's branch of the entry pipeline with the starting shape, the named tools to a human and every other call approved, and picks the test command from them; an empty list makes every call run. 409 entry_pipeline_changed when the entry pipeline moved under the write. Every name must have been discovered for the runtime (400 tool_not_discovered); the runtime must be one the session selected (400 runtime_not_selected).
       requestBody:
         required: true
         content:
@@ -5651,11 +5526,11 @@ components:
       required: true
       description: The team's id.
       schema: { type: string, format: uuid }
-    AgentSlugScope:
-      name: agent_slug
+    PipelineKey:
+      name: pipeline_key
       in: path
       required: true
-      description: The slug of the agent whose pipeline this is.
+      description: "The pipeline's key. `entry` is the pipeline every request starts in; every other key was chosen when the pipeline was created. Lowercase letters, digits, dots, underscores and hyphens, up to 63 characters."
       schema:
         type: string
         pattern: '^[a-z0-9][a-z0-9._-]{0,62}$'
@@ -5964,22 +5839,22 @@ components:
         reason: { type: string, description: "shell, edit_not_suggested, read_only_builtin, annotation_read_only, annotation_destructive, annotation_mutating, verb:<verb>, or unknown" }
     OnboardingGenerated:
       type: object
-      required: [escalation_path_key, escalation_path_name, escalation_path_revision, pipelines, policy_tools]
+      required: [escalation_path_key, escalation_path_name, escalation_path_revision, pipelines]
       properties:
         escalation_path_key: { type: string }
         escalation_path_name: { type: string }
         escalation_path_revision: { type: integer, format: int64 }
         pipelines:
           type: object
+          description: "Per selected runtime: the pipeline the setup wrote into (always `entry`), the branch that holds the runtime's rules, and the entry revision it activated. `revision` equals `replaced_active_revision` when a rerun changed nothing."
           additionalProperties:
             type: object
-            required: [revision, replaced_active_revision]
+            required: [pipeline_key, branch_key, revision, replaced_active_revision]
             properties:
+              pipeline_key: { type: string }
+              branch_key: { type: string }
               revision: { type: integer, format: int64 }
               replaced_active_revision: { type: integer, format: int64, minimum: 1 }
-        policy_tools:
-          type: array
-          items: { type: string }
     OnboardingEnrollment:
       type: object
       required: [runtime, agent_slug, agent_name, agent_instance_id, agent_instance_name, credential_id]
@@ -6167,8 +6042,8 @@ components:
       required: [permission, resource_kind]
       properties:
         permission: { type: string, description: "The permission you needed.", example: request.decide }
-        resource_kind: { type: string, enum: [organization, team, agent, request], description: "What kind of thing the check was about." }
-        resource_id: { type: string, description: "The team, agent slug, or request the check was about. Absent for the organization." }
+        resource_kind: { type: string, enum: [organization, team, agent, pipeline, request], description: "What kind of thing the check was about." }
+        resource_id: { type: string, description: "The team, agent slug, pipeline key, or request the check was about. Absent for the organization." }
     RoutingRejectionDetails:
       description: The details object on a forbidden error raised by the routing rule at decision time. not_targeted means the request was routed to other people; break_glass_only means the organization sends unrouted requests to holders of request.decide.unrouted; outside_routing_required means the reviewer holds break glass but did not send outside_routing.
       type: object
@@ -6342,73 +6217,70 @@ components:
           type: array
           items: { type: string }
           description: What the key may do right now, after narrowing and the member's current roles.
-    PipelineScope:
-      description: Which requests a pipeline applies to. The organization pipeline runs first, for every request. An agent's pipeline runs after it, for that agent's requests.
-      type: string
-      enum: [organization, agent]
     RequestApprovalPipelineSummary:
       type: object
       additionalProperties: false
       description: One pipeline and a summary of its history.
-      required: [scope, latest_revision, revision_count, latest_created_at]
+      required: [pipeline_key, name, latest_revision, revision_count, latest_created_at]
       properties:
-        scope: { $ref: "#/components/schemas/PipelineScope" }
-        agent_slug:
+        pipeline_key:
           type: string
           pattern: '^[a-z0-9][a-z0-9._-]{0,62}$'
-          description: "The agent's slug. Present for the `agent` scope only."
+          description: "The pipeline's key. `entry` is the pipeline every request starts in."
+        name: { type: string, description: "The pipeline's display name: the active revision's, or the latest revision's for an archived pipeline." }
         active_revision: { type: integer, format: int64, minimum: 1, description: "The revision in use. Absent only for an archived pipeline." }
         latest_revision: { type: integer, format: int64, minimum: 1, description: "The newest revision, active or not." }
         revision_count: { type: integer, format: int64, minimum: 1 }
         latest_created_at: { type: string, format: date-time, description: When the newest revision was created. }
-        archived_at: { type: string, format: date-time, description: "Present when the pipeline was archived with its agent: readable, never active again until the agent is restored." }
+        archived_at: { type: string, format: date-time, description: "Present when the pipeline was archived: readable, never active again, its key taken for good." }
     RequestApprovalPipelineRevisionSummary:
       type: object
       additionalProperties: false
       description: One pipeline revision, without its blocks.
-      required: [id, scope, revision, is_active, block_count, created_by_actor_id, created_at]
+      required: [id, pipeline_key, name, revision, is_active, block_count, created_by_actor_id, created_at]
       properties:
         id: { type: string, format: uuid }
-        scope: { $ref: "#/components/schemas/PipelineScope" }
-        agent_slug:
+        pipeline_key:
           type: string
           pattern: '^[a-z0-9][a-z0-9._-]{0,62}$'
-          description: "The agent's slug. Present for the `agent` scope only."
+          description: "The pipeline's key."
+        name: { type: string, description: "The pipeline's display name as of this revision." }
         revision: { type: integer, format: int64, minimum: 1, description: The revision number. Revisions count up from 1. }
         is_active: { type: boolean, description: Whether this is the revision in use. }
         block_count: { type: integer, minimum: 0, maximum: 1000, description: "Every block in the revision, including blocks inside branches." }
         default_escalation_path:
           type: string
           pattern: '^[a-z0-9][a-z0-9._-]{0,62}$'
-          description: The escalation path for requests that reach a person without a block naming a path.
+          description: The escalation path for requests that reach a person from this pipeline without a block naming a path.
         created_by_actor_id: { type: string, format: uuid, description: The membership or organization-key actor that created the revision. }
         created_at: { type: string, format: date-time }
-        archived_at: { type: string, format: date-time, description: "Present when the revision was archived with its agent. An archived revision can be read but not activated until the agent is restored." }
+        archived_at: { type: string, format: date-time, description: "Present when the pipeline was archived. An archived revision can be read but never activated." }
     RequestApprovalPipelineRevision:
       type: object
       additionalProperties: false
       description: One pipeline revision with its blocks in the order they run.
-      required: [id, scope, revision, is_active, block_count, created_by_actor_id, created_at, blocks]
+      required: [id, pipeline_key, name, revision, is_active, block_count, created_by_actor_id, created_at, blocks]
       properties:
         id: { type: string, format: uuid }
-        scope: { $ref: "#/components/schemas/PipelineScope" }
-        agent_slug:
+        pipeline_key:
           type: string
           pattern: '^[a-z0-9][a-z0-9._-]{0,62}$'
-          description: "The agent's slug. Present for the `agent` scope only."
+          description: "The pipeline's key."
+        name: { type: string, description: "The pipeline's display name as of this revision." }
         revision: { type: integer, format: int64, minimum: 1, description: The revision number. Revisions count up from 1. }
         is_active: { type: boolean, description: Whether this is the revision in use. }
         block_count: { type: integer, minimum: 0, maximum: 1000, description: "Every block in the revision, including blocks inside branches." }
         default_escalation_path:
           type: string
           pattern: '^[a-z0-9][a-z0-9._-]{0,62}$'
-          description: The escalation path for requests that reach a person without a block naming a path.
+          description: The escalation path for requests that reach a person from this pipeline without a block naming a path.
         created_by_actor_id: { type: string, format: uuid, description: The membership or organization-key actor that created the revision. }
         created_at: { type: string, format: date-time }
+        archived_at: { type: string, format: date-time, description: "Present when the pipeline was archived." }
         blocks:
           type: array
           maxItems: 1000
-          description: The blocks, in the order they run. A branch holds its own blocks in `config.blocks`.
+          description: The blocks, in the order they run. A branch holds its own blocks in `config.blocks`; a delegate names the pipeline it hands matching requests to in `config.pipeline_key`.
           items: { $ref: "#/components/schemas/StoredRequestApprovalBlock" }
     RequestApprovalPipelineDocument:
       type: object
@@ -6416,22 +6288,45 @@ components:
       description: The complete content of a new pipeline revision.
       required: [blocks]
       properties:
+        name: { type: string, minLength: 1, maxLength: 120, description: "A new display name for the pipeline. Omit to keep the active revision's." }
         blocks:
           type: array
           maxItems: 1000
-          description: "The blocks, in the order they should run. A branch holds its own blocks in `config.blocks`, and the pipeline may hold at most 1,000 blocks counting those. An empty list passes every request through to a person."
+          description: "The blocks, in the order they should run. A branch holds its own blocks in `config.blocks`, and the pipeline may hold at most 1,000 blocks counting those. An empty list passes every request that enters the pipeline through to a person."
           items: { $ref: "#/components/schemas/RequestApprovalBlockDefinition" }
         default_escalation_path:
           type: string
           pattern: '^[a-z0-9][a-z0-9._-]{0,62}$'
-          description: "The escalation path for requests that reach a person without a block naming a path. That includes requests that reach the end of the pipeline. The agent's default wins over the organization's. With neither, any reviewer who can decide may take the request from the queue. The path must exist when the revision is created, and be active when it is activated."
+          description: "The escalation path for requests that reach a person from this pipeline without a block naming a path. That includes requests that run out of it. A delegated pipeline without one inherits the defaults of the pipelines that delegated into it, nearest first; with none anywhere, any reviewer who can decide may take the request from the queue. The path must exist when the revision is created, and be active when it is activated."
+    RequestApprovalPipelineCreate:
+      type: object
+      additionalProperties: false
+      description: A new pipeline and the content of its first revision.
+      required: [pipeline_key, name]
+      properties:
+        pipeline_key:
+          type: string
+          pattern: '^[a-z0-9][a-z0-9._-]{0,62}$'
+          example: payments
+          description: "The pipeline's key. Taken for good once used, archived pipelines included; never `entry`."
+        name: { type: string, minLength: 1, maxLength: 120, example: Payments, description: The display name. }
+        blocks:
+          type: array
+          maxItems: 1000
+          description: "The first revision's blocks, in the order they should run. Omit for a pipeline that passes every request that enters it through to a person until it is edited."
+          items: { $ref: "#/components/schemas/RequestApprovalBlockDefinition" }
+        default_escalation_path:
+          type: string
+          pattern: '^[a-z0-9][a-z0-9._-]{0,62}$'
+          description: "The escalation path for requests that reach a person from this pipeline without a block naming a path, as in a document."
     RequestApprovalBlockDefinition:
-      description: One block of a pipeline document. The type picks the kind of block and the shape of its config. These are the kinds every edition has; an edition may add kinds of its own with their own config shapes (the hosted edition adds `llm_judge`), and a document naming a kind this deployment lacks is refused as invalid.
+      description: One block of a pipeline document. The type picks the kind of block and the shape of its config. These are the kinds every edition has (`always`, `cel`, `webhook`, `branch`, `delegate`); an edition may add kinds of its own with their own config shapes (the hosted edition adds `llm_judge`), and a document naming a kind this deployment lacks is refused as invalid.
       oneOf:
         - $ref: "#/components/schemas/AlwaysBlockDefinition"
         - $ref: "#/components/schemas/CELBlockDefinition"
         - $ref: "#/components/schemas/WebhookBlockDefinition"
         - $ref: "#/components/schemas/BranchBlockDefinition"
+        - $ref: "#/components/schemas/DelegateBlockDefinition"
       discriminator:
         propertyName: type
         mapping:
@@ -6439,6 +6334,7 @@ components:
           cel: "#/components/schemas/CELBlockDefinition"
           webhook: "#/components/schemas/WebhookBlockDefinition"
           branch: "#/components/schemas/BranchBlockDefinition"
+          delegate: "#/components/schemas/DelegateBlockDefinition"
     AlwaysBlockDefinition:
       type: object
       additionalProperties: false
@@ -6491,6 +6387,7 @@ components:
         - $ref: "#/components/schemas/StoredCELBlock"
         - $ref: "#/components/schemas/StoredWebhookBlock"
         - $ref: "#/components/schemas/StoredBranchBlock"
+        - $ref: "#/components/schemas/StoredDelegateBlock"
       discriminator:
         propertyName: type
         mapping:
@@ -6652,6 +6549,60 @@ components:
           type: string
           pattern: '^[a-z0-9][a-z0-9._-]{0,62}$'
           description: Where the request goes when none of the branch's blocks decides.
+    DelegateBlockDefinition:
+      type: object
+      additionalProperties: false
+      description: "A block that hands the requests its condition matches to another pipeline, named by key, and is skipped by every other request. A request that enters the delegated pipeline is decided inside it, or goes to a person under that pipeline's own default escalation path (else the defaults of the pipelines that delegated into it) if none of its blocks decides; nothing after the delegate runs for that request. The condition belongs to the pipeline holding the block; everything after a match belongs to the target pipeline's owners."
+      required: [id, name, type, enabled, timeout, max_attempts, config]
+      properties:
+        id:
+          type: string
+          pattern: '^[a-z0-9][a-z0-9._-]{0,62}$'
+          example: to-payments
+          description: A key for the block, unique within the pipeline including blocks inside branches.
+        name: { type: string, minLength: 1, example: Payments team, description: A display name. }
+        type: { type: string, const: delegate, description: "Always `delegate`." }
+        enabled:
+          type: boolean
+          const: true
+          description: "Always `true`. Leave disabled blocks out of the document."
+        timeout:
+          type: string
+          example: 50ms
+          description: "How long the condition may take, as a duration. At most `1s`."
+        max_attempts: { type: integer, const: 1, description: Always 1. }
+        config: { $ref: "#/components/schemas/DelegateBlockConfig" }
+    StoredDelegateBlock:
+      type: object
+      additionalProperties: false
+      description: A delegate as saved in a revision.
+      required: [id, snapshot_id, name, type, enabled, timeout, max_attempts, config, config_version, content_hash]
+      properties:
+        id:
+          type: string
+          pattern: '^[a-z0-9][a-z0-9._-]{0,62}$'
+          description: The block's key, unique within the pipeline including blocks inside branches.
+        snapshot_id: { type: string, format: uuid, description: The id of the saved copy. }
+        name: { type: string, minLength: 1, description: The display name. }
+        type: { type: string, const: delegate, description: "Always `delegate`." }
+        enabled: { type: boolean, const: true, description: "Always `true`." }
+        timeout: { type: string, example: 50ms, description: How long the condition may take. }
+        max_attempts: { type: integer, const: 1, description: Always 1. }
+        config: { $ref: "#/components/schemas/DelegateBlockConfig" }
+        config_version: { type: integer, const: 1, description: The version of the config format. Always 1. }
+        content_hash: { type: string, pattern: '^[0-9a-f]{64}$', description: "A SHA-256 hash of the block's content." }
+    DelegateBlockConfig:
+      type: object
+      additionalProperties: false
+      description: "When the condition matches, the request continues in the named pipeline's active revision and is settled there. When it does not match, the delegate is skipped and the request passes to the next block. A condition that cannot be evaluated sends the request to a person on the default path of the pipeline holding the block. The named pipeline must exist when the revision is created and be active when it is activated; it can never be `entry`, and the activation refuses a delegation that would loop."
+      required: [when, pipeline_key]
+      properties:
+        when: { $ref: "#/components/schemas/CELCondition" }
+        pipeline_key:
+          type: string
+          pattern: '^[a-z0-9][a-z0-9._-]{0,62}$'
+          example: payments
+          description: The pipeline that takes matching requests.
     WebhookBlockConfig:
       type: object
       additionalProperties: false
@@ -6831,11 +6782,8 @@ components:
                 name: { type: string, minLength: 1, description: A name for the sample agent. }
             previous_metadata:
               type: object
-              description: Metadata as if earlier blocks had returned it, keyed by scope and then by block key. Use it to carry the organization preview's metadata into an agent preview, so the two previews together behave like one request.
-              properties:
-                organization: { type: object, additionalProperties: { type: object, additionalProperties: true }, description: "Metadata from the organization pipeline, by block key." }
-                agent: { type: object, additionalProperties: { type: object, additionalProperties: true }, description: "Metadata from the agent's pipeline, by block key." }
-              additionalProperties: false
+              description: Metadata as if earlier blocks had returned it, keyed by pipeline key and then by block key, exactly as conditions read it under `/previous_metadata/<pipeline_key>/<block_key>`.
+              additionalProperties: { type: object, additionalProperties: { type: object, additionalProperties: true }, description: "Metadata from one pipeline, by block key." }
     RequestApprovalPipelinePreview:
       type: object
       additionalProperties: false
@@ -6843,26 +6791,28 @@ components:
       required: [outcome, reason_code, blocks]
       properties:
         outcome: { type: string, enum: [approve, deny, human], description: The final outcome. }
-        reason_code: { type: string, enum: [block_outcome, block_error, end_of_pipeline, end_of_branch], description: "Why the run ended. `block_outcome`: a block decided. `block_error`: a block failed. `end_of_pipeline`: the request passed every block. `end_of_branch`: the request entered a branch and none of its blocks decided." }
-        terminal_block_id: { type: string, description: "The block that ended the run: for `end_of_branch`, the branch. Absent when the request passed every block." }
+        reason_code: { type: string, enum: [block_outcome, block_error, block_timeout, retries_exhausted, invalid_block_output, end_of_pipeline, end_of_branch], description: "Why the run ended. `block_outcome`: a block decided. `block_error`, `block_timeout`, `retries_exhausted`, `invalid_block_output`: a block failed. `end_of_pipeline`: the request passed every block. `end_of_branch`: the request entered a branch or a delegated pipeline and none of its blocks decided." }
+        terminal_block_id: { type: string, description: "The block that ended the run: for `end_of_branch`, the branch or the delegate. Absent when the request passed every block." }
         blocks:
           type: array
-          description: "What each block the request reached did, in order. A branch appears when its condition is evaluated, and once more with `end_of_branch` when none of its blocks decided."
+          description: "What each block the request reached did, in order, each with the pipeline it belongs to. A branch or delegate appears when its condition is evaluated, and once more with `end_of_branch` when none of the blocks inside decided."
           items: { $ref: "#/components/schemas/RequestApprovalPipelinePreviewBlock" }
         escalation_path:
           type: string
           pattern: '^[a-z0-9][a-z0-9._-]{0,62}$'
-          description: "The path a `human` outcome goes to, within this scope alone: the ending block's path, or the document's default. Absent when the outcome is automatic or no path applies."
-        escalation_path_reason: { type: string, enum: [block_escalation, pipeline_default, no_escalation], description: "Where the path came from. `block_escalation`: the ending block named it. `pipeline_default`: the document's default. `no_escalation`: no path applies." }
+          description: "The path a `human` outcome goes to: the ending block's path, else the default of the pipeline the request was in, else the defaults of the pipelines that delegated into it. Absent when the outcome is automatic or no path applies."
+        escalation_path_reason: { type: string, enum: [block_escalation, pipeline_default, no_escalation], description: "Where the path came from. `block_escalation`: the ending block named it. `pipeline_default`: a pipeline's default. `no_escalation`: no path applies." }
+        escalation_path_pipeline_key: { type: string, pattern: '^[a-z0-9][a-z0-9._-]{0,62}$', description: "The pipeline whose block or default supplied the path. Absent with `no_escalation`." }
     RequestApprovalPipelinePreviewBlock:
       type: object
       additionalProperties: false
       description: What one block did in a preview.
-      required: [block_id, position, outcome, cost, trace]
+      required: [block_id, pipeline_key, position, outcome, cost, trace]
       properties:
         block_id: { type: string, description: The block's key. }
-        position: { type: integer, minimum: 0, description: "The block's position in the pipeline, from 0, counting in document order with each branch before the blocks it holds." }
-        outcome: { type: string, enum: [next, approve, deny, human, enter], description: "What the block returned. A branch returns `enter` when its condition matched and `next` when it did not." }
+        pipeline_key: { type: string, pattern: '^[a-z0-9][a-z0-9._-]{0,62}$', description: "The pipeline the block belongs to: the previewed document's key, or a delegated pipeline's." }
+        position: { type: integer, minimum: 0, description: "The block's position in the effective pipeline, from 0, counting in document order with each branch or delegate before the blocks it holds." }
+        outcome: { type: string, enum: [next, approve, deny, human, enter], description: "What the block returned. A branch or delegate returns `enter` when its condition matched and `next` when it did not." }
         reason: { type: string, description: The note the block recorded. }
         metadata: { type: object, additionalProperties: true, description: "The metadata the block returned, if any." }
         cost: { type: integer, format: int64, minimum: 0, description: The cost the block recorded. }
@@ -6941,8 +6891,8 @@ components:
       required: [permission, scope_kind]
       properties:
         permission: { type: string, description: A registry key such as request.decide, example: request.decide }
-        scope_kind: { type: string, enum: [organization, team, agent] }
-        scope_id: { type: string, description: The team id or agent slug the grant applies to; absent at organization scope }
+        scope_kind: { type: string, enum: [organization, team, agent, pipeline] }
+        scope_id: { type: string, description: "The team id, agent slug, or pipeline key the grant applies to; absent at organization scope" }
     AuthContext:
       type: object
       description: How a principal was signed in when it acted.
@@ -7506,19 +7456,30 @@ components:
         secret_rotated_at: { type: string, format: date-time, description: When the secret was rotated. }
     PipelineUse:
       type: object
-      required: [pipeline_id, scope, revision]
-      description: One place an active pipeline revision uses a shared object, an escalation path or a webhook endpoint.
+      required: [pipeline_id, pipeline_key, revision]
+      description: One place an active pipeline revision uses a shared object, an escalation path, a webhook endpoint, or another pipeline.
       properties:
         pipeline_id: { type: string, format: uuid }
-        scope: { type: string, enum: [organization, agent], description: The pipeline's scope. }
-        agent_slug: { type: string, description: "The agent's slug. Present for the `agent` scope only." }
+        pipeline_key: { type: string, pattern: '^[a-z0-9][a-z0-9._-]{0,62}$', description: The pipeline whose revision uses the object. }
         revision: { type: integer, format: int64, description: The active revision number. }
         block_key: { type: string, description: The block that uses the object. Absent when the revision names an escalation path as its default. }
     PipelineReferences:
       type: object
-      required: [escalation_paths, webhook_endpoints, blocks, activatable]
+      required: [escalation_paths, webhook_endpoints, pipelines, blocks, activatable]
       description: What one pipeline revision depends on, and whether each dependency is in place right now. activatable is false while any entry would refuse activation.
       properties:
+        pipelines:
+          type: array
+          description: The pipelines the revision's delegate blocks hand requests to.
+          items:
+            type: object
+            required: [pipeline_key, block_keys, exists, active]
+            properties:
+              pipeline_key: { type: string, pattern: '^[a-z0-9][a-z0-9._-]{0,62}$' }
+              name: { type: string, description: The active revision's name. Absent while none is active. }
+              block_keys: { type: array, items: { type: string }, description: The delegate blocks that name the pipeline. }
+              exists: { type: boolean, description: Whether the pipeline has a live revision (neither never created nor archived). }
+              active: { type: boolean, description: Whether a revision of the pipeline is active. }
         escalation_paths:
           type: array
           description: The escalation paths the revision names.

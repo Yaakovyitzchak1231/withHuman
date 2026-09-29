@@ -274,4 +274,42 @@ func TestPermissionPoliciesAgainstRealPostgres(t *testing.T) {
 		}
 	})
 
+	t.Run("pipeline scoped policies bind to live pipelines", func(t *testing.T) {
+		if _, err := store.CreateRequestApprovalPipeline(ctx, application.CreateRequestApprovalPipelineInput{
+			ID: domain.ID(uuid.NewString()), OrganizationID: org, PipelineKey: "payments", Name: "Payments",
+			CreatedByActorID: actor.MembershipID, Now: now,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		command := input
+		command.IdempotencyKey = "pipeline"
+		command.Spec = domain.PermissionPolicySpec{ScopeKind: domain.ScopePipeline, ResourceIDs: []string{"payments"}, Permissions: []domain.Permission{domain.PermissionPipelineRead, domain.PermissionPipelineWrite}}
+		policy, err := store.MutatePermissionPolicy(ctx, command)
+		if err != nil {
+			t.Fatalf("pipeline policy: %v", err)
+		}
+		if len(policy.Resources) != 1 || policy.Resources[0].Kind != domain.ScopePipeline || policy.Resources[0].ID != "payments" || policy.Resources[0].Name != "Payments" {
+			t.Fatalf("pipeline policy resources=%+v", policy.Resources)
+		}
+		missing := command
+		missing.IdempotencyKey = "pipeline-missing"
+		missing.Spec.ResourceIDs = []string{"nobody"}
+		if _, err := store.MutatePermissionPolicy(ctx, missing); !errors.Is(err, domain.ErrConflict) {
+			t.Fatalf("unknown pipeline: %v", err)
+		}
+		options, err := store.ReadPermissionPolicies(ctx, target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, resource := range options.Resources {
+			if resource.Kind == domain.ScopePipeline && resource.ID == "payments" {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("pipeline missing from options: %+v", options.Resources)
+		}
+	})
+
 }

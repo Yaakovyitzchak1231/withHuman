@@ -92,7 +92,10 @@ test "$provision_status" = "400"
 curl --silent --fail --cookie "$cookie_jar" --request POST --header "Origin: $origin" "$app_api/onboarding/session/channels" \
   | jq -e '.status == "tools_discovered" and .channels_set_at != null' >/dev/null
 provisioned=$(curl --silent --fail --cookie "$cookie_jar" --request POST --header "Origin: $origin" "$app_api/onboarding/session/provision")
-printf '%s' "$provisioned" | jq -e '.status == "provisioning" and (.generated.policy_tools | index("Bash") != null) and (.generated.pipelines["claude-code"].revision >= 1)' >/dev/null
+printf '%s' "$provisioned" | jq -e '.status == "provisioning" and (.generated.pipelines["claude-code"] | .pipeline_key == "entry" and .branch_key == "claude-code" and .revision >= 1)' >/dev/null
+# The rules live in the entry pipeline as one branch per runtime.
+curl --silent --fail --cookie "$cookie_jar" "$app_api/request-approval-pipelines/entry" \
+  | jq -e '[.blocks[] | select(.id == "claude-code" and .type == "branch")] | length == 1' >/dev/null
 path_key=$(printf '%s' "$provisioned" | jq -r .generated.escalation_path_key)
 curl --silent --fail --cookie "$cookie_jar" "$app_api/escalation-paths/$path_key" | jq -e 'type == "object"' >/dev/null
 

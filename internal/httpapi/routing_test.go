@@ -384,8 +384,8 @@ func TestEscalationPathUsesExplainAndRefuseArchive(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	repository := routingHTTPPathRepositoryWithRevision()
 	repository.uses = []domain.PipelineUse{
-		{PipelineID: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", AgentSlug: "billing", Revision: 3, BlockKey: "manual-review"},
-		{PipelineID: "dddddddd-dddd-4ddd-8ddd-dddddddddddd", Revision: 1},
+		{PipelineID: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", PipelineKey: "billing", Revision: 3, BlockKey: "manual-review"},
+		{PipelineID: "dddddddd-dddd-4ddd-8ddd-dddddddddddd", PipelineKey: "entry", Revision: 1},
 	}
 	router := routingManagementTestRouter(repository, routingHTTPPrincipal())
 
@@ -400,11 +400,11 @@ func TestEscalationPathUsesExplainAndRefuseArchive(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &listed); err != nil {
 		t.Fatal(err)
 	}
-	if len(listed.Uses) != 2 || listed.Uses[0]["scope"] != "agent" || listed.Uses[0]["agent_slug"] != "billing" || listed.Uses[0]["block_key"] != "manual-review" {
+	if len(listed.Uses) != 2 || listed.Uses[0]["pipeline_key"] != "billing" || listed.Uses[0]["block_key"] != "manual-review" {
 		t.Fatalf("block use = %+v", listed.Uses)
 	}
-	if listed.Uses[1]["scope"] != "organization" || listed.Uses[1]["block_key"] != nil || listed.Uses[1]["agent_slug"] != nil {
-		t.Fatalf("default use should omit block_key and agent_slug: %+v", listed.Uses[1])
+	if listed.Uses[1]["pipeline_key"] != "entry" || listed.Uses[1]["block_key"] != nil || listed.Uses[1]["scope"] != nil {
+		t.Fatalf("default use should omit block_key: %+v", listed.Uses[1])
 	}
 
 	response = httptest.NewRecorder()

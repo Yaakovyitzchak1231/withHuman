@@ -61,8 +61,11 @@ import type {
   OnboardingStatus,
   OnboardingTool,
   RequestApprovalPipelineRevision,
+  StoredBranchBlock,
 } from "../types";
+import { ENTRY_PIPELINE_KEY } from "../types";
 import type { ChannelsPage } from "./contact-channels";
+import { definitionsFromStored } from "./pipeline-blocks";
 import { ladderLines } from "./notification-rules";
 import { OnboardingApprovals, useTestActivity, type TestActivity } from "./onboarding-approvals";
 import { OnboardingContactStep, OnboardingRulesStep } from "./onboarding-contacts";
@@ -986,11 +989,12 @@ const MCP_PATH = "/api/mcp/v1";
 
 /* What to paste into a coding agent so it writes the rules through
  * withHuman's MCP server: connect, learn the grammar, ask, write,
- * check. Names the agents and the setup's escalation path so it
- * touches nothing else. */
-function agentPrompt(origin: string, agents: { slug: string; name: string }[], pathKey: string): string {
+ * check. Each agent's rules live in a branch of the entry pipeline
+ * keyed by its runtime; the prompt names those branches and the
+ * setup's escalation path so it touches nothing else. */
+function agentPrompt(origin: string, agents: { runtime: string; slug: string; name: string }[], pathKey: string): string {
   const endpoint = `${origin}${MCP_PATH}`;
-  const list = agents.map((agent) => `${agent.name} (slug: ${agent.slug})`).join(", ");
+  const list = agents.map((agent) => `${agent.name} (agent slug ${agent.slug}, branch id "${agent.runtime}")`).join(", ");
   return [
     "Help me decide which of my AI agents' tool calls should wait for my approval in withHuman, then write those rules.",
     "",
@@ -998,9 +1002,9 @@ function agentPrompt(origin: string, agents: { slug: string; name: string }[], p
     `   Claude Code: claude mcp add --transport http withhuman ${endpoint}`,
     `   Codex: codex mcp add withhuman --url ${endpoint}`,
     "2. Call read_reference to learn how pipeline blocks and conditions are written.",
-    `3. Read the current rules with get_pipeline for these agents: ${list}.`,
+    `3. Read the current rules with get_pipeline for pipeline_key "entry". Each of these agents has its own branch block at the top level: ${list}.`,
     "4. Ask me what should wait for me, suggesting a few risky calls these agents can make. Keep reading, searching and tests running without me.",
-    `5. Write the rules with update_pipeline for those agents only. Send calls that need me to the escalation path "${pathKey}" and end each pipeline with an always block that approves the rest.`,
+    `5. Write the rules with update_pipeline for pipeline_key "entry", changing only the blocks inside those branches and leaving every other block exactly as it is. Set escalation_path "${pathKey}" on every block that can send a call to me, and end each branch with an always block that approves the rest.`,
     "6. Try two or three sample calls with preview_pipeline, one that should wait and one that should not, and tell me what happened.",
   ].join("\n");
 }
@@ -1076,29 +1080,26 @@ function ChooseToolsStep({
     void provision();
   }, [status, session.channels_set_at, session.id, provision]);
 
-  /* The rules as they stand, read from each agent's active pipeline
-   * and re-read whenever the session moves, which every write does. */
+  /* The rules as they stand, read from the entry pipeline's active
+   * revision (each agent's rules are a branch of it) and re-read
+   * whenever the session moves, which every write does. undefined until
+   * the first read answers. */
   const exist = agentsExist(status);
   const [pipelineTick, setPipelineTick] = useState(0);
-  const [pipelines, setPipelines] = useState<Record<string, RequestApprovalPipelineRevision | null>>({});
+  const [entry, setEntry] = useState<RequestApprovalPipelineRevision | null | undefined>(undefined);
   useEffect(() => {
     if (!exist) return;
     let cancelled = false;
-    void Promise.all(
-      runtimes.map((runtime) =>
-        api
-          .activeRequestApprovalPipeline(runtime)
-          .then((revision) => [runtime, revision] as const)
-          .catch(() => [runtime, null] as const),
-      ),
-    ).then((entries) => {
-      if (!cancelled) setPipelines(Object.fromEntries(entries));
-    });
+    void api
+      .activeRequestApprovalPipeline(ENTRY_PIPELINE_KEY)
+      .then((revision) => revision, () => null)
+      .then((revision) => {
+        if (!cancelled) setEntry(revision);
+      });
     return () => {
       cancelled = true;
     };
-    /* runtimes is fixed once the agents exist; version and the coding
-     * agent's poll are the triggers. */
+    /* version and the coding agent's poll are the triggers. */
   }, [exist, session.version, pipelineTick]);
 
   /* The conversation with the assistant. Sending blocks the composer
@@ -1214,7 +1215,7 @@ function ChooseToolsStep({
             prompt={agentPrompt(origin, agents, session.generated.escalation_path_key)}
             agents={agents}
             ready={exist}
-            pipelines={pipelines}
+            entry={entry ?? null}
           />
         ) : way === "describe" ? (
           <WayPanel title="Describe it in your own words">
@@ -1241,8 +1242,8 @@ function ChooseToolsStep({
                   }
                   tools={session.tools[runtime] ?? []}
                   errors={session.discovery_errors[runtime] ?? []}
-                  gated={gatedToolsOf(exist ? (pipelines[runtime] ?? null) : null)}
-                  ready={exist && runtime in pipelines && !busy}
+                  gated={exist && entry !== undefined ? gatedToolsOf(entry, runtime) : null}
+                  ready={exist && entry !== undefined && !busy}
                   onSession={onSession}
                 />
               ))}
@@ -1288,21 +1289,25 @@ function AgentWay({
   prompt,
   agents,
   ready,
-  pipelines,
+  entry,
 }: {
   prompt: string;
   agents: { runtime: string; slug: string; name: string }[];
   ready: boolean;
-  pipelines: Record<string, RequestApprovalPipelineRevision | null>;
+  entry: RequestApprovalPipelineRevision | null;
 }) {
   const { copy, copied } = useCopyToClipboard(prompt);
-  /* The active revision per agent when this way opened; a newer one
-   * is the coding agent's work. */
-  const baseline = useRef<Record<string, number>>({});
+  /* Each agent's branch as it stood when this way opened; a different
+   * one is the coding agent's work. The branch itself is compared, not
+   * the entry revision, which bumps on anyone's edit. */
+  const baseline = useRef<Record<string, string>>({});
+  const current: Record<string, string | undefined> = {};
   for (const agent of agents) {
-    const revision = pipelines[agent.runtime]?.revision;
-    if (revision !== undefined && !(agent.runtime in baseline.current)) {
-      baseline.current[agent.runtime] = revision;
+    const branch = runtimeBranchOf(entry, agent.runtime);
+    const shape = branch ? JSON.stringify(definitionsFromStored([branch])) : undefined;
+    current[agent.runtime] = shape;
+    if (shape !== undefined && !(agent.runtime in baseline.current)) {
+      baseline.current[agent.runtime] = shape;
     }
   }
   return (
@@ -1313,9 +1318,9 @@ function AgentWay({
       <div className="flex flex-wrap items-center justify-between gap-3">
         <ul className="flex flex-col gap-1.5">
           {agents.map((agent) => {
-            const now = pipelines[agent.runtime]?.revision;
+            const now = current[agent.runtime];
             const before = baseline.current[agent.runtime];
-            const changed = now !== undefined && before !== undefined && now > before;
+            const changed = now !== undefined && before !== undefined && now !== before;
             return (
               <li key={agent.runtime} className="flex items-center gap-2 text-label font-normal text-ink-muted">
                 {changed ? (
@@ -1602,12 +1607,20 @@ function describeCondition(node: ConditionNode, depth = 0): string {
   return summarizeCondition(node, depth);
 }
 
-/* The tools a pipeline's first block gates, when that block is the
- * starting rule's shape (tool name is one of a list); nothing otherwise,
- * because rules the assistant wrote do not reduce to a list. */
-function gatedToolsOf(revision: RequestApprovalPipelineRevision | null): Set<string> | null {
-  const first = revision?.blocks[0];
-  if (!first || first.type !== "cel") return revision ? new Set() : null;
+/* One runtime's rules: the top-level branch of the entry pipeline whose
+ * block id is the runtime, as the guided setup writes it. */
+function runtimeBranchOf(entry: RequestApprovalPipelineRevision | null, runtime: string): StoredBranchBlock | undefined {
+  const block = entry?.blocks.find((candidate) => candidate.id === runtime);
+  return block?.type === "branch" ? block : undefined;
+}
+
+/* The tools a runtime's branch gates, when its first block is the
+ * starting rule's shape (tool name is one of a list); an empty set
+ * otherwise, because rules the assistant wrote do not reduce to a list,
+ * and a missing branch gates nothing yet. */
+function gatedToolsOf(entry: RequestApprovalPipelineRevision | null, runtime: string): Set<string> {
+  const first = runtimeBranchOf(entry, runtime)?.config.blocks[0];
+  if (!first || first.type !== "cel") return new Set();
   const when = first.config.when as { field?: string; operator?: string; value?: unknown };
   if (when.field !== "/request/tool" || when.operator !== "in" || !Array.isArray(when.value)) {
     return new Set();
@@ -1761,7 +1774,7 @@ function turnOutcome(message: OnboardingAssistantMessage): { tone: "approve" | "
   const actions = message.actions ?? [];
   if (message.status !== "done" || actions.length === 0) return null;
   const written = actions
-    .filter((action) => action.ok && action.tool === "update_pipeline")
+    .filter((action) => action.ok && action.tool === "update_agent_rules")
     .map((action) => /^Wrote (.+?)'s rules/.exec(action.summary)?.[1] ?? "")
     .filter(Boolean);
   if (written.length > 0) {

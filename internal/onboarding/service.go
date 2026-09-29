@@ -51,13 +51,18 @@ type AgentMinter interface {
 }
 
 // PipelineManager is the slice of the pipeline management service
-// provisioning and the assistant's test check need.
+// provisioning and the assistant need, keyed by pipeline: the setup
+// writes the entry pipeline alone.
 type PipelineManager interface {
-	GetActive(ctx context.Context, principal domain.Principal, agentSlug domain.AgentSlug) (approvalpipeline.PipelineRevision, error)
-	CreateRevision(ctx context.Context, principal domain.Principal, agentSlug domain.AgentSlug, definitions []approvalblock.Definition, defaultEscalationPath string) (approvalpipeline.PipelineRevision, error)
-	Activate(ctx context.Context, principal domain.Principal, agentSlug domain.AgentSlug, revision int64, expectedActiveRevision int64) (approvalpipeline.PipelineRevision, error)
-	Preview(ctx context.Context, principal domain.Principal, agentSlug domain.AgentSlug, definitions []approvalblock.Definition, defaultEscalationPath string, sample approvalpipeline.PreviewSample) (approvalpipeline.PreviewResult, error)
+	GetActive(ctx context.Context, principal domain.Principal, pipelineKey string) (approvalpipeline.PipelineRevision, error)
+	CreateRevision(ctx context.Context, principal domain.Principal, pipelineKey, name string, definitions []approvalblock.Definition, defaultEscalationPath string) (approvalpipeline.PipelineRevision, error)
+	Activate(ctx context.Context, principal domain.Principal, pipelineKey string, revision int64, expectedActiveRevision int64) (approvalpipeline.PipelineRevision, error)
+	Preview(ctx context.Context, principal domain.Principal, pipelineKey string, definitions []approvalblock.Definition, defaultEscalationPath string, sample approvalpipeline.PreviewSample) (approvalpipeline.PreviewResult, error)
 }
+
+// ErrEntryPipelineChanged means the entry pipeline changed between the
+// setup's read and its write; the page retries from a fresh read.
+var ErrEntryPipelineChanged = errors.New("the entry pipeline changed while the rules were being written")
 
 // PathManager is the slice of the escalation path management service
 // provisioning needs.
@@ -89,8 +94,8 @@ type Service struct {
 	// The setup assistant's two halves, registered after construction:
 	// the deployment's model by the composition root and the management
 	// tool catalog by the HTTP layer that owns it.
-	assistantModel application.ToolUseModel
-	assistantTools AssistantTools
+	assistantModel   application.ToolUseModel
+	assistantGrammar AssistantGrammar
 }
 
 func NewService(sessions application.OnboardingRepository, identities application.IdentityRepository, agents application.AgentRepository, roles application.RoleRepository,
@@ -115,6 +120,13 @@ func Authorized(principal domain.Principal) bool {
 	}
 	for _, permission := range domain.OnboardingPermissions {
 		if !authorization.HoldsAnywhere(principal, permission) {
+			return false
+		}
+	}
+	// The setup writes the entry pipeline, an organization-wide act: a
+	// grant scoped to one pipeline does not reach it.
+	for _, permission := range []domain.Permission{domain.PermissionPipelineWrite, domain.PermissionPipelineActivate} {
+		if authorization.Check(principal, permission, domain.OrganizationResource()) != nil {
 			return false
 		}
 	}
@@ -300,8 +312,8 @@ func (e *StepError) Error() string { return e.Err.Error() }
 func (e *StepError) Unwrap() error { return e.Err }
 
 // Provision writes the generated objects under the person's own
-// authority: the path and one agent with its starting pipeline per
-// selected runtime. It needs the person to have passed
+// authority: the path, one agent per selected runtime, and one branch per
+// runtime in the entry pipeline holding its starting rules. It needs the person to have passed
 // the notification steps, because the path it writes notifies them. On
 // failure the session keeps its status and records the error.
 func (s *Service) Provision(ctx context.Context, principal domain.Principal) (domain.OnboardingSession, error) {
@@ -355,20 +367,90 @@ func (s *Service) provision(ctx context.Context, principal domain.Principal, ses
 		EscalationPathKey: pathKey, EscalationPathName: PathName(displayName), EscalationPathRevision: pathRevision,
 		Pipelines: map[string]domain.OnboardingGeneratedPipeline{},
 	}
+	// The agent exists before its branch names it, so a request from it
+	// can enter the branch; enrollment later reuses the agent.
 	for _, runtime := range session.SelectedRuntimes {
-		suggested := SuggestedToolNames(session, runtime)
-		// An agent type's pipeline exists from its first agent, so the
-		// agent comes first; enrollment later reuses it.
 		if _, err := s.ensureAgent(ctx, principal, runtime); err != nil {
 			return domain.OnboardingGenerated{}, fmt.Errorf("agent for %s: %w", runtime, err)
 		}
-		result, err := s.ensurePipeline(ctx, principal, domain.AgentSlug(runtime), suggested, pathKey)
-		if err != nil {
-			return domain.OnboardingGenerated{}, fmt.Errorf("pipeline for %s: %w", runtime, err)
+	}
+	current, err := s.readEntry(ctx, principal)
+	if err != nil {
+		return domain.OnboardingGenerated{}, fmt.Errorf("entry pipeline: %w", err)
+	}
+	// The entry's default is organization-wide; the setup fills it only
+	// when nobody has.
+	if current.defaultPath == "" {
+		current.defaultPath = pathKey
+	}
+	branches := make([]approvalblock.Definition, 0, len(session.SelectedRuntimes))
+	for _, runtime := range session.SelectedRuntimes {
+		if existing, ok := RuntimeBranchOf(current.blocks, runtime); ok && !StartingShape(runtime, existing) {
+			// The person or the assistant already wrote this runtime's
+			// rules; a later setup on another machine leaves them alone.
+			continue
 		}
-		generated.Pipelines[runtime] = result
+		selected := Union(GatedToolsOf(current.blocks, runtime), SuggestedToolNames(session, runtime))
+		branches = append(branches, RuntimeBranch(runtime, StartingBlocks(runtime, selected, pathKey), pathKey))
+	}
+	activated, err := s.writeEntry(ctx, principal, current, EntryBlocks(current.blocks, branches...))
+	if err != nil {
+		return domain.OnboardingGenerated{}, fmt.Errorf("entry pipeline: %w", err)
+	}
+	for _, runtime := range session.SelectedRuntimes {
+		generated.Pipelines[runtime] = domain.OnboardingGeneratedPipeline{
+			PipelineKey: EntryPipelineKey, BranchKey: RuntimeBranchKey(runtime),
+			Revision: activated, ReplacedActiveRevision: current.revision,
+		}
 	}
 	return generated, nil
+}
+
+// entryRevision is the active entry document with the parts a write
+// needs: the revision the write is guarded by, the default the write
+// keeps, and the blocks it upserts into.
+type entryRevision struct {
+	revision    int64
+	name        string
+	defaultPath string
+	blocks      []approvalblock.Definition
+}
+
+func (s *Service) readEntry(ctx context.Context, principal domain.Principal) (entryRevision, error) {
+	active, err := s.pipelines.GetActive(ctx, principal, EntryPipelineKey)
+	if err != nil {
+		return entryRevision{}, err
+	}
+	blocks := make([]approvalblock.Definition, len(active.Blocks))
+	for index, block := range active.Blocks {
+		blocks[index] = block.Definition
+	}
+	return entryRevision{revision: active.Revision.Revision, name: active.Revision.Name, defaultPath: active.Revision.DefaultEscalationPath, blocks: blocks}, nil
+}
+
+// writeEntry creates and activates an entry revision holding blocks,
+// guarded by the revision the read saw, and answers the active revision.
+// A document identical to the current one writes nothing.
+func (s *Service) writeEntry(ctx context.Context, principal domain.Principal, current entryRevision, blocks []approvalblock.Definition) (int64, error) {
+	active, err := s.pipelines.GetActive(ctx, principal, EntryPipelineKey)
+	if err != nil {
+		return 0, err
+	}
+	if active.Revision.DefaultEscalationPath == current.defaultPath && SameDocument(current.blocks, blocks) && active.Revision.Revision == current.revision {
+		return current.revision, nil
+	}
+	created, err := s.pipelines.CreateRevision(ctx, principal, EntryPipelineKey, current.name, blocks, current.defaultPath)
+	if err != nil {
+		return 0, err
+	}
+	activated, err := s.pipelines.Activate(ctx, principal, EntryPipelineKey, created.Revision.Revision, current.revision)
+	if errors.Is(err, domain.ErrPreconditionFailed) {
+		return 0, fmt.Errorf("%w: %w", ErrEntryPipelineChanged, err)
+	}
+	if err != nil {
+		return 0, err
+	}
+	return activated.Revision.Revision, nil
 }
 
 // ensurePath reuses a path that already notifies the person, else
@@ -413,31 +495,6 @@ func (s *Service) ensurePath(ctx context.Context, principal domain.Principal, di
 		}
 	}
 	return "", 0, fmt.Errorf("no free escalation path key near %s: %w", base, domain.ErrConflict)
-}
-
-// ensurePipeline writes and activates the agent type's pipeline, uniting
-// the gated list with the active revision's. The agent type's pipeline
-// exists since its agent was enrolled (an empty revision at first), so
-// there is always an active revision to replace.
-func (s *Service) ensurePipeline(ctx context.Context, principal domain.Principal, agentSlug domain.AgentSlug, selected []string, pathKey string) (domain.OnboardingGeneratedPipeline, error) {
-	active, err := s.pipelines.GetActive(ctx, principal, agentSlug)
-	if err != nil {
-		return domain.OnboardingGeneratedPipeline{}, err
-	}
-	expected := active.Revision.Revision
-	definitions := make([]approvalblock.Definition, len(active.Blocks))
-	for index, block := range active.Blocks {
-		definitions[index] = block.Definition
-	}
-	created, err := s.pipelines.CreateRevision(ctx, principal, agentSlug, PipelineBlocks(Union(GatedToolsOf(definitions), selected), pathKey), pathKey)
-	if err != nil {
-		return domain.OnboardingGeneratedPipeline{}, err
-	}
-	activated, err := s.pipelines.Activate(ctx, principal, agentSlug, created.Revision.Revision, expected)
-	if err != nil {
-		return domain.OnboardingGeneratedPipeline{}, err
-	}
-	return domain.OnboardingGeneratedPipeline{Revision: activated.Revision.Revision, ReplacedActiveRevision: expected}, nil
 }
 
 // Complete closes the flow. Skipping needs only the authority to connect
@@ -535,11 +592,11 @@ func (s *Service) ConfirmChannels(ctx context.Context, principal domain.Principa
 	})
 }
 
-// SetGatedTools replaces one runtime's rules with the starting shape over
-// the tools the person picked by hand: the named tools wait for them and
-// everything else runs. It is the manual alternative to the assistant,
-// so it needs the agents to exist; an empty list makes every call run.
-// The test command follows the choice.
+// SetGatedTools replaces one runtime's branch of the entry pipeline with
+// the starting shape over the tools the person picked by hand: the named
+// tools wait for them and everything else runs. It is the manual
+// alternative to the assistant, so it needs the agents to exist; an
+// empty list makes every call run. The test command follows the choice.
 func (s *Service) SetGatedTools(ctx context.Context, principal domain.Principal, runtime string, tools []string) (domain.OnboardingSession, error) {
 	if err := authorize(principal); err != nil {
 		return domain.OnboardingSession{}, err
@@ -575,16 +632,12 @@ func (s *Service) SetGatedTools(ctx context.Context, principal domain.Principal,
 		names = append(names, tool.Name)
 	}
 	pathKey := session.Generated.EscalationPathKey
-	agentSlug := domain.AgentSlug(runtime)
-	active, err := s.pipelines.GetActive(ctx, principal, agentSlug)
+	current, err := s.readEntry(ctx, principal)
 	if err != nil {
 		return domain.OnboardingSession{}, err
 	}
-	created, err := s.pipelines.CreateRevision(ctx, principal, agentSlug, PipelineBlocks(names, pathKey), pathKey)
-	if err != nil {
-		return domain.OnboardingSession{}, err
-	}
-	if _, err := s.pipelines.Activate(ctx, principal, agentSlug, created.Revision.Revision, active.Revision.Revision); err != nil {
+	branch := RuntimeBranch(runtime, StartingBlocks(runtime, names, pathKey), pathKey)
+	if _, err := s.writeEntry(ctx, principal, current, EntryBlocks(current.blocks, branch)); err != nil {
 		return domain.OnboardingSession{}, err
 	}
 	commands := map[string]domain.OnboardingTestCommand{}

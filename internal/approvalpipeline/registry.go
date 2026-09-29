@@ -95,6 +95,16 @@ func NewBlockRegistry(options ...BlockRegistryOption) *BlockRegistry {
 			return compiled, nil
 		},
 	})
+	registry.register(blockruntime.Runtime{
+		Type: approvalblock.TypeDelegate, ConfigVersion: delegateConfigVersion, Fingerprint: DelegateRuntimeFingerprint,
+		Compile: func(definition approvalblock.Definition) (RequestApprovalBlock, error) {
+			compiled, err := CompileDelegateBlock(definition)
+			if err != nil {
+				return nil, err
+			}
+			return compiled, nil
+		},
+	})
 	for _, runtime := range registry.extra {
 		if !approvalblock.KnownType(runtime.Type) || runtime.Compile == nil {
 			panic(fmt.Sprintf("approvalpipeline: runtime %q needs a registered kind and a compiler", runtime.Type))
@@ -212,9 +222,13 @@ func (registry *BlockRegistry) compileDefinitions(definitions []approvalblock.De
 			Key: definition.ID, Executor: block, Asynchronous: runtime.Asynchronous,
 			EscalationPath: definition.EscalationPath(), Parent: node.Parent, End: node.End,
 		}
-		if definition.Type == approvalblock.TypeBranch {
+		switch definition.Type {
+		case approvalblock.TypeBranch:
 			compiled[index].Branch = true
 			compiled[index].Reason = definition.Branch.Reason
+		case approvalblock.TypeDelegate:
+			compiled[index].Delegate = true
+			compiled[index].PipelineKey = definition.Delegate.PipelineKey
 		}
 	}
 	return compiled, nil
