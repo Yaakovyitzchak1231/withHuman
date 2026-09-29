@@ -646,7 +646,7 @@ export function AgentScreen({ page }: { page: AgentPage }) {
           })
         }
       >
-        <TabsList aria-label="Agent sections" className="gap-6 overflow-x-auto">
+        <TabsList aria-label="Agent sections" className="gap-6 overflow-x-auto overflow-y-hidden">
           <Tab value="overview" className="px-0">
             Overview
           </Tab>
