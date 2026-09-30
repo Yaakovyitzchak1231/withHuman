@@ -50,15 +50,13 @@ decision_trace_id=${WITHHUMAN_SMOKE_DECISION_REQUEST_ID:-smoke-decision-$unique}
 # token, accept as a new user with a set password, then manage the
 # membership. The enriched /me proves who is signed in.
 invitee_email="invitee-$unique@example.com"
-reviewer_policy='{"scope_kind":"organization","resource_ids":[],"permissions":["request.read","request.claim","request.decide"]}'
-auditor_policy='{"scope_kind":"organization","resource_ids":[],"permissions":["request.read.unrouted"]}'
 invitation=$(curl --silent --fail --cookie "$cookie_jar" --header 'Content-Type: application/json' \
-  --data "{\"email\":\"$invitee_email\",\"permission_policies\":[$reviewer_policy]}" "$app_api/invitations")
+  --data "{\"email\":\"$invitee_email\",\"role\":\"reviewer\"}" "$app_api/invitations")
 invitation_id=$(printf '%s' "$invitation" | jq -r .invitation.id)
 invite_url=$(printf '%s' "$invitation" | jq -r .invite_url)
 invite_token=${invite_url##*/invite/}
 duplicate_invite_status=$(curl --silent --output /dev/null --write-out '%{http_code}' --cookie "$cookie_jar" \
-  --header 'Content-Type: application/json' --data "{\"email\":\"$invitee_email\",\"permission_policies\":[$reviewer_policy]}" "$app_api/invitations")
+  --header 'Content-Type: application/json' --data "{\"email\":\"$invitee_email\",\"role\":\"reviewer\"}" "$app_api/invitations")
 test "$duplicate_invite_status" = "409"
 
 curl --silent --fail --header 'Content-Type: application/json' \
@@ -84,12 +82,12 @@ curl --silent --fail --header 'Content-Type: application/json' \
 
 member_id=$(curl --silent --fail --cookie "$cookie_jar" "$app_api/members" \
   | jq -r --arg email "$invitee_email" '.members[] | select(.email == $email) | .id')
-curl --silent --fail --cookie "$cookie_jar" --header 'Content-Type: application/json' \
-  --header "Idempotency-Key: audit-$unique" --data "$auditor_policy" \
-  "$app_api/members/$member_id/permission_policies" | jq -e '.permissions == ["request.read.unrouted"]' >/dev/null
+curl --silent --fail --cookie "$cookie_jar" --request PUT --header 'Content-Type: application/json' \
+  --data '{"role":"auditor"}' "$app_api/members/$member_id/role" \
+  | jq -e '[.member.assignments[].built_in_role] == ["auditor"]' >/dev/null
 self_patch_status=$(curl --silent --output /dev/null --write-out '%{http_code}' --cookie "$invitee_jar" \
-  --header 'Content-Type: application/json' --header "Idempotency-Key: self-$unique" \
-  --data "$reviewer_policy" "$app_api/members/$member_id/permission_policies")
+  --request PUT --header 'Content-Type: application/json' \
+  --data '{"role":"owner"}' "$app_api/members/$member_id/role")
 test "$self_patch_status" = "403"
 curl --silent --fail --cookie "$cookie_jar" --request PATCH --header 'Content-Type: application/json' \
   --data '{"status":"suspended"}' "$app_api/members/$member_id" >/dev/null
@@ -101,7 +99,7 @@ curl --silent --fail --cookie "$cookie_jar" --request PATCH --header 'Content-Ty
 # Resend rotates the token; revoke ends redemption.
 second_email="invitee2-$unique@example.com"
 second=$(curl --silent --fail --cookie "$cookie_jar" --header 'Content-Type: application/json' \
-  --data "{\"email\":\"$second_email\",\"permission_policies\":[$auditor_policy]}" "$app_api/invitations")
+  --data "{\"email\":\"$second_email\",\"role\":\"auditor\"}" "$app_api/invitations")
 second_id=$(printf '%s' "$second" | jq -r .invitation.id)
 old_url=$(printf '%s' "$second" | jq -r .invite_url)
 old_token=${old_url##*/invite/}

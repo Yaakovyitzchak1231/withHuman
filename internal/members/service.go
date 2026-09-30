@@ -337,6 +337,29 @@ func (s *Service) UpdateMemberAssignments(ctx context.Context, principal domain.
 	})
 }
 
+// RoleGrant is the grant a predefined role makes: the role everywhere in
+// the organization. The agent's role is never a person's.
+func RoleGrant(role domain.Role) (domain.AssignmentSpec, error) {
+	def, ok := domain.BuiltInRole(role)
+	if !ok || !domain.ValidRole(role) {
+		return domain.AssignmentSpec{}, fmt.Errorf("role must be owner, admin, reviewer, or auditor: %w", domain.ErrInvalid)
+	}
+	return domain.AssignmentSpec{RoleID: def.ID, ScopeKind: domain.ScopeOrganization}, nil
+}
+
+// SetMemberRole gives a member one predefined role, replacing every grant
+// they hold directly (custom permission policies included); what they
+// inherit from teams and what the directory manages stay. It shares
+// UpdateMemberAssignments' gate: the kernel, the owner rule, fresh
+// authentication for a dangerous role, and the last-owner invariant.
+func (s *Service) SetMemberRole(ctx context.Context, principal domain.Principal, membershipID domain.ID, role domain.Role) (domain.Membership, error) {
+	grant, err := RoleGrant(role)
+	if err != nil {
+		return domain.Membership{}, err
+	}
+	return s.UpdateMemberAssignments(ctx, principal, membershipID, []domain.AssignmentSpec{grant})
+}
+
 // UpdateTeamAssignments replaces the roles a team holds with the given
 // set; its members inherit them live. permission_policy.write is checked
 // per grant at the grant's own scope by the kernel (its registry resource

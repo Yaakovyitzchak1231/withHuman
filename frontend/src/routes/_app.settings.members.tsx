@@ -4,7 +4,7 @@ import { api } from "../api";
 import { useAccess } from "../app/authorization";
 import { MembersScreen, type MembersPage } from "../app/members";
 import { useSession } from "../app/principal";
-import type { Invitation, Member, Team } from "../types";
+import type { Invitation, Member, RoleDescriptor, Team } from "../types";
 
 export const Route = createFileRoute("/_app/settings/members")({
   /* The roster, the team names, and the pending invitations arrive
@@ -23,9 +23,14 @@ export const Route = createFileRoute("/_app/settings/members")({
       id
         ? api.permissionPolicies("members", id).catch(() => null)
         : Promise.resolve(null),
+      api.roles().then(
+        (result) => result.roles,
+        () => [] as RoleDescriptor[],
+      ),
     ]).then(
-      ([members, teams, invitations, permissionOptions]) => ({
+      ([members, teams, invitations, permissionOptions, roles]) => ({
         permissionOptions,
+        roles,
         members: members.members,
         teams: teams.teams,
         invitations: invitations.invitations,
@@ -33,6 +38,7 @@ export const Route = createFileRoute("/_app/settings/members")({
       }),
       (reason: unknown) => ({
         permissionOptions: null,
+        roles: [] as RoleDescriptor[],
         members: [] as Member[],
         teams: [] as Team[],
         invitations: [] as Invitation[],

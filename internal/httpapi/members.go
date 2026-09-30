@@ -53,6 +53,7 @@ type roleSummary struct {
 	Key         domain.Role         `json:"key"`
 	Name        string              `json:"name"`
 	Permissions []domain.Permission `json:"permissions"`
+	BuiltIn     bool                `json:"built_in"`
 }
 
 // roleIndex loads the roles the organization can see once, so a list of
@@ -69,13 +70,17 @@ func (a *API) roleIndex(ctx context.Context, organizationID domain.ID) (map[doma
 		return nil, err
 	}
 	for _, role := range roles {
-		index[role.ID] = roleSummary{ID: role.ID, Key: role.Key, Name: role.Name, Permissions: role.Permissions}
+		index[role.ID] = roleSummary{ID: role.ID, Key: role.Key, Name: role.Name, Permissions: role.Permissions, BuiltIn: role.BuiltIn}
 	}
 	return index, nil
 }
 
-// grantView is an invitation grant with its role resolved for display.
+// grantView is an invitation grant with its role resolved for display:
+// the predefined role's key and name when it grants one, and always the
+// permissions it carries.
 type grantView struct {
+	Role        domain.Role         `json:"role,omitempty"`
+	RoleName    string              `json:"role_name,omitempty"`
 	Permissions []domain.Permission `json:"permissions"`
 	ScopeKind   domain.ScopeKind    `json:"scope_kind"`
 	ScopeID     string              `json:"scope_id,omitempty"`
@@ -84,11 +89,16 @@ type grantView struct {
 func toGrantViews(specs []domain.AssignmentSpec, roles map[domain.ID]roleSummary) []grantView {
 	views := make([]grantView, 0, len(specs))
 	for _, spec := range specs {
-		permissions := roles[spec.RoleID].Permissions
+		role := roles[spec.RoleID]
+		permissions := role.Permissions
 		if permissions == nil {
 			permissions = []domain.Permission{}
 		}
-		views = append(views, grantView{Permissions: permissions, ScopeKind: spec.ScopeKind, ScopeID: spec.ScopeID})
+		view := grantView{Permissions: permissions, ScopeKind: spec.ScopeKind, ScopeID: spec.ScopeID}
+		if def, ok := domain.BuiltInRoleByID(spec.RoleID); ok {
+			view.Role, view.RoleName = def.Key, def.Name
+		}
+		views = append(views, view)
 	}
 	return views
 }
@@ -219,6 +229,48 @@ func (a *API) removeMember(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
+// setMemberRole gives a member one predefined role in place of every
+// grant they hold directly.
+func (a *API) setMemberRole(c *gin.Context) {
+	var request struct {
+		Role domain.Role `json:"role" binding:"required"`
+	}
+	if !bindStrict(c, &request) {
+		return
+	}
+	membership, err := a.members.SetMemberRole(c.Request.Context(), currentPrincipal(c), domain.ID(c.Param("id")), request.Role)
+	if err != nil {
+		a.writeError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"member": membership})
+}
+
+// roleView is a predefined role as the pickers offer it.
+type roleView struct {
+	Key         domain.Role         `json:"key"`
+	Name        string              `json:"name"`
+	Description string              `json:"description"`
+	Permissions []domain.Permission `json:"permissions"`
+	Dangerous   bool                `json:"dangerous"`
+}
+
+// listRoles answers the predefined roles a person can hold. Every member
+// may read them: they are the organization's vocabulary for access, the
+// same in every organization.
+func (a *API) listRoles(c *gin.Context) {
+	definitions := domain.HumanRoles()
+	views := make([]roleView, 0, len(definitions))
+	for _, def := range definitions {
+		dangerous := false
+		for _, key := range def.Permissions {
+			dangerous = dangerous || domain.PermissionIsDangerous(key)
+		}
+		views = append(views, roleView{Key: def.Key, Name: def.Name, Description: def.Description, Permissions: def.Permissions, Dangerous: dangerous})
+	}
+	c.JSON(http.StatusOK, gin.H{"roles": views})
+}
+
 func (a *API) listInvitations(c *gin.Context) {
 	principal := currentPrincipal(c)
 	invitations, err := a.members.ListInvitations(c.Request.Context(), principal, queryInt(c, "limit", 100))
@@ -238,9 +290,13 @@ func (a *API) listInvitations(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"invitations": views})
 }
 
+// createInvitation invites a person with a predefined role, or, where
+// the edition offers custom permissions, with explicit permission
+// policies; exactly one of the two.
 func (a *API) createInvitation(c *gin.Context) {
 	var request struct {
 		Email    string                        `json:"email" binding:"required"`
+		Role     domain.Role                   `json:"role"`
 		Policies []domain.PermissionPolicySpec `json:"permission_policies"`
 	}
 	if !bindStrict(c, &request) {
@@ -251,10 +307,27 @@ func (a *API) createInvitation(c *gin.Context) {
 		a.writeError(c, err)
 		return
 	}
-	specs, err := a.members.BuildPolicyAssignments(c.Request.Context(), principal, request.Policies, false)
-	if err != nil {
-		a.writeError(c, err)
+	var specs []domain.AssignmentSpec
+	switch {
+	case (request.Role == "") == (len(request.Policies) == 0):
+		a.writeError(c, fmt.Errorf("choose a role or permission policies, not both: %w", domain.ErrInvalid))
 		return
+	case request.Role != "":
+		grant, err := members.RoleGrant(request.Role)
+		if err != nil {
+			a.writeError(c, err)
+			return
+		}
+		specs = []domain.AssignmentSpec{grant}
+	case !a.config.CustomPermissions:
+		a.writeError(c, domain.ErrCustomPermissionsUnavailable)
+		return
+	default:
+		var err error
+		if specs, err = a.members.BuildPolicyAssignments(c.Request.Context(), principal, request.Policies, false); err != nil {
+			a.writeError(c, err)
+			return
+		}
 	}
 	result, err := a.members.CreateInvitation(c.Request.Context(), principal, request.Email, specs)
 	if err != nil {

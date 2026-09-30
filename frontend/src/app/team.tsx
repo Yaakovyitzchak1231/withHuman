@@ -17,6 +17,7 @@ import { api } from "../api";
 import type { Team, TeamMember } from "../types";
 
 import { useAccess } from "./authorization";
+import { useCustomPermissions } from "./roles";
 import { ReferenceChip } from "./reference-chip";
 import { NameDialog, TeamMembersDialog } from "./teams";
 import { useTitle } from "./use-title";
@@ -69,7 +70,12 @@ export function TeamScreen({
   /* Granting a team a role is the same checked action as granting a
    * person one, so it gates on the same permission. */
   const { holdsAnywhere, isOwner } = useAccess();
-  const canAssign = !archived && holdsAnywhere("permission_policy.write");
+  /* Team permissions are custom permission policies, which only an
+   * edition that switches them on offers; predefined roles are held by
+   * people. */
+  const customPermissions = useCustomPermissions();
+  const canAssign =
+    customPermissions && !archived && holdsAnywhere("permission_policy.write");
   const [editingMembers, setEditingMembers] = useState(false);
 
   const [renaming, setRenaming] = useState(false);
@@ -188,39 +194,41 @@ export function TeamScreen({
         )}
       </SettingsSection>
 
-      <SettingsSection
-        title="Permissions"
-        description="Permissions every member inherits while they belong to this team."
-        inset={team.assignments.length === 0 ? "none" : "rows"}
-        action={
-          canAssign ? (
-            <Button size="sm" variant="neutral" onClick={() => void navigate({ to: "/settings/permissions/$kind/$principalId", params: { kind: "teams", principalId: team.id } })}>
-              Edit permissions
-            </Button>
-          ) : undefined
-        }
-      >
-        {team.assignments.length === 0 ? (
-          <EmptyState
-            title="No permissions yet"
-            description="Members keep their direct permissions and access from other teams."
-          />
-        ) : (
-          team.assignments.map((assignment) => (
-            <SettingRow
-              key={assignment.id}
-              label={<AssignmentBadge assignment={assignment} holder="team" />}
-              description={
-                assignment.scope_kind === "organization"
-                  ? "Across the organization."
-                  : assignment.scope_name
-                    ? `Scoped to ${assignment.scope_name}.`
-                    : undefined
-              }
+      {customPermissions || team.assignments.length > 0 ? (
+        <SettingsSection
+          title="Permissions"
+          description="Permissions every member inherits while they belong to this team."
+          inset={team.assignments.length === 0 ? "none" : "rows"}
+          action={
+            canAssign ? (
+              <Button size="sm" variant="neutral" onClick={() => void navigate({ to: "/settings/permissions/$kind/$principalId", params: { kind: "teams", principalId: team.id } })}>
+                Edit permissions
+              </Button>
+            ) : undefined
+          }
+        >
+          {team.assignments.length === 0 ? (
+            <EmptyState
+              title="No permissions yet"
+              description="Members keep their direct permissions and access from other teams."
             />
-          ))
-        )}
-      </SettingsSection>
+          ) : (
+            team.assignments.map((assignment) => (
+              <SettingRow
+                key={assignment.id}
+                label={<AssignmentBadge assignment={assignment} holder="team" />}
+                description={
+                  assignment.scope_kind === "organization"
+                    ? "Across the organization."
+                    : assignment.scope_name
+                      ? `Scoped to ${assignment.scope_name}.`
+                      : undefined
+                }
+              />
+            ))
+          )}
+        </SettingsSection>
+      ) : null}
 
       <SettingsSection
         title="Escalation policy"

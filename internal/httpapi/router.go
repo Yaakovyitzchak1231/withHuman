@@ -52,6 +52,11 @@ type Config struct {
 	// BootstrapEnabled says the first-owner ceremony is available, so the
 	// shared frontend can offer that door without probing routes.
 	BootstrapEnabled bool
+	// CustomPermissions admits permission policy writes: a member's or
+	// team's own policies and invitations that carry them. Without it the
+	// edition offers predefined roles alone (the open edition); reported
+	// as custom_permissions_enabled.
+	CustomPermissions bool
 	// Extras are the edition's own runtime-config entries, merged into
 	// the response after core's; RuntimeConfigExtras refuses a key core
 	// reports itself.
@@ -250,6 +255,8 @@ func (a *API) router() *gin.Engine {
 	a.handle(appAPI, http.MethodGet, "/members", string(domain.PermissionMembershipRead), a.listMembers)
 	a.handle(appAPI, http.MethodPatch, "/members/:id", string(domain.PermissionMembershipWrite), a.updateMember)
 	a.handle(appAPI, http.MethodDelete, "/members/:id", string(domain.PermissionMembershipWrite), a.removeMember)
+	a.handle(appAPI, http.MethodPut, "/members/:id/role", string(domain.PermissionPolicyWrite), a.setMemberRole)
+	a.handle(appAPI, http.MethodGet, "/roles", AccessSelf, a.listRoles)
 	a.handle(appAPI, http.MethodGet, "/invitations", string(domain.PermissionMembershipInvite), a.listInvitations)
 	a.handle(appAPI, http.MethodPost, "/invitations", string(domain.PermissionMembershipInvite), a.createInvitation)
 	a.handle(appAPI, http.MethodPost, "/invitations/:id/resend", string(domain.PermissionMembershipInvite), a.resendInvitation)
@@ -420,6 +427,9 @@ func (a *API) runtimeConfig(c *gin.Context) {
 	payload := gin.H{
 		"public_origin": a.config.PublicOrigin, "version": a.config.Version,
 		"bootstrap_enabled": a.config.BootstrapEnabled,
+		// Predefined roles are always offered; custom permission
+		// policies only where the edition switched them on.
+		"custom_permissions_enabled": a.config.CustomPermissions,
 		// The guided setup's assistant needs the edition's model and the
 		// management tool catalog this layer owns.
 		"setup_assistant_enabled": a.onboarding != nil && a.onboarding.AssistantEnabled(),
@@ -440,6 +450,7 @@ func (a *API) runtimeConfig(c *gin.Context) {
 // edition's extras may not shadow them. The test keeps the two in step.
 var runtimeConfigKeys = map[string]bool{
 	"public_origin": true, "version": true, "bootstrap_enabled": true,
+	"custom_permissions_enabled": true,
 	"setup_assistant_enabled": true, "webhook_enabled": true,
 	"slack_enabled": true, "discord_enabled": true,
 	"social_providers": true,
@@ -1621,6 +1632,8 @@ func WriteError(c *gin.Context, logger *slog.Logger, err error) {
 		status, errorType, code = http.StatusForbidden, "authorization", "api_keys_disabled"
 	case errors.Is(err, domain.ErrAPIKeyScopingUnavailable):
 		status, errorType, code = http.StatusForbidden, "authorization", "api_key_scoping_unavailable"
+	case errors.Is(err, domain.ErrCustomPermissionsUnavailable):
+		status, errorType, code = http.StatusForbidden, "authorization", "custom_permissions_unavailable"
 	case errors.Is(err, domain.ErrAPIKeyNotAllowed):
 		status, errorType, code = http.StatusForbidden, "authorization", "api_key_not_allowed"
 	case errors.Is(err, domain.ErrForbidden), errors.Is(err, domain.ErrMembershipInactive), errors.Is(err, domain.ErrAgentInactive), errors.Is(err, domain.ErrAuthenticationStale), errors.Is(err, domain.ErrAuthenticationWeak), errors.Is(err, domain.ErrNotTargeted):

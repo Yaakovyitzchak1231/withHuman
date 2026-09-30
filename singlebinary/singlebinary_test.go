@@ -68,6 +68,7 @@ func TestSingleBinaryEndToEnd(t *testing.T) {
 	}, http.StatusCreated, nil)
 
 	testTeamArchiveAPI(t, api)
+	testPredefinedRolesAPI(t, api)
 	testAgentLifecycleAPI(t, api)
 
 	var agent struct {

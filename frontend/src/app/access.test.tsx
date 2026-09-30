@@ -24,6 +24,7 @@ const runtimeConfig = {
   public_origin: "http://localhost",
   version: "test",
   bootstrap_enabled: false,
+  custom_permissions_enabled: false,
   setup_assistant_enabled: false,
   webhook_enabled: false,
   slack_enabled: false,

@@ -451,6 +451,9 @@ func scanAssignment(row rowScanner, holder *string) (domain.RoleAssignment, erro
 	assignment.ID, assignment.OrganizationID = domain.ID(id), domain.ID(organizationID)
 	assignment.PrincipalKind, assignment.PrincipalID = domain.PrincipalKind(principalKind), domain.ID(principalID)
 	assignment.RoleID, assignment.RoleKey = domain.ID(roleID), domain.Role(roleKey)
+	if def, ok := domain.BuiltInRoleByID(assignment.RoleID); ok {
+		assignment.BuiltInRole = def.Key
+	}
 	assignment.ScopeKind, assignment.Source = domain.ScopeKind(scopeKind), domain.AssignmentSource(source)
 	assignment.GrantedByActorID, assignment.ViaTeamID = domain.ID(grantedBy), domain.ID(viaID)
 	return assignment, nil

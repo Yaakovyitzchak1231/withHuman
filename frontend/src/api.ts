@@ -8,6 +8,7 @@ import type {
 import type { QueueScope } from "./app/queue-search";
 import type {
   PermissionPoliciesPage, PermissionPolicy, PermissionPolicyCollection, PermissionPolicyInput,
+  RoleDescriptor, RoleKey,
   Agent,
   EnrollmentPreview,
   EnrollmentAgents,
@@ -142,6 +143,9 @@ export const api = {
       public_origin: string;
       version: string;
       bootstrap_enabled: boolean;
+      /* Whether the edition offers custom permission policies beside
+       * the predefined roles; the open edition offers roles alone. */
+      custom_permissions_enabled: boolean;
       /* Whether the guided setup can write rules from a description:
        * the deployment configured a model for the assistant. */
       setup_assistant_enabled: boolean;
@@ -499,11 +503,22 @@ export const api = {
     }),
   invitations: () =>
     request<{ invitations: Invitation[] }>(`${APP_API_BASE}/invitations`),
-  createInvitation: (email: string, permissionPolicies: PermissionPolicyInput[]) =>
+  /* A predefined role, or custom permission policies where the edition
+   * offers them; exactly one. */
+  createInvitation: (
+    email: string,
+    access: { role: RoleKey } | { permission_policies: PermissionPolicyInput[] },
+  ) =>
     request<{ invitation: Invitation; invite_url?: string }>(
       `${APP_API_BASE}/invitations`,
-      { method: "POST", body: JSON.stringify({ email, permission_policies: permissionPolicies }) },
+      { method: "POST", body: JSON.stringify({ email, ...access }) },
     ),
+  roles: () => request<{ roles: RoleDescriptor[] }>(`${APP_API_BASE}/roles`),
+  setMemberRole: (id: string, role: RoleKey) =>
+    request<{ member: unknown }>(`${APP_API_BASE}/members/${id}/role`, {
+      method: "PUT",
+      body: JSON.stringify({ role }),
+    }),
   resendInvitation: (id: string) =>
     request<{ invitation: Invitation; invite_url?: string }>(
       `${APP_API_BASE}/invitations/${id}/resend`,

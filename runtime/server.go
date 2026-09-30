@@ -98,6 +98,11 @@ type ServerOptions struct {
 	NotificationChannels []application.NotificationChannel
 	// APIKeyScopingEnabled enables edition-entitled API key permission scoping.
 	APIKeyScopingEnabled bool
+	// CustomPermissionsEnabled offers custom permission policies beside the
+	// predefined roles: a member's or team's own policies and invitations
+	// that carry them. The open edition leaves it off and offers the
+	// predefined roles alone; the hosted edition turns it on.
+	CustomPermissionsEnabled bool
 	// RegisterRoutes lets an edition add routes to the composed router
 	// before the server starts. Additive routes only; the shared HTTP
 	// contract is never forked.
@@ -374,7 +379,7 @@ func NewServer(ctx context.Context, options ServerOptions) (*Server, error) {
 		Frontend: options.Frontend, Logger: logger,
 		Config: httpapi.Config{
 			PublicOrigin: cfg.PublicOrigin, CookieSecure: cookieSecure(cfg.PublicOrigin), Version: options.Version,
-			BootstrapEnabled: cfg.BootstrapSecret != "", Extras: extras,
+			BootstrapEnabled: cfg.BootstrapSecret != "", Extras: extras, CustomPermissions: options.CustomPermissionsEnabled,
 			CLIDownloadURL: cfg.CLIDownloadURL, AgentMCPServers: options.AgentMCPServers,
 		},
 	})
