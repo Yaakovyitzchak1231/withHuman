@@ -11,6 +11,7 @@ import {
   DialogTitle,
 } from "@/ds/components/dialog";
 import { RadioGroup, RadioOption } from "@/ds/components/radio-group";
+import { PersonIcon, ShieldIcon, SettingsIcon } from "@/ds/icons";
 import type { RoleAssignment, RoleDescriptor, RoleKey } from "../types";
 import { useRuntimeConfig } from "./use-runtime-config";
 
@@ -68,11 +69,22 @@ export function RoleBadges({
   return (
     <div className="flex flex-wrap items-center gap-1.5">
       {held.map((key) => (
-        <Badge key={key} tone={key === "owner" ? "accent" : "neutral"}>
+        <Badge
+          key={key}
+          icon={
+            key === "owner" ? (
+              <ShieldIcon width={14} height={14} />
+            ) : (
+              <PersonIcon width={14} height={14} />
+            )
+          }
+        >
           {names.get(key) ?? key}
         </Badge>
       ))}
-      {custom ? <Badge>Custom</Badge> : null}
+      {custom ? (
+        <Badge icon={<SettingsIcon width={14} height={14} />}>Custom</Badge>
+      ) : null}
     </div>
   );
 }
