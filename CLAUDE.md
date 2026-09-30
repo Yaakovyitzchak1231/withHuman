@@ -611,7 +611,9 @@ recorded in this file with both the reason and the replacement rule.
   key, refused for `entry` and while any active revision delegates to it
   (409 `request_approval_pipeline_in_use` with `uses`;
   `GET /request-approval-pipelines/{key}/uses` explains it before the
-  click), stamping every revision with `archived_at`, deactivating the
+  click; the list carries each key's `referenced_by`, the delegate blocks
+  in active revisions that name it, which the overview's Delegated from
+  column links to block by block), stamping every revision with `archived_at`, deactivating the
   active one and removing API-key assignments at `pipeline:<key>`
   (audited `request_approval_pipeline.archived`). An archived key is
   listed only with `status=archived|all`, stays readable, and refuses

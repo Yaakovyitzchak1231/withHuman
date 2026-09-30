@@ -6217,7 +6217,7 @@ components:
       type: object
       additionalProperties: false
       description: One pipeline and a summary of its history.
-      required: [pipeline_key, name, latest_revision, revision_count, latest_created_at]
+      required: [pipeline_key, name, latest_revision, revision_count, latest_created_at, referenced_by]
       properties:
         pipeline_key:
           type: string
@@ -6229,6 +6229,24 @@ components:
         revision_count: { type: integer, format: int64, minimum: 1 }
         latest_created_at: { type: string, format: date-time, description: When the newest revision was created. }
         archived_at: { type: string, format: date-time, description: "Present when the pipeline was archived: readable, never active again, its key taken for good." }
+        referenced_by:
+          type: array
+          description: "Every delegate block in an active pipeline revision that hands requests to this pipeline, the entry pipeline first, then by pipeline key and block position. Empty when no request can reach it."
+          items: { $ref: '#/components/schemas/PipelineDelegation' }
+    PipelineDelegation:
+      type: object
+      additionalProperties: false
+      description: One delegate block in an active pipeline revision.
+      required: [pipeline_key, pipeline_name, revision, block_key, block_name]
+      properties:
+        pipeline_key:
+          type: string
+          pattern: '^[a-z0-9][a-z0-9._-]{0,62}$'
+          description: The key of the pipeline holding the delegate block.
+        pipeline_name: { type: string, description: "That pipeline's name as of its active revision." }
+        revision: { type: integer, format: int64, minimum: 1, description: "The active revision holding the block." }
+        block_key: { type: string, description: "The delegate block's key, unique within the revision." }
+        block_name: { type: string, description: "The delegate block's name." }
     RequestApprovalPipelineRevisionSummary:
       type: object
       additionalProperties: false

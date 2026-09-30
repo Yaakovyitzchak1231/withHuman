@@ -11,7 +11,6 @@ import {
   ArrowUpRightIcon,
   CheckIcon,
   ChevronDownIcon,
-  CornerDownRightIcon,
   EllipsisIcon,
   InboxIcon,
   PersonIcon,
@@ -227,15 +226,11 @@ export function PipelineBranchWell({
   taken,
   blocked = false,
   label = "If conditions are met",
-  badge = "Check the blocks in this branch",
   continueLabel = "Otherwise, skip this branch and check the next block",
   children,
 }: {
   /* The branch's name, for the well's accessible label. */
   name: string;
-  /* What the elbow's chip says the request does: check the branch's
-   * blocks, or continue in a delegated pipeline. */
-  badge?: ReactNode;
   /* 1 for a branch on a pipeline's own rail, 2 for one inside it, and so
    * on; decides the well's surface level. */
   depth: number;
@@ -265,17 +260,8 @@ export function PipelineBranchWell({
           <span className={cn("absolute top-1/2 right-0 left-0 h-px", line)} />
           <span className={cn("absolute top-1/2 -right-px bottom-0 w-px", line)} />
         </span>
-        {/* On a narrow screen the badge wraps under the label rather
-          * than pushing past the well. */}
-        <span className="flex min-w-0 flex-wrap items-center gap-x-1 py-1 pl-2">
+        <span className="flex min-w-0 items-center py-1 pl-2">
           <PipelineFlowLabel label={label} matched={entered} />
-          <Badge
-            tone="accent"
-            icon={<CornerDownRightIcon width={13} height={13} />}
-            className="min-w-0 max-w-full"
-          >
-            <span className="truncate">{badge}</span>
-          </Badge>
         </span>
       </div>
       <div className="flex">
