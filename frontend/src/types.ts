@@ -915,6 +915,19 @@ export interface RequestApprovalPipelineSummary {
   /* Present when the pipeline was archived: readable, never active
    * again, its key never reused. */
   archived_at?: string;
+  /* Every delegate block in an active revision that hands requests to
+   * this pipeline, the entry pipeline's first. */
+  referenced_by: PipelineDelegation[];
+}
+
+/* One delegate block in an active pipeline revision, named with its
+ * pipeline. */
+export interface PipelineDelegation {
+  pipeline_key: string;
+  pipeline_name: string;
+  revision: number;
+  block_key: string;
+  block_name: string;
 }
 
 export interface RequestApprovalPipelineRevisionSummary {

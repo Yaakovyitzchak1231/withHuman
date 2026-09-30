@@ -587,7 +587,7 @@ export function PolicyBuilderSection() {
           </div>
           <p className="text-micro text-ink-muted">
             If conditions are met, the rail turns right and drops through an elbow into an
-            indented well that holds the branch's blocks; the accent badge says so. The parent
+            indented well that holds the branch's blocks. The parent
             rail keeps running down to the left of the well and continues under it: Otherwise,
             skip this branch and check the next block (or the rail's own last words when the
             branch comes last). A test run lights the elbow when the request entered and the skip

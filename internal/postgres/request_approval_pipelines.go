@@ -208,9 +208,56 @@ func (s *Store) ListRequestApprovalPipelineSummaries(ctx context.Context, input 
 			&summary.RevisionCount, &summary.LatestCreatedAt, &summary.ArchivedAt); err != nil {
 			return nil, err
 		}
+		summary.ReferencedBy = make([]domain.PipelineDelegation, 0)
 		summaries = append(summaries, summary)
 	}
-	return summaries, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	if err := attachPipelineDelegations(ctx, s.pool, input.OrganizationID, summaries); err != nil {
+		return nil, err
+	}
+	return summaries, nil
+}
+
+// attachPipelineDelegations fills each summary's ReferencedBy with the
+// delegate blocks in active revisions that name its key, in the order a
+// request meets them: the entry pipeline first, then by key, and within
+// a pipeline by the block's position.
+func attachPipelineDelegations(ctx context.Context, q querier, organizationID domain.ID, summaries []domain.RequestApprovalPipelineSummary) error {
+	if len(summaries) == 0 {
+		return nil
+	}
+	index := make(map[string]int, len(summaries))
+	keys := make([]string, len(summaries))
+	for position, summary := range summaries {
+		index[summary.PipelineKey] = position
+		keys[position] = summary.PipelineKey
+	}
+	rows, err := q.Query(ctx, `SELECT b.config->>'pipeline_key', p.pipeline_key, p.name, p.revision, b.block_key, b.name
+		FROM request_approval_pipelines p
+		JOIN request_approval_blocks b ON b.organization_id = p.organization_id AND b.id = ANY(p.block_ids)
+		WHERE p.organization_id = $1 AND p.is_active
+		  AND b.block_type = 'delegate' AND b.config->>'pipeline_key' = ANY($2::text[])
+		ORDER BY (p.pipeline_key <> $3), p.pipeline_key, array_position(p.block_ids, b.id)`,
+		organizationID, keys, domain.EntryPipelineKey)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var target string
+		var delegation domain.PipelineDelegation
+		if err := rows.Scan(&target, &delegation.PipelineKey, &delegation.PipelineName, &delegation.Revision,
+			&delegation.BlockKey, &delegation.BlockName); err != nil {
+			return err
+		}
+		if position, ok := index[target]; ok {
+			summaries[position].ReferencedBy = append(summaries[position].ReferencedBy, delegation)
+		}
+	}
+	return rows.Err()
 }
 
 func insertOrReuseRequestApprovalBlock(ctx context.Context, tx pgx.Tx, input application.CreateRequestApprovalPipelineRevisionInput, blockInput application.RequestApprovalBlockSnapshotInput) (domain.RequestApprovalBlock, error) {

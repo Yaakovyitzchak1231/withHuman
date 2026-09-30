@@ -326,6 +326,27 @@ func TestPipelineReferenceGuardsAgainstRealPostgres(t *testing.T) {
 		if err := activatePipeline("checks", checksLoop.Revision, 1); err != nil {
 			t.Fatalf("checks -> payments is not a cycle yet: %v", err)
 		}
+		// The overview names every delegate block that reaches a
+		// pipeline, the entry pipeline's first.
+		summaries, err := store.ListRequestApprovalPipelineSummaries(ctx, application.ListRequestApprovalPipelineSummariesInput{OrganizationID: orgID, Scope: domain.ScopeSet{All: true}, Limit: 50})
+		if err != nil {
+			t.Fatalf("list summaries: %v", err)
+		}
+		for _, summary := range summaries {
+			switch summary.PipelineKey {
+			case "payments":
+				references := summary.ReferencedBy
+				if len(references) != 2 || references[0].PipelineKey != domain.EntryPipelineKey || references[0].BlockKey != "to-payments" ||
+					references[0].BlockName != "to-payments" || references[0].Revision != healthy.Revision ||
+					references[1].PipelineKey != "checks" || references[1].BlockKey != "back" || references[1].PipelineName == "" {
+					t.Fatalf("payments referenced by = %+v", references)
+				}
+			case domain.EntryPipelineKey, "checks":
+				if summary.ReferencedBy == nil || len(summary.ReferencedBy) != 0 {
+					t.Fatalf("%s referenced by = %#v, want empty", summary.PipelineKey, summary.ReferencedBy)
+				}
+			}
+		}
 		paymentsLoop := createPipelineTestRevision(t, ctx, store, orgID, membershipID, "payments", []application.RequestApprovalBlockSnapshotInput{
 			delegate("to-checks", "checks"),
 		}, now)
