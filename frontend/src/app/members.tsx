@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from "react";
+import { cn } from "@/ds/lib/cn";
 import { ToggleGroup, ToggleGroupItem } from "@/ds/components/toggle-group";
 import { Avatar } from "@/ds/components/avatar";
 import { Referenced } from "@/ds/components/reference";
@@ -833,7 +834,16 @@ function InviteDialog({
                 ? "Choose a role, or the exact permissions they receive when they accept."
                 : "Choose the role they receive when they accept."}
             </DialogDescription>
-            <DialogBody className="flex flex-col gap-4">
+            {/* With the role and custom tabs the body keeps one height,
+             * sized to the role list, so switching never resizes the
+             * dialog; the permission list scrolls inside it. */}
+            <DialogBody
+              className={cn(
+                "flex flex-col gap-4",
+                customPermissions &&
+                  "h-[min(400px,calc(100dvh-220px))] [scrollbar-gutter:stable]",
+              )}
+            >
               <TextField
                 label="Email"
                 type="email"
