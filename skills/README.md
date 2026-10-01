@@ -4,8 +4,12 @@ Agent skills that teach a coding agent (Claude Code, Codex, Cursor and
 others) to set up and use withHuman. Install them with:
 
 ```sh
-npx skills add withHumanAI/withHuman
+npx skills add https://withhuman.ai
 ```
+
+withhuman.ai serves them from `/.well-known/agent-skills/`, built from the
+commit of this repository the hosted edition pins, so a change here
+reaches that command once the hosted edition moves its pin past it.
 
 | Skill | What it teaches |
 | --- | --- |

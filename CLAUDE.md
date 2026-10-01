@@ -1275,7 +1275,9 @@ recorded in this file with both the reason and the replacement rule.
   `--data-dir` (or `WITHHUMAN_DATA_DIR`) pointing at a disposable path
   rather than deleting `~/.withhuman`.
 - `skills/<name>/SKILL.md` are the published agent skills (`npx skills
-  add withHumanAI/withHuman`): user-facing, so they follow the user guide
+  add https://withhuman.ai`, served from the site's
+  `/.well-known/agent-skills/` at the hosted edition's pinned core
+  commit): user-facing, so they follow the user guide
   writing rules and never use em dashes. A change to a CLI command, a
   management MCP tool, or behaviour a skill describes updates the skill
   in the same change. The skills name hosted-only features as such and
