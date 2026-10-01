@@ -22,10 +22,7 @@ unless the person asks you to.
 Don't confuse it with the **MCP Gateway**. On hosted withHuman,
 `withhuman agent install` registers the gateway as `withhuman-gateway`; its
 tools reach external services (named like `<server>__<tool>`) and cannot
-read or change rules. An older install registered the gateway as
-`withhuman`: if a `withhuman` server offers gateway tools and no
-`get_pipeline`, it is the gateway. Ask the person to rename it by running
-`withhuman agent install <runtime>`, then add the management server.
+read or change rules.
 
 The address is the deployment's origin plus `/api/mcp/v1` (hosted:
 `https://app.withhuman.ai/api/mcp/v1`). The person runs the command for

@@ -87,9 +87,7 @@ withhuman agent install codex --url https://approvals.example.com
 On hosted withHuman the install also registers the withHuman MCP Gateway
 with the runtime as an MCP server named `withhuman-gateway`, so the agent
 can use tools granted to it there. It is not the withHuman MCP server that
-manages rules (see the `withhuman-pipelines` skill). Rerunning install
-removes any server the provider no longer offers, such as the gateway's
-old name, `withhuman`.
+manages rules (see the `withhuman-pipelines` skill).
 
 The app's **Agents** page also has **New instance**, which prints the same
 command with the agent and origin filled in.

@@ -862,9 +862,7 @@ recorded in this file with both the reason and the replacement rule.
   instance credential and forwards the runtime's frames to the endpoint as
   a streamable-HTTP client). The credential never enters a runtime's
   configuration; the enrollment record's `mcp_servers` lets `agent eject`
-  remove the entries, and a reinstall removes the relay entries of
-  recorded servers the provider no longer offers (a renamed server, for
-  instance) before registering the current ones; discovery leaves the relay out because its tools
+  remove the entries, and discovery leaves the relay out because its tools
   are the provider's own catalogue. `internal/cli/configfile` is the
   shared ordered-JSON, TOML and YAML read-modify-write used by discovery
   and registration.
