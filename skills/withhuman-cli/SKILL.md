@@ -85,7 +85,9 @@ withhuman agent install codex --url https://approvals.example.com
   browser step.
 
 On hosted withHuman the install also registers the withHuman MCP Gateway
-with the runtime, so the agent can use tools granted to it there.
+with the runtime as an MCP server named `withhuman-gateway`, so the agent
+can use tools granted to it there. It is not the withHuman MCP server that
+manages rules (see the `withhuman-pipelines` skill).
 
 The app's **Agents** page also has **New instance**, which prints the same
 command with the agent and origin filled in.
