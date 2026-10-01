@@ -34,7 +34,7 @@ with the pinned module and provider-first rollout.
 withHuman is, how to behave when its calls are gated, how to connect
 runtimes with the CLI, and how to write approval pipelines through the
 management MCP server. Install them with `npx skills add
-withHumanAI/withHuman`.
+https://withhuman.ai`.
 
 ## Single binary
 
