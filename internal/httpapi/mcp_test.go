@@ -7,6 +7,9 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -329,6 +332,24 @@ func TestMCPListsTheManagementCatalog(t *testing.T) {
 		}
 		if tool.Description == "" || tool.Annotations == nil {
 			t.Errorf("tool %s lacks a description or annotations", want)
+		}
+	}
+	// The published skills (skills/*/SKILL.md) name these tools; a
+	// renamed or removed tool must take the skill's text with it.
+	skills, err := filepath.Glob(filepath.Join("..", "..", "skills", "*", "SKILL.md"))
+	if err != nil || len(skills) == 0 {
+		t.Fatalf("no skills found: %v", err)
+	}
+	toolMention := regexp.MustCompile("`((?:list|get|create|update|delete|remove|archive|activate|preview|save|set|read)_[a-z_]+)`")
+	for _, path := range skills {
+		text, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, match := range toolMention.FindAllStringSubmatch(string(text), -1) {
+			if names[match[1]] == nil {
+				t.Errorf("%s names %s, which the catalog does not serve", path, match[1])
+			}
 		}
 	}
 	if !names["get_pipeline"].Annotations.ReadOnlyHint || names["update_pipeline"].Annotations.ReadOnlyHint {

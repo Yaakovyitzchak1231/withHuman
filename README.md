@@ -28,6 +28,14 @@ It embeds the AAP adapter library for all six runtimes. See the
 [CLI guide](deployment/cli/README.md) for enrollment, configuration, building
 with the pinned module and provider-first rollout.
 
+## Agent skills
+
+[`skills/`](skills/) holds agent skills that teach a coding agent what
+withHuman is, how to behave when its calls are gated, how to connect
+runtimes with the CLI, and how to write approval pipelines through the
+management MCP server. Install them with `npx skills add
+withHumanAI/withHuman`.
+
 ## Single binary
 
 `withhuman` runs all of that in one process with no external services:
