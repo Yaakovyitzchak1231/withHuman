@@ -64,6 +64,13 @@ func Install(manager *adapters.Manager, configDir, key string, cred credential.C
 	if cred.Token == "" {
 		return result, fmt.Errorf("enrollment returned no instance credential")
 	}
+	// The saved record is the only list of relay entries this CLI wrote, so
+	// read it before replacing it: servers the provider no longer offers
+	// (a renamed one included) are removed below rather than left behind.
+	var retired []domain.AgentMCPServer
+	if previous, err := credential.Load(configDir, key); err == nil {
+		retired = retiredServers(previous.MCPServers, servers)
+	}
 	if _, err := credential.Save(configDir, key, cred); err != nil {
 		return result, err
 	}
@@ -84,6 +91,14 @@ func Install(manager *adapters.Manager, configDir, key string, cred credential.C
 	if err != nil || !installed.Complete {
 		return result, err
 	}
+	removed, err := mcpservers.Remove(env, mcpservers.Registration{Runtime: agentruntime.Key(key), Servers: retired})
+	if err != nil {
+		return result, fmt.Errorf("remove MCP servers the provider no longer offers from %s: %w", key, err)
+	}
+	for _, change := range removed.Changes {
+		result.Changes = append(result.Changes, adapters.FileChange{Path: change.Path, Action: change.Action})
+	}
+	result.Notes = append(result.Notes, removed.Notes...)
 	registered, err := mcpservers.Install(env, mcpservers.Registration{Runtime: agentruntime.Key(key), Servers: servers})
 	for _, change := range registered.Changes {
 		result.Changes = append(result.Changes, adapters.FileChange{Path: change.Path, Action: change.Action})
@@ -94,6 +109,22 @@ func Install(manager *adapters.Manager, configDir, key string, cred credential.C
 		return result, fmt.Errorf("register the provider's MCP servers with %s: %w", key, err)
 	}
 	return result, nil
+}
+
+// retiredServers lists the previously registered servers whose names the
+// provider no longer offers.
+func retiredServers(previous, current []domain.AgentMCPServer) []domain.AgentMCPServer {
+	offered := make(map[string]bool, len(current))
+	for _, server := range current {
+		offered[server.Name] = true
+	}
+	var retired []domain.AgentMCPServer
+	for _, server := range previous {
+		if !offered[server.Name] {
+			retired = append(retired, server)
+		}
+	}
+	return retired
 }
 
 // Remove takes the registered MCP servers out of the runtime after the

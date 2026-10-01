@@ -12,11 +12,24 @@ with the withHuman MCP server's tools.
 
 ## Connect the MCP server
 
-If tools such as `get_pipeline` and `read_reference` are not available,
-the withHuman MCP server is not connected. The address is the deployment's
-origin plus `/api/mcp/v1` (hosted: `https://app.withhuman.ai/api/mcp/v1`).
-The person runs the command for their client, then signs in when the
-browser opens.
+Read and change rules only through the withHuman MCP server's tools
+(`get_pipeline`, `read_reference` and the rest). If they are not available,
+stop and tell the person the withHuman MCP server is not connected, with
+the command below. Don't fall back to the web app through a browser or
+computer use, the REST API, or another MCP server, even just to read,
+unless the person asks you to.
+
+Don't confuse it with the **MCP Gateway**. On hosted withHuman,
+`withhuman agent install` registers the gateway as `withhuman-gateway`; its
+tools reach external services (named like `<server>__<tool>`) and cannot
+read or change rules. An older install registered the gateway as
+`withhuman`: if a `withhuman` server offers gateway tools and no
+`get_pipeline`, it is the gateway. Ask the person to rename it by running
+`withhuman agent install <runtime>`, then add the management server.
+
+The address is the deployment's origin plus `/api/mcp/v1` (hosted:
+`https://app.withhuman.ai/api/mcp/v1`). The person runs the command for
+their client, then signs in when the browser opens.
 
 Claude Code:
 
