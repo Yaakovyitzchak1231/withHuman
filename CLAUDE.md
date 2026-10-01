@@ -1274,6 +1274,16 @@ recorded in this file with both the reason and the replacement rule.
 - Clean-schema verification means a fresh data directory: pass
   `--data-dir` (or `WITHHUMAN_DATA_DIR`) pointing at a disposable path
   rather than deleting `~/.withhuman`.
+- `skills/<name>/SKILL.md` are the published agent skills (`npx skills
+  add withHumanAI/withHuman`): user-facing, so they follow the user guide
+  writing rules and never use em dashes. A change to a CLI command, a
+  management MCP tool, or behaviour a skill describes updates the skill
+  in the same change. The skills name hosted-only features as such and
+  send agents to `read_reference` for grammar instead of copying it.
+  `internal/cli/skills_test.go` checks frontmatter and CLI commands, and
+  `TestMCPListsTheManagementCatalog` checks the MCP tools they name.
+  Contributor-only skills go in `.agents/skills/` with
+  `metadata: internal: true`.
 
 - The single-agent page has Overview, Provisioner tokens, Instances, Approval
   requests, and Tool Catalogue tabs, plus the tabs an edition registers
