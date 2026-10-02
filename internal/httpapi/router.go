@@ -1307,7 +1307,11 @@ func principalAuth(auth *authn.Service, logger *slog.Logger, allowOrganizationKe
 				WriteError(c, logger, domain.ErrAPIKeyNotAllowed)
 				return
 			}
-			if err := auth.RecordAPIKeyUse(c.Request.Context(), principal, c.Request.Method, c.FullPath()); err != nil {
+			use := application.RecordAPIKeyUseInput{Principal: principal, Method: c.Request.Method, Route: c.FullPath()}
+			if call, ok := c.Value(mcpCallUseKey).(mcpCallUse); ok {
+				use.MCPMethod, use.MCPTool = call.Method, call.Tool
+			}
+			if err := auth.RecordAPIKeyUse(c.Request.Context(), use); err != nil {
 				WriteError(c, logger, err)
 				return
 			}

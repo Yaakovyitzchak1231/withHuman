@@ -144,6 +144,14 @@ func TestOrganizationAPIKeyLifecycle(t *testing.T) {
 	if err = store.Pool().QueryRow(ctx, `SELECT actor_type,actor_id FROM test_audit_events WHERE organization_id=$1 AND subject_id=$2 AND event_type='api_key.used'`, org, key.ID).Scan(&auditType, &auditID); err != nil || auditType != domain.ActorAPIKey || auditID != key.ID {
 		t.Fatalf("use audit: %s %s %v", auditType, auditID, err)
 	}
+	// A management MCP call names its tool alongside the route.
+	if err = store.RecordAPIKeyUse(ctx, application.RecordAPIKeyUseInput{Principal: principal, Method: "POST", Route: "/api/mcp/v1", MCPMethod: "tools/call", MCPTool: "get_pipeline", Now: now}); err != nil {
+		t.Fatal(err)
+	}
+	var mcpMethod, mcpTool string
+	if err = store.Pool().QueryRow(ctx, `SELECT data->>'mcp_method',data->>'mcp_tool' FROM test_audit_events WHERE organization_id=$1 AND subject_id=$2 AND event_type='api_key.used' AND data->>'route'='/api/mcp/v1'`, org, key.ID).Scan(&mcpMethod, &mcpTool); err != nil || mcpMethod != "tools/call" || mcpTool != "get_pipeline" {
+		t.Fatalf("MCP use audit: %q %q %v", mcpMethod, mcpTool, err)
+	}
 
 	t.Run("scope deletion and expiry", func(t *testing.T) {
 		attempt := input
