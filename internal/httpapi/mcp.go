@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/withHumanAI/withHuman/application"
 	"github.com/withHumanAI/withHuman/domain"
 )
 
@@ -83,7 +85,9 @@ func (a *API) installMCPRoutes(root *gin.RouterGroup) {
 // for. A refusal carries the RFC 9728 challenge that tells an MCP client
 // where to start the OAuth flow, which ends in a key of its own. The
 // resolved request id is copied onto the request so tool calls can carry
-// it into their loopback requests.
+// it into their loopback requests, and the call's JSON-RPC method and
+// tool are handed to the key use record, which would otherwise say only
+// that the route was posted to.
 func (a *API) mcpAuth() gin.HandlerFunc {
 	principal := a.principalAuth()
 	return func(c *gin.Context) {
@@ -97,8 +101,56 @@ func (a *API) mcpAuth() gin.HandlerFunc {
 		if requestID := c.Writer.Header().Get("X-Request-ID"); requestID != "" {
 			c.Request.Header.Set("X-Request-ID", requestID)
 		}
+		if call, ok := peekMCPCall(c.Request); ok {
+			c.Set(mcpCallUseKey, call)
+		}
 		principal(c)
 	}
+}
+
+// mcpCallUseKey carries an MCP request's mcpCallUse from mcpAuth to the
+// key use record principalAuth writes.
+const mcpCallUseKey = "withhuman.mcp_call_use"
+
+// mcpCallUse is what an API key use records of an MCP request: the
+// JSON-RPC method and, for tools/call, the tool's name. Never the
+// arguments, which can carry anything the agent chose to send.
+type mcpCallUse struct {
+	Method string
+	Tool   string
+}
+
+// peekMCPCall reads a POSTed JSON-RPC message's method and tool name and
+// puts the body back for the SDK, which reads it again under its own
+// size limit. A body over that limit, a batch, or anything that is not a
+// single JSON-RPC object records nothing beyond the route; so does a name
+// longer than the record keeps. The SDK then answers the request itself.
+func peekMCPCall(request *http.Request) (mcpCallUse, bool) {
+	if request.Method != http.MethodPost || request.Body == nil {
+		return mcpCallUse{}, false
+	}
+	body, err := io.ReadAll(io.LimitReader(request.Body, mcp.DefaultMaxRequestBodyBytes+1))
+	request.Body = struct {
+		io.Reader
+		io.Closer
+	}{io.MultiReader(bytes.NewReader(body), request.Body), request.Body}
+	if err != nil || len(body) > mcp.DefaultMaxRequestBodyBytes {
+		return mcpCallUse{}, false
+	}
+	var message struct {
+		Method string `json:"method"`
+		Params struct {
+			Name string `json:"name"`
+		} `json:"params"`
+	}
+	if json.Unmarshal(body, &message) != nil || message.Method == "" || len(message.Method) > application.MaxMCPUseNameLength {
+		return mcpCallUse{}, false
+	}
+	call := mcpCallUse{Method: message.Method}
+	if message.Method == "tools/call" && len(message.Params.Name) <= application.MaxMCPUseNameLength {
+		call.Tool = message.Params.Name
+	}
+	return call, true
 }
 
 // mcpServer builds the tool catalog once. Tools carry no per-session

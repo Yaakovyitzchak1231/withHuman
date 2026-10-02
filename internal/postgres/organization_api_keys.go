@@ -146,7 +146,14 @@ func (s *Store) RecordAPIKeyUse(ctx context.Context, input application.RecordAPI
 		return err
 	}
 	p := input.Principal
-	data, err := json.Marshal(map[string]any{"credential_id": p.Auth.CredentialID, "method": input.Method, "route": input.Route})
+	use := map[string]any{"credential_id": p.Auth.CredentialID, "method": input.Method, "route": input.Route}
+	if input.MCPMethod != "" {
+		use["mcp_method"] = input.MCPMethod
+	}
+	if input.MCPTool != "" {
+		use["mcp_tool"] = input.MCPTool
+	}
+	data, err := json.Marshal(use)
 	if err != nil {
 		return err
 	}

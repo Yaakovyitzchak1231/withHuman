@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/withHumanAI/withHuman/domain"
@@ -141,16 +142,34 @@ func (input ListAPIKeyScopesInput) Validate() error {
 
 // RecordAPIKeyUseInput records authenticated use before dispatch. Route is the
 // registered route template, never a raw URL, query, header, or request body.
+// A call to the management MCP route, whose route alone says nothing, also
+// names its JSON-RPC method and, for tools/call, the tool; never the tool's
+// arguments.
 type RecordAPIKeyUseInput struct {
 	Principal domain.Principal
 	Method    string
 	Route     string
+	MCPMethod string
+	MCPTool   string
 	Now       time.Time
 }
+
+// MaxMCPUseNameLength bounds the MCP method and tool names an API key use
+// records, both of which the caller chose.
+const MaxMCPUseNameLength = 128
 
 func (input RecordAPIKeyUseInput) Validate() error {
 	if !domain.ManagementPrincipal(input.Principal) || input.Principal.Auth.Method != domain.AuthMethodAPIKey || input.Principal.Auth.CredentialID == "" {
 		return domain.ErrForbidden
+	}
+	if len(input.MCPMethod) > MaxMCPUseNameLength {
+		return invalidField("MCP method", fmt.Sprintf("must be at most %d bytes", MaxMCPUseNameLength))
+	}
+	if len(input.MCPTool) > MaxMCPUseNameLength {
+		return invalidField("MCP tool", fmt.Sprintf("must be at most %d bytes", MaxMCPUseNameLength))
+	}
+	if input.MCPTool != "" && input.MCPMethod != "tools/call" {
+		return invalidField("MCP tool", "is recorded only for tools/call")
 	}
 	return firstError([]error{requiredString("method", input.Method), requiredString("route", input.Route), requiredTime("current time", input.Now)})
 }

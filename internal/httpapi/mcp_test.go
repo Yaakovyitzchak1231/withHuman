@@ -10,7 +10,9 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -144,6 +146,7 @@ func (s *mcpPipelineStore) ActivateRequestApprovalPipelineRevision(_ context.Con
 type mcpHarness struct {
 	server   *httptest.Server
 	store    *mcpPipelineStore
+	keys     *mcpAPIKeyStore
 	token    string
 	orgToken string
 }
@@ -160,7 +163,8 @@ func newMCPHarness(t *testing.T) *mcpHarness {
 	}.WithGrants(domain.GrantsForRoles([]domain.Role{domain.RoleOwner}))
 	identities := &apiKeyIdentityStub{principal: principal}
 	auth := authn.NewService(identities, nil, nil, nil, entitlements.NewUnlimited(), nil, apiKeyClock{}, authn.ServiceConfig{SessionTTL: time.Hour})
-	auth.RegisterAPIKeys(&mcpAPIKeyStore{principal: principal})
+	keys := &mcpAPIKeyStore{principal: principal}
+	auth.RegisterAPIKeys(keys)
 	store := newMCPPipelineStore(organization)
 	registry := approvalpipeline.NewBlockRegistry()
 	router := NewRouter(Dependencies{
@@ -171,7 +175,7 @@ func newMCPHarness(t *testing.T) *mcpHarness {
 	server := httptest.NewServer(router)
 	t.Cleanup(server.Close)
 	return &mcpHarness{
-		server: server, store: store,
+		server: server, store: store, keys: keys,
 		token:    "whk_" + apiKeyTestKeyID + "_secret",
 		orgToken: "who_" + apiKeyTestKeyID + "_secret",
 	}
@@ -183,6 +187,24 @@ func newMCPHarness(t *testing.T) *mcpHarness {
 type mcpAPIKeyStore struct {
 	apiKeyStoreStub
 	principal domain.Principal
+	mu        sync.Mutex
+	uses      []application.RecordAPIKeyUseInput
+}
+
+func (s *mcpAPIKeyStore) RecordAPIKeyUse(_ context.Context, input application.RecordAPIKeyUseInput) error {
+	if err := input.Validate(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.uses = append(s.uses, input)
+	return nil
+}
+
+func (s *mcpAPIKeyStore) recordedUses() []application.RecordAPIKeyUseInput {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]application.RecordAPIKeyUseInput(nil), s.uses...)
 }
 
 func (s *mcpAPIKeyStore) ResolveAPIKey(_ context.Context, input application.ResolveAPIKeyInput) (domain.Principal, error) {
@@ -305,6 +327,58 @@ func TestMCPAdmitsAPIKeysOnly(t *testing.T) {
 		if response.StatusCode != http.StatusMethodNotAllowed {
 			t.Fatalf("%s = %d, want 405", method, response.StatusCode)
 		}
+	}
+}
+
+func TestMCPKeyUseNamesTheToolCalled(t *testing.T) {
+	h := newMCPHarness(t)
+	session := h.connect(t, h.token)
+	h.call(t, session, "get_pipeline", map[string]any{"pipeline_key": "entry"})
+	type use struct{ method, route, mcpMethod, mcpTool string }
+	var got []use
+	for _, recorded := range h.keys.recordedUses() {
+		got = append(got, use{recorded.Method, recorded.Route, recorded.MCPMethod, recorded.MCPTool})
+	}
+	// The MCP request names its tool; the loopback call it makes is
+	// recorded as the product API route it reached.
+	for _, want := range []use{
+		{http.MethodPost, MCPPath, "tools/call", "get_pipeline"},
+		{http.MethodGet, "/api/v1/request-approval-pipelines/:pipeline_key", "", ""},
+	} {
+		if !slices.Contains(got, want) {
+			t.Errorf("key uses %v lack %v", got, want)
+		}
+	}
+	for _, recorded := range got {
+		if recorded.route == MCPPath && recorded.mcpMethod == "" {
+			t.Errorf("an MCP request was recorded without its method: %v", recorded)
+		}
+	}
+}
+
+func TestPeekMCPCallRestoresTheBody(t *testing.T) {
+	for _, test := range []struct {
+		name, body string
+		want       mcpCallUse
+		ok         bool
+	}{
+		{"tool call", `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_pipeline","arguments":{"pipeline_key":"entry"}}}`, mcpCallUse{Method: "tools/call", Tool: "get_pipeline"}, true},
+		{"list", `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`, mcpCallUse{Method: "tools/list"}, true},
+		{"a name outside tools/call is not a tool", `{"jsonrpc":"2.0","id":1,"method":"prompts/get","params":{"name":"x"}}`, mcpCallUse{Method: "prompts/get"}, true},
+		{"overlong tool", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"` + strings.Repeat("x", application.MaxMCPUseNameLength+1) + `"}}`, mcpCallUse{Method: "tools/call"}, true},
+		{"batch", `[{"jsonrpc":"2.0","id":1,"method":"tools/list"}]`, mcpCallUse{}, false},
+		{"not json", `nope`, mcpCallUse{}, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, MCPPath, strings.NewReader(test.body))
+			got, ok := peekMCPCall(request)
+			if got != test.want || ok != test.ok {
+				t.Fatalf("peekMCPCall = %v %v, want %v %v", got, ok, test.want, test.ok)
+			}
+			if body, _ := io.ReadAll(request.Body); string(body) != test.body {
+				t.Fatalf("body after peeking = %q", body)
+			}
+		})
 	}
 }
 

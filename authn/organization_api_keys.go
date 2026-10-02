@@ -140,9 +140,11 @@ func (s *Service) GetAPIKey(ctx context.Context, principal domain.Principal, id 
 	return s.apiKeys.GetAPIKey(ctx, application.GetAPIKeyInput{OrganizationID: principal.OrganizationID, KeyID: id})
 }
 
-func (s *Service) RecordAPIKeyUse(ctx context.Context, principal domain.Principal, method, route string) error {
+// RecordAPIKeyUse audits one authenticated call; the service stamps the time.
+func (s *Service) RecordAPIKeyUse(ctx context.Context, input application.RecordAPIKeyUseInput) error {
 	if s.apiKeys == nil {
 		return domain.ErrNotFound
 	}
-	return s.apiKeys.RecordAPIKeyUse(ctx, application.RecordAPIKeyUseInput{Principal: principal, Method: method, Route: route, Now: s.clock.Now()})
+	input.Now = s.clock.Now()
+	return s.apiKeys.RecordAPIKeyUse(ctx, input)
 }
