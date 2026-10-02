@@ -266,6 +266,9 @@ export interface ToolSourceEntry {
   source: string;
   label: string;
   external: boolean;
+  /* The edition's page for one of the source's servers, by the server
+   * name the catalogue reports, where its connection is fixed. */
+  serverPath?: (server: string) => string;
 }
 
 /* What an edition can tell about a tool mention's server: the server's

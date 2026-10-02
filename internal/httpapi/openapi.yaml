@@ -5858,18 +5858,20 @@ components:
         annotations: { $ref: "#/components/schemas/OnboardingToolAnnotations" }
     ToolCatalogSource:
       type: object
-      required: [id, agent_slug, runtime, discovery_context, source, last_attempt_at, last_success_at]
+      required: [id, agent_slug, available, runtime, discovery_context, source, last_attempt_at, last_success_at]
       properties:
         id: { type: string, format: uuid }
         agent_slug: { type: string }
         agent_instance_id: { type: string, format: uuid }
+        instance_name: { type: string, description: "The instance that reported the source, when an instance did" }
+        available: { type: boolean, description: "Whether the source's owner can serve now: the reporting instance is active with a live credential, or the edition reports the external source live" }
         runtime: { type: string }
         discovery_context: { type: string }
         source: { type: string, description: "`builtin`, `mcp`, or a source an edition adds (the hosted gateway's `gateway`)" }
         server: { type: string }
         last_attempt_at: { type: string, format: date-time }
         last_success_at: { type: [string, 'null'], format: date-time }
-        error: { type: string }
+        error: { type: string, description: "Why the last discovery failed, as the reporting instance or the edition described it. Empty after a successful discovery" }
     ToolDefinitionUse:
       type: object
       required: [runtime, available, stale]

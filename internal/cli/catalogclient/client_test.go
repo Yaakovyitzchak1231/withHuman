@@ -47,6 +47,28 @@ func TestReportPreservesSourcesSchemasAndApprovalNames(t *testing.T) {
 	}
 }
 
+func TestReportNamesFailureReasonsWithoutTheirDetail(t *testing.T) {
+	cases := map[string]string{
+		`initialize: HTTP 401`: "refused the runtime's sign-in",
+		`Codex is not logged in to this server (run: codex mcp login linear)`: "refused the runtime's sign-in",
+		`initialize: Post "https://mcp.example.com/?key=secret": context deadline exceeded`: "did not respond in time",
+		`exec: "npx": executable file not found in $PATH`: "command could not be started",
+		`initialize: Post "http://127.0.0.1:9/": dial tcp 127.0.0.1:9: connect: connection refused`: "could not be reached",
+		`tools/list: invalid params`: "did not list its tools",
+	}
+	for message, want := range cases {
+		found := domain.OnboardingReportedTools{Errors: []domain.OnboardingDiscoveryError{{Server: "linear", Message: message}}}
+		report := Report("codex", discovery.Env{Cwd: t.TempDir()}, found)
+		if err := report.Validate(); err != nil {
+			t.Fatal(err)
+		}
+		reason := report.Sources[1].Error
+		if !strings.Contains(reason, want) || strings.Contains(reason, "secret") || strings.Contains(reason, "example.com") || strings.Contains(reason, "npx") {
+			t.Fatalf("%q: %q", message, reason)
+		}
+	}
+}
+
 func TestPublishUsesInstanceCredentialAndRefusesRedirects(t *testing.T) {
 	redirected := false
 	target := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { redirected = true }))

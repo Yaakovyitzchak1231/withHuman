@@ -1614,7 +1614,7 @@ export interface ToolCatalogEntry extends ToolDefinition {
  last_attempt_at: string;
 }
 export interface ToolCatalogSource {
- id: string; agent_slug: string; agent_instance_id?: string;
+ id: string; agent_slug: string; agent_instance_id?: string; instance_name?: string; available: boolean;
  runtime: string; discovery_context: string; source: string; server?: string;
  last_attempt_at: string; last_success_at: string | null; error?: string;
 }

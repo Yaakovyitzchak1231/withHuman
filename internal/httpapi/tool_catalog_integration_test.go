@@ -83,6 +83,9 @@ func TestToolCatalogReportsAndVisibility(t *testing.T) {
 	if first.Total != 2 || len(first.Tools) != 2 || first.Tools[0].AgentInstanceID != instance.ID || !first.Tools[0].Available {
 		t.Fatalf("first: %+v", first)
 	}
+	if len(first.Sources) != 1 || first.Sources[0].InstanceName != instance.Name || !first.Sources[0].Available {
+		t.Fatalf("source: %+v", first.Sources)
+	}
 	id := first.Tools[1].ID
 	fingerprint := first.Tools[1].SchemaFingerprint
 	if status := put(report, token); status != 204 {
