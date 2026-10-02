@@ -55,6 +55,11 @@ func TestExternalCatalogFollowsTheEditionsVisibility(t *testing.T) {
 		if page.Total != count {
 			t.Fatalf("count=%d want=%d %+v", page.Total, count, page)
 		}
+		for _, source := range page.Sources {
+			if source.Available != available || source.InstanceName != "" {
+				t.Fatalf("unexpected source: %+v", source)
+			}
+		}
 		for _, tool := range page.Tools {
 			if tool.Available != available || tool.AgentSlug != "agent" || tool.Source != "gateway" || tool.Server != "payments" {
 				t.Fatalf("unexpected tool: %+v", tool)

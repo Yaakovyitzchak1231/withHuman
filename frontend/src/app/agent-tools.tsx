@@ -16,6 +16,7 @@ import { externalToolSources, toolSourceLabel, toolSources, type AgentCatalogDat
 import { Pagination } from "@/ds/components/pagination";
 import { AGENT_PAGE_SIZE, type AgentSearch } from "./agent-search";
 import { formatAbsolute, formatRelative } from "./format";
+import { AgentToolServers } from "./agent-tool-servers";
 
 const ALL_SOURCES = "All sources";
 const statusOptions = ["All statuses", "available", "unavailable", "stale"];
@@ -80,7 +81,7 @@ export function AgentToolsPanel({ agentSlug, data, search, onSearch }: { agentSl
   return <>
     <p className="text-body text-ink-muted">Tool definitions reported by this agent's instances{external.length > 0 ? ` and available through its ${externalLabel} access` : ""}.</p>
     {data.error ? <Callout tone="warn" title="Catalogue unavailable">{data.error}</Callout> : null}
-    {data.sources.filter((source) => source.error).map((source) => <Callout key={source.id} tone="warn" title={`${source.server || source.runtime}: discovery incomplete`}>{source.error}</Callout>)}
+    <AgentToolServers agentSlug={agentSlug} servers={data.servers} refreshing={refreshing} refreshError={refreshError} onRefresh={() => void refresh()} onShowTools={(server) => { setQuery(server.name); change({ q: server.name, source: server.source }); }} />
     <form className="flex flex-wrap gap-2" onSubmit={(event) => { event.preventDefault(); change({ q: query || undefined }); }}>
       <TextField aria-label="Search tools" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search tools" className="min-w-48 flex-1" />
       <Button type="submit" variant="neutral">Search</Button>

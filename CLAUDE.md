@@ -1216,7 +1216,8 @@ recorded in this file with both the reason and the replacement rule.
   a loader the agent route runs before paint and a component; and the
   tool catalogue's `toolSources` (an edition source's name, label and
   whether it is external, for the catalogue's filter, badges and refresh
-  card), `toolReference` slot (what the tool hover card asks an
+  card, and `serverPath`, the edition's page where one of its servers'
+  connection is fixed, which the Tools tab's Servers card opens), `toolReference` slot (what the tool hover card asks an
   edition about a tool's server: its display name and the matching gated
   pattern) and `serverDirectory` read (the servers an edition registers
   centrally, by the alias a request carries as `server`, with their
@@ -1345,7 +1346,15 @@ recorded in this file with both the reason and the replacement rule.
   each owner, with which tools, and whether it can serve now
   (`ReadToolCatalogInput.External`), so grants and availability are the
   edition's live answer and never a stored decision. Catalogue reads need
-  `agent.read` and never return credentials. Local installation and
+  `agent.read` and never return credentials. A failed source carries a
+  reason: an instance names it in one of a few fixed sentences
+  (`catalogclient.failureReason`), never the raw error, which can carry a
+  server's URL, arguments or a credential, and an edition's source says
+  why in its own words. Each source reports the instance's name and
+  whether its owner can serve now (`available`); the Tools tab folds
+  sources into one row per server across instances and projects, leaves
+  out sources of instances that can no longer report, and opens a
+  failing row into its reasons and the fix. Local installation and
   onboarding report automatically; later refreshes use
   `withhuman agent refresh-tools <runtime> --agent <slug>` from the project.
   `GET /api/v1/tool_definitions` is the same read folded to distinct

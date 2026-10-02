@@ -157,6 +157,7 @@ func (s *Store) ReadToolCatalog(ctx context.Context, in application.ReadToolCata
 			return out, err
 		}
 		row.source.AgentSlug = slug
+		row.source.InstanceName = instanceName
 		row.tool.InstanceName = instanceName
 		row.ownerLive = ownerLive
 		if err := appendCatalogRow(&out, seen, row, slug); err != nil {
@@ -237,6 +238,7 @@ func (s *Store) readExternalCatalog(ctx context.Context, in application.ReadTool
 func appendCatalogRow(out *domain.ToolCatalogPage, seen map[string]bool, row catalogRow, slug domain.AgentSlug) error {
 	source := row.source
 	source.AgentSlug = slug
+	source.Available = row.ownerLive
 	key := string(source.ID) + ":" + string(slug)
 	if !seen[key] {
 		seen[key] = true

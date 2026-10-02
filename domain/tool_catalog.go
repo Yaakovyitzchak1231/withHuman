@@ -131,10 +131,16 @@ type ToolCatalogEntry struct {
 	LastSeenAt        time.Time `json:"last_seen_at"`
 	LastAttemptAt     time.Time `json:"last_attempt_at"`
 }
+// ToolCatalogSource is one discovery source as the reader's agent sees
+// it. Available says whether its owner can serve now: the reporting
+// instance is active with a live credential, or the edition reports the
+// external source live at the snapshot's version.
 type ToolCatalogSource struct {
 	ID               ID         `json:"id"`
 	AgentSlug        AgentSlug  `json:"agent_slug"`
 	AgentInstanceID  ID         `json:"agent_instance_id,omitempty"`
+	InstanceName     string     `json:"instance_name,omitempty"`
+	Available        bool       `json:"available"`
 	Runtime          string     `json:"runtime"`
 	DiscoveryContext string     `json:"discovery_context"`
 	Source           string     `json:"source"`

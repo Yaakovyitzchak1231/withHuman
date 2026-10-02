@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/withHumanAI/withHuman/domain"
@@ -37,7 +38,7 @@ func Report(runtime string, env discovery.Env, found domain.OnboardingReportedTo
 	errors := map[string]bool{}
 	for _, failure := range found.Errors {
 		errors[failure.Server] = true
-		report.Sources = append(report.Sources, domain.ToolCatalogSourceReport{Source: "mcp", Server: failure.Server, Complete: false, Error: "Tool discovery failed. Run refresh-tools again after checking the local server connection.", Tools: []domain.ToolDefinition{}})
+		report.Sources = append(report.Sources, domain.ToolCatalogSourceReport{Source: "mcp", Server: failure.Server, Complete: false, Error: failureReason(failure.Message), Tools: []domain.ToolDefinition{}})
 	}
 	servers := []string{}
 	for server := range found.MCP {
@@ -51,6 +52,32 @@ func Report(runtime string, env discovery.Env, found domain.OnboardingReportedTo
 	}
 	return report
 }
+// failureReason names why a server failed to list its tools in one of a
+// few fixed sentences. The raw message never leaves the machine: it can
+// carry a server's URL, its arguments or a credential.
+func failureReason(message string) string {
+	lower := strings.ToLower(message)
+	has := func(parts ...string) bool {
+		for _, part := range parts {
+			if strings.Contains(lower, part) {
+				return true
+			}
+		}
+		return false
+	}
+	switch {
+	case has("not logged in", "mcp login", "http 401", "http 403", "unauthorized", "forbidden"):
+		return "The server refused the runtime's sign-in. Sign in to it again in the runtime."
+	case has("deadline exceeded", "timeout", "timed out"):
+		return "The server did not respond in time."
+	case has("executable file not found", "no such file or directory", "permission denied"):
+		return "The server's command could not be started. Check that it is installed on this machine."
+	case has("connection refused", "no such host", "dial ", "connection reset", "eof"):
+		return "The server could not be reached. Check that it is running and its address is correct."
+	}
+	return "The server did not list its tools."
+}
+
 func Publish(ctx context.Context, httpClient *http.Client, cred credential.Credential, report domain.ToolCatalogReport) error {
 	origin, err := installation.Origin(cred.ProviderURL)
 	if err != nil {
