@@ -90,7 +90,7 @@ export function InviteScreen({ token }: { token: string }) {
 
   return (
     <div className="ds-root flex min-h-screen flex-col items-center justify-center bg-canvas px-6 py-12">
-      <Logo className="mb-8 text-[16px] text-ink" />
+      <Logo className="mb-8 text-[24px] text-ink" />
       {loading ? (
         <div className="flex items-center gap-2.5">
           <Spinner size={16} />
