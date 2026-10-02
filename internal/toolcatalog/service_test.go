@@ -2,9 +2,11 @@ package toolcatalog
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -128,5 +130,44 @@ func TestListCarriesTheSourcesVisibilityIntoTheRead(t *testing.T) {
 	err := service.Report(context.Background(), instance, domain.ToolCatalogReport{Runtime: "codex", DiscoveryContext: "project", Complete: true, Sources: []domain.ToolCatalogSourceReport{{Source: "gateway", Server: "payments", Complete: true}}})
 	if !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("an instance may not report an edition's source, got %v", err)
+	}
+}
+
+func TestDefinitionsFoldTheCatalogueToDistinctDefinitions(t *testing.T) {
+	schema := json.RawMessage(`{"type":"object","properties":{"amount":{"type":"number"}}}`)
+	refund := domain.ToolDefinition{Name: "refund", Description: "Refund a charge", InputSchema: schema}
+	entry := func(definition domain.ToolDefinition, agent domain.AgentSlug, runtime, instance, server string, available bool) domain.ToolCatalogEntry {
+		return domain.ToolCatalogEntry{ToolDefinition: definition, AgentSlug: agent, Runtime: runtime, InstanceName: instance, Server: server, Available: available, SchemaFingerprint: definition.SchemaFingerprint()}
+	}
+	bash := domain.ToolDefinition{Name: "Bash"}
+	page := domain.ToolCatalogPage{
+		Tools: []domain.ToolCatalogEntry{
+			// One gateway server's tool, once per agent that sees it.
+			entry(refund, "billing", "gateway", "", "payments", true),
+			entry(refund, "support", "gateway", "", "payments", true),
+			entry(refund, "triage", "gateway", "", "payments", true),
+			// The same name with another schema stays its own definition.
+			entry(domain.ToolDefinition{Name: "refund", InputSchema: json.RawMessage(`{"type":"object"}`)}, "billing", "gateway", "", "payments", true),
+			entry(bash, "alice", "claude-code", "alice-laptop", "", true),
+			entry(bash, "bob", "claude-code", "bob-desktop", "", false),
+		},
+		Sources: []domain.ToolCatalogSource{{Server: "payments"}, {Server: "github"}, {}},
+	}
+	list := foldDefinitions(page)
+	if len(list.ToolDefinitions) != 3 {
+		t.Fatalf("definitions = %+v", list.ToolDefinitions)
+	}
+	first, second, third := list.ToolDefinitions[0], list.ToolDefinitions[1], list.ToolDefinitions[2]
+	if first.Name != "Bash" || len(first.Uses) != 2 || first.Uses[0].InstanceName != "alice-laptop" || first.Uses[1].Available {
+		t.Fatalf("instances offering one definition must each be listed: %+v", first)
+	}
+	if second.Name != "refund" || second.Server != "payments" || len(second.Uses) != 1 || string(second.InputSchema) != string(schema) {
+		t.Fatalf("one server's tool must appear once whatever the agents: %+v", second)
+	}
+	if third.Name != "refund" || third.Description != "" {
+		t.Fatalf("another schema must stay a separate definition: %+v", third)
+	}
+	if strings.Join(list.Servers, ",") != "github,payments" {
+		t.Fatalf("servers = %v", list.Servers)
 	}
 }

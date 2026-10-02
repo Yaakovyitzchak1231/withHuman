@@ -66,48 +66,10 @@ type Query struct {
 
 func (s *Service) List(ctx context.Context, p domain.Principal, q Query) (domain.ToolCatalogPage, error) {
 	empty := domain.ToolCatalogPage{Tools: []domain.ToolCatalogEntry{}, Sources: []domain.ToolCatalogSource{}}
-	scope := authorization.Scope(p, domain.PermissionAgentRead)
-	if scope.Empty() {
-		return empty, domain.ErrForbidden
-	}
-	if q.AgentSlug != "" {
-		if err := authorization.Check(p, domain.PermissionAgentRead, domain.AgentResource(q.AgentSlug)); err != nil {
-			return empty, err
-		}
-	}
 	if q.Offset < 0 || q.Limit < 0 || q.Limit > 500 || len(q.Search) > 200 || (q.Source != "" && !sourceFilterPattern.MatchString(q.Source)) || (q.Status != "" && q.Status != "available" && q.Status != "unavailable" && q.Status != "stale") {
 		return empty, domain.ErrInvalid
 	}
-	in := application.ReadToolCatalogInput{OrganizationID: p.OrganizationID, Scope: scope, AgentSlug: q.AgentSlug, Now: s.clock.Now()}
-	if s.source != nil {
-		sourceScope := application.ToolSourceScope{OrganizationID: p.OrganizationID, Scope: scope, AgentSlug: q.AgentSlug}
-		targets, err := s.source.Targets(ctx, sourceScope)
-		if err != nil {
-			return empty, err
-		}
-		var wg sync.WaitGroup
-		slots := make(chan struct{}, 4)
-		for _, target := range targets {
-			wg.Add(1)
-			go func(target application.ToolSourceTarget) {
-				defer wg.Done()
-				select {
-				case slots <- struct{}{}:
-					defer func() { <-slots }()
-				case <-ctx.Done():
-					return
-				}
-				if err := s.refresh(ctx, target, q.Refresh); err != nil {
-					s.logger.WarnContext(ctx, "external tool catalogue refresh failed; last successful definitions retained", "source_ref", target.SourceRef, "error", err)
-				}
-			}(target)
-		}
-		wg.Wait()
-		if in.External, err = s.source.Visibility(ctx, sourceScope); err != nil {
-			return empty, err
-		}
-	}
-	page, err := s.repo.ReadToolCatalog(ctx, in)
+	page, err := s.read(ctx, p, q.AgentSlug, q.Refresh)
 	if err != nil {
 		return empty, err
 	}
@@ -143,6 +105,99 @@ func (s *Service) List(ctx context.Context, p domain.Principal, q Query) (domain
 		page.NextOffset = &end
 	}
 	return page, nil
+}
+
+// Definitions folds the reader's whole catalogue into its distinct
+// definitions, one read for the pipeline editors. An external source's
+// tools appear once per agent that sees them in the catalogue; here they
+// appear once, with every place that offers them.
+func (s *Service) Definitions(ctx context.Context, p domain.Principal) (domain.ToolDefinitionList, error) {
+	page, err := s.read(ctx, p, "", false)
+	if err != nil {
+		return domain.ToolDefinitionList{}, err
+	}
+	return foldDefinitions(page), nil
+}
+
+func foldDefinitions(page domain.ToolCatalogPage) domain.ToolDefinitionList {
+	out := domain.ToolDefinitionList{ToolDefinitions: []domain.CatalogToolDefinition{}, Servers: []string{}}
+	index := map[string]int{}
+	used := map[string]bool{}
+	for _, tool := range page.Tools {
+		key := tool.Name + "\x00" + tool.Server + "\x00" + tool.SchemaFingerprint + "\x00" + tool.Description
+		at, known := index[key]
+		if !known {
+			at = len(out.ToolDefinitions)
+			index[key] = at
+			out.ToolDefinitions = append(out.ToolDefinitions, domain.CatalogToolDefinition{Name: tool.Name, Server: tool.Server, Description: tool.Description, InputSchema: tool.InputSchema, Uses: []domain.ToolDefinitionUse{}})
+		}
+		use := domain.ToolDefinitionUse{Runtime: tool.Runtime, InstanceName: tool.InstanceName, Available: tool.Available, Stale: tool.Stale}
+		if useKey := fmt.Sprintf("%d\x00%+v", at, use); !used[useKey] {
+			used[useKey] = true
+			out.ToolDefinitions[at].Uses = append(out.ToolDefinitions[at].Uses, use)
+		}
+	}
+	sort.SliceStable(out.ToolDefinitions, func(i, j int) bool {
+		a, b := out.ToolDefinitions[i], out.ToolDefinitions[j]
+		return a.Name+"\x00"+a.Server < b.Name+"\x00"+b.Server
+	})
+	servers := map[string]bool{}
+	for _, source := range page.Sources {
+		servers[source.Server] = true
+	}
+	for _, tool := range page.Tools {
+		servers[tool.Server] = true
+	}
+	delete(servers, "")
+	for server := range servers {
+		out.Servers = append(out.Servers, server)
+	}
+	sort.Strings(out.Servers)
+	return out
+}
+
+// read is the whole catalogue the reader's agent scope covers, or one
+// agent's, after refreshing the edition's sources that are due.
+func (s *Service) read(ctx context.Context, p domain.Principal, agentSlug domain.AgentSlug, refresh bool) (domain.ToolCatalogPage, error) {
+	scope := authorization.Scope(p, domain.PermissionAgentRead)
+	if scope.Empty() {
+		return domain.ToolCatalogPage{}, domain.ErrForbidden
+	}
+	if agentSlug != "" {
+		if err := authorization.Check(p, domain.PermissionAgentRead, domain.AgentResource(agentSlug)); err != nil {
+			return domain.ToolCatalogPage{}, err
+		}
+	}
+	in := application.ReadToolCatalogInput{OrganizationID: p.OrganizationID, Scope: scope, AgentSlug: agentSlug, Now: s.clock.Now()}
+	if s.source != nil {
+		sourceScope := application.ToolSourceScope{OrganizationID: p.OrganizationID, Scope: scope, AgentSlug: agentSlug}
+		targets, err := s.source.Targets(ctx, sourceScope)
+		if err != nil {
+			return domain.ToolCatalogPage{}, err
+		}
+		var wg sync.WaitGroup
+		slots := make(chan struct{}, 4)
+		for _, target := range targets {
+			wg.Add(1)
+			go func(target application.ToolSourceTarget) {
+				defer wg.Done()
+				select {
+				case slots <- struct{}{}:
+					defer func() { <-slots }()
+				case <-ctx.Done():
+					return
+				}
+				if err := s.refresh(ctx, target, refresh); err != nil {
+					s.logger.WarnContext(ctx, "external tool catalogue refresh failed; last successful definitions retained", "source_ref", target.SourceRef, "error", err)
+				}
+			}(target)
+		}
+		wg.Wait()
+		if in.External, err = s.source.Visibility(ctx, sourceScope); err != nil {
+			return domain.ToolCatalogPage{}, err
+		}
+	}
+	return s.repo.ReadToolCatalog(ctx, in)
 }
 
 var sourceFilterPattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)

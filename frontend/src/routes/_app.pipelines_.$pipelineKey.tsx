@@ -5,8 +5,8 @@ import { pipelineSearch } from "../app/pipeline-link";
 
 export const Route = createFileRoute("/_app/pipelines_/$pipelineKey")({
   validateSearch: pipelineSearch,
-  loaderDeps: ({ search }) => ({ revision: search.revision }),
-  loader: ({ params, deps }) => loadPipelineView(params.pipelineKey, deps.revision),
+  loaderDeps: ({ search }) => ({ revision: search.revision, edit: search.edit }),
+  loader: ({ params, deps }) => loadPipelineView(params.pipelineKey, deps.revision, deps.edit),
   component: PipelineView,
 });
 

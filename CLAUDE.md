@@ -1278,7 +1278,14 @@ recorded in this file with both the reason and the replacement rule.
   reader's permission), and a card loads its facts when it opens,
   through the short-lived shared reads in `app/reference-store.ts`.
   Wrap a new mention in `Referenced` (or pass `id` to an `Avatar`)
-  rather than writing a one-off tooltip.
+  rather than writing a one-off tooltip. The pipeline editors'
+  suggestions (tools, argument fields, values, the test sample) are the
+  other: they are not content, so the pipeline page never waits for
+  them. They load into a module-scope store
+  (`requestPipelineSuggestions` in `app/pipeline-suggestions.ts`) when
+  someone starts editing or testing, or from the loader when the link
+  opens the editor, and they are kept for a minute per signed-in person
+  across pipelines.
 - Start the product locally with the single binary
   (`WITHHUMAN_BOOTSTRAP_SECRET=change-me-before-production go run ./cmd/withhuman`,
   after `make frontend`). Use `./scripts/smoke.sh` against it for an
@@ -1341,6 +1348,12 @@ recorded in this file with both the reason and the replacement rule.
   `agent.read` and never return credentials. Local installation and
   onboarding report automatically; later refreshes use
   `withhuman agent refresh-tools <runtime> --agent <slug>` from the project.
-  Request history contributes only permission-visible, nonpersistent editor
-  suggestions. Catalogue schemas are advisory and must never affect pipeline
+  `GET /api/v1/tool_definitions` is the same read folded to distinct
+  definitions (name, server, schema and description, with every runtime
+  and instance offering them) in one unpaged response, because an
+  external source's tools repeat once per agent that sees them; the
+  pipeline editors read it instead of paging the catalogue. Request
+  history contributes only permission-visible, nonpersistent editor
+  suggestions, read in one listing (`GET /api/v1/requests?per_agent=`,
+  each agent's newest requests, automatic decisions included). Catalogue schemas are advisory and must never affect pipeline
   execution or rewrite saved conditions. This product API is outside AAP.

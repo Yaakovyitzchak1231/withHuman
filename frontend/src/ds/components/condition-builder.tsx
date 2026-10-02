@@ -1,4 +1,4 @@
-import { createContext, useContext, Fragment, useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { createContext, useContext, Fragment, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { fieldHints, schemaWarning, suitableOperators, type FieldHint, type ToolSchema } from "@/ds/lib/tool-schema";
 import { cn } from "@/ds/lib/cn";
 import { Button } from "./button";
@@ -593,6 +593,23 @@ function ValueEditor({
 /* Rows and groups                                                  */
 /* ---------------------------------------------------------------- */
 
+/* What the tool picker says under each name: where the tool comes from,
+ * how many schema variants it has, and the last definition's
+ * description. One pass, however large the catalogue. */
+function describeTools(tools: ToolSchema[]): Record<string, string> {
+  const byName = new Map<string, ToolSchema[]>();
+  for (const tool of tools) {
+    const group = byName.get(tool.name);
+    if (group) group.push(tool);
+    else byName.set(tool.name, [tool]);
+  }
+  return Object.fromEntries([...byName].map(([name, group]) => {
+    const variants = new Set(group.map((tool) => JSON.stringify(tool.inputSchema ?? null))).size;
+    const description = group[group.length - 1].description;
+    return [name, [...new Set(group.map((tool) => tool.source))].join(", ") + (variants > 1 ? ` · ${variants} schema variants` : "") + (description ? `: ${description}` : "")];
+  }));
+}
+
 function ConditionLeafRow({
   node,
   onChange,
@@ -617,11 +634,7 @@ function ConditionLeafRow({
   const operators = allOperators || !suitable ? CONDITION_OPERATORS : CONDITION_OPERATORS.filter((item) => suitable.includes(item.value) || item.value === node.operator);
   const paths = [...new Set([...suggestions.filter((path) => !hints.narrowed || !path.startsWith("/request/arguments/")), ...Object.keys(hints.fields), ...(node.field ? [node.field] : [])])];
   const values = field?.values.filter((value): value is string | number => typeof value === "string" || typeof value === "number") ?? [];
-  const toolDetails = Object.fromEntries((catalog?.tools ?? []).map((tool) => {
-    const matching = catalog!.tools.filter((other) => other.name === tool.name);
-    const variants = new Set(matching.map((other) => JSON.stringify(other.inputSchema ?? null))).size;
-    return [tool.name, [...new Set(matching.map((other) => other.source))].join(", ") + (variants > 1 ? ` · ${variants} schema variants` : "") + (tool.description ? `: ${tool.description}` : "")];
-  }));
+  const toolDetails = useMemo(() => describeTools(catalog?.tools ?? []), [catalog?.tools]);
   const operator = OPERATOR_BY_VALUE.get(node.operator ?? "") ?? CONDITION_OPERATORS[0];
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-2">

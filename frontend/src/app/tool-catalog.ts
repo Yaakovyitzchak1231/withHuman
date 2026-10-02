@@ -1,6 +1,6 @@
 import { sampleValueSuggestions } from "./request-suggestions";
 import { api } from "../api";
-import type { ApprovalRequest, ToolCatalogEntry, ToolCatalogPage } from "../types";
+import type { ApprovalRequest, CatalogToolDefinition, ToolCatalogEntry, ToolCatalogPage } from "../types";
 import type { ToolSchema } from "@/ds/lib/tool-schema";
 import { argumentPaths } from "./pipeline-blocks";
 import type { AgentSearch } from "./agent-search";
@@ -44,12 +44,16 @@ export async function loadToolCatalog(agentSlug?: string, refresh = false): Prom
     return { tools, sources, total: tools.length, next_offset: null, error: "The tool catalogue could not be loaded. Manual conditions and visible request history remain available." };
   }
 }
-export function catalogSchemas(entries: ToolCatalogEntry[], requests: ApprovalRequest[]): ToolSchema[] {
-  const schemas: ToolSchema[] = entries.map((entry) => ({
-    name: entry.name,
-    source: `${entry.server || entry.runtime}${entry.instance_name ? ` · ${entry.instance_name}` : ""}${entry.available ? "" : " · unavailable"}${entry.stale ? " · stale" : ""}`,
-    description: entry.description,
-    inputSchema: entry.input_schema,
+/* One schema per distinct definition, named by every place that offers
+ * it. */
+export function catalogSchemas(definitions: CatalogToolDefinition[], requests: ApprovalRequest[]): ToolSchema[] {
+  const schemas: ToolSchema[] = definitions.map((definition) => ({
+    name: definition.name,
+    source: [...new Set(definition.uses.map((use) =>
+      `${definition.server || use.runtime}${use.instance_name ? ` · ${use.instance_name}` : ""}${use.available ? "" : " · unavailable"}${use.stale ? " · stale" : ""}`,
+    ))].join(", "),
+    description: definition.description,
+    inputSchema: definition.input_schema,
   }));
   for (const request of requests) {
     const matching = schemas.filter((tool) => tool.name === request.tool);

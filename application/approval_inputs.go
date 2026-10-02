@@ -431,6 +431,10 @@ type ListApprovalsInput struct {
 	// AgentSlug restricts the listing to one agent's requests; empty lists
 	// every agent.
 	AgentSlug domain.AgentSlug
+	// PerAgent, when positive, keeps at most that many of each agent's
+	// newest requests, automatic decisions included: the agents' recent
+	// history in one listing rather than one per agent.
+	PerAgent int
 	// VisibleTo, when set, narrows the listing to what that membership was
 	// routed to (directly, through a team, or added as a reviewer) plus
 	// unrouted requests, for organizations whose request visibility policy
@@ -479,6 +483,9 @@ func (input ListApprovalsInput) Validate() error {
 	}
 	if !input.Scope.Valid() {
 		return invalidField("scope", "Choose notified, decidable, or visible.")
+	}
+	if input.PerAgent < 0 || input.PerAgent > 50 {
+		return invalidField("per_agent", "Choose between 1 and 50 requests per agent.")
 	}
 	return firstError([]error{
 		requiredID("organization ID", input.OrganizationID),

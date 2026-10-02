@@ -35,6 +35,7 @@ import type {
   NotificationUrgency,
   ToolCatalogPage,
   ToolCatalogEntry,
+  ToolDefinitionList,
   Invitation,
   InvitationPreview,
   IssuedCredential,
@@ -227,6 +228,12 @@ export const api = {
   agentApprovals: (agentSlug: string, options: { limit: number; offset: number; q?: string; status?: string }) =>
     request<{ requests: ApprovalRequest[] }>(
       `${APP_API_BASE}/requests?${new URLSearchParams({ agent_slug: agentSlug, limit: String(options.limit), offset: String(options.offset), q: options.q ?? "", status: options.status ?? "" })}`,
+    ),
+  /* Every agent's recent history in one listing: each agent's newest
+   * requests, automatic decisions included, newest first. */
+  recentApprovals: (options: { perAgent: number; limit: number }) =>
+    request<{ requests: ApprovalRequest[] }>(
+      `${APP_API_BASE}/requests?${new URLSearchParams({ per_agent: String(options.perAgent), limit: String(options.limit) })}`,
     ),
   approval: (id: string) =>
     request<ApprovalRequest>(`${APP_API_BASE}/requests/${id}`),
@@ -483,6 +490,8 @@ export const api = {
     return request<ToolCatalogPage>(`/api/v1/tool_catalog?${query}`);
   },
   toolCatalogEntry: (id: string, agentSlug: string) => request<ToolCatalogEntry>(`/api/v1/tool_catalog/${encodeURIComponent(id)}?agent_slug=${encodeURIComponent(agentSlug)}`),
+  /* The whole catalogue in one read, folded to distinct definitions. */
+  toolDefinitions: () => request<ToolDefinitionList>("/api/v1/tool_definitions"),
   /* Code-owned permission vocabulary. */
   permissions: () =>
     request<{ permissions: PermissionDescriptor[] }>(`${APP_API_BASE}/permissions`),

@@ -291,6 +291,14 @@ func TestAgentInventoryAgainstRealPostgres(t *testing.T) {
 	if err != nil || len(other) != 0 {
 		t.Fatalf("another agent's history = %d requests, %v; want 0", len(other), err)
 	}
+	// The agents' recent history keeps each agent's newest requests.
+	recent, err := store.ListApprovals(ctx, application.ListApprovalsInput{OrganizationID: orgID, Limit: 10, PerAgent: 2})
+	if err != nil || len(recent) != 2 || recent[0].ID != history[0].ID || recent[1].ID != history[1].ID {
+		t.Fatalf("recent history = %#v, %v; want release's two newest", recent, err)
+	}
+	if _, err := store.ListApprovals(ctx, application.ListApprovalsInput{OrganizationID: orgID, PerAgent: 51}); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("more than 50 per agent must be refused, got %v", err)
+	}
 
 	// Disabling the agent refuses its live credential and sorts it last;
 	// enabling it restores both.

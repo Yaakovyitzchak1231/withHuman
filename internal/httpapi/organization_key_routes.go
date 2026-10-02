@@ -5,6 +5,7 @@ package httpapi
 var organizationKeyRoutes = map[routeKey]struct{}{
 	{Method: "GET", Path: "/api/v1/tool_catalog"}:                                                            {},
 	{Method: "GET", Path: "/api/v1/tool_catalog/:id"}:                                                        {},
+	{Method: "GET", Path: "/api/v1/tool_definitions"}:                                                        {},
 	{Method: "GET", Path: "/api/v1/requests"}:                                                                {},
 	{Method: "GET", Path: "/api/v1/requests/:id"}:                                                            {},
 	{Method: "GET", Path: "/api/v1/requests/:id/routing"}:                                                    {},

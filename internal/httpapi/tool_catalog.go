@@ -57,3 +57,16 @@ func (a *API) listToolCatalog(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, result)
 }
+
+func (a *API) listToolDefinitions(c *gin.Context) {
+	if a.toolCatalog == nil {
+		c.JSON(http.StatusOK, domain.ToolDefinitionList{ToolDefinitions: []domain.CatalogToolDefinition{}, Servers: []string{}})
+		return
+	}
+	list, err := a.toolCatalog.Definitions(c.Request.Context(), currentPrincipal(c))
+	if err != nil {
+		a.writeError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, list)
+}

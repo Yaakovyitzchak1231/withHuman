@@ -529,7 +529,7 @@ func (s *Service) List(ctx context.Context, principal domain.Principal, input ap
 		return nil, err
 	}
 	input.OrganizationID = principal.OrganizationID
-	input.HumanReviewOnly = principal.ActorType == domain.ActorHuman && input.AgentSlug == ""
+	input.HumanReviewOnly = principal.ActorType == domain.ActorHuman && input.AgentSlug == "" && input.PerAgent == 0
 	input.VisibleTo = visibleTo(principal, policy)
 	if !scopeQueue(&input, principal, policy) {
 		return []domain.ApprovalRequest{}, nil
