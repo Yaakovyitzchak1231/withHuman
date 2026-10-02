@@ -386,7 +386,7 @@ export function AccessScreen({
         rel="noopener"
         referrerPolicy="strict-origin-when-cross-origin"
         aria-label="withHuman.ai (opens in a new tab)"
-        className="mb-8 text-[16px] text-ink"
+        className="mb-8 text-[24px] text-ink"
       >
         <Logo />
       </a>
