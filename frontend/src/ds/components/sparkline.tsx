@@ -1,4 +1,3 @@
-import { useId } from "react";
 import { cn } from "@/ds/lib/cn";
 
 /*
@@ -15,7 +14,8 @@ export interface SparklineProps {
   width?: number;
   height?: number;
   /* Names the series for assistive tech; the figure beside it gives
-   * the value. */
+   * the value. An aria-label rather than an SVG <title>, which browsers
+   * show as a native tooltip on hover. */
   label: string;
   className?: string;
 }
@@ -24,7 +24,6 @@ const STROKE = 1.5;
 const DOT = 2;
 
 export function Sparkline({ values, width = 56, height = 18, label, className }: SparklineProps) {
-  const id = useId();
   const max = Math.max(0, ...values);
   const inset = DOT + STROKE / 2;
   const step = values.length > 1 ? (width - inset * 2) / (values.length - 1) : 0;
@@ -37,13 +36,12 @@ export function Sparkline({ values, width = 56, height = 18, label, className }:
   return (
     <svg
       role="img"
-      aria-labelledby={id}
+      aria-label={label}
       viewBox={`0 0 ${width} ${height}`}
       width={width}
       height={height}
       className={cn("shrink-0 overflow-visible", flat ? "text-ink-faint" : "text-ink-muted", className)}
     >
-      <title id={id}>{label}</title>
       <path
         d={path}
         fill="none"

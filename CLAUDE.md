@@ -625,7 +625,9 @@ recorded in this file with both the reason and the replacement rule.
   key, refused for `entry` and while any active revision delegates to it
   (409 `request_approval_pipeline_in_use` with `uses`;
   `GET /request-approval-pipelines/{key}/uses` explains it before the
-  click), stamping every revision with `archived_at`, deactivating the
+  click; the list carries each key's `referenced_by`, the delegate blocks
+  in active revisions that name it, which the overview's Delegated from
+  column links to block by block), stamping every revision with `archived_at`, deactivating the
   active one and removing API-key assignments at `pipeline:<key>`
   (audited `request_approval_pipeline.archived`). An archived key is
   listed only with `status=archived|all`, stays readable, and refuses
@@ -1286,6 +1288,18 @@ recorded in this file with both the reason and the replacement rule.
 - Clean-schema verification means a fresh data directory: pass
   `--data-dir` (or `WITHHUMAN_DATA_DIR`) pointing at a disposable path
   rather than deleting `~/.withhuman`.
+- `skills/<name>/SKILL.md` are the published agent skills (`npx skills
+  add https://withhuman.ai`, served from the site's
+  `/.well-known/agent-skills/` at the hosted edition's pinned core
+  commit): user-facing, so they follow the user guide
+  writing rules and never use em dashes. A change to a CLI command, a
+  management MCP tool, or behaviour a skill describes updates the skill
+  in the same change. The skills name hosted-only features as such and
+  send agents to `read_reference` for grammar instead of copying it.
+  `internal/cli/skills_test.go` checks frontmatter and CLI commands, and
+  `TestMCPListsTheManagementCatalog` checks the MCP tools they name.
+  Contributor-only skills go in `.agents/skills/` with
+  `metadata: internal: true`.
 
 - The single-agent page has Overview, Provisioner tokens, Instances, Approval
   requests, and Tool Catalogue tabs, plus the tabs an edition registers

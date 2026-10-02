@@ -19,7 +19,7 @@ import { TextField } from "@/ds/components/text-field";
 import { ToggleGroup, ToggleGroupItem } from "@/ds/components/toggle-group";
 import { Page } from "@/ds/components/page";
 import { useToast } from "@/ds/components/toast";
-import { BranchIcon, EllipsisIcon } from "@/ds/icons";
+import { BranchIcon, CornerDownRightIcon, EllipsisIcon } from "@/ds/icons";
 import { api } from "../api";
 import { useAccess } from "./authorization";
 import { formatRelative } from "./format";
@@ -37,6 +37,7 @@ import { pipelineLink } from "./pipeline-link";
 import { TestRequestDialog } from "./test-request-dialog";
 import {
   ENTRY_PIPELINE_KEY,
+  type PipelineDelegation,
   type RequestApprovalPipelineRevision,
   type RequestApprovalPipelineSummary,
 } from "../types";
@@ -217,6 +218,14 @@ export function PipelinesScreen({ page }: { page: PipelinesPage }) {
             <span className="pl-2 font-mono text-[12px] text-ink-muted">{pipeline.pipeline_key}</span>
           </span>
         ),
+      },
+      {
+        id: "referenced_by",
+        label: "Delegated from",
+        info: "The delegate blocks that hand requests to this pipeline, grouped by the pipeline that holds them. Open a block to see its conditions.",
+        docsLinks: [{ href: "https://withhuman.ai/docs/web-app/approval-pipelines", label: "Delegating to a pipeline" }],
+        width: 300,
+        cell: (pipeline) => <DelegatedFrom pipeline={pipeline} />,
       },
       {
         id: "status",
@@ -402,7 +411,7 @@ export function PipelinesScreen({ page }: { page: PipelinesPage }) {
               onOpen={(pipeline) => void navigate(pipelineLink(pipeline.pipeline_key))}
               columns={columns}
               rowLabel={(pipeline) => pipeline.name}
-              className="min-w-[620px]"
+              className="min-w-[920px]"
             />
           ) : (
             <p className="px-4 py-6 text-body text-ink-muted">
@@ -451,5 +460,62 @@ export function PipelinesScreen({ page }: { page: PipelinesPage }) {
         description="See what would happen to a sample request, one block at a time, starting in the entry pipeline. This does not create a real approval request."
       />
     </Page>
+  );
+}
+
+/* Who hands requests to a pipeline: each delegating pipeline once, with
+ * how many of its delegate blocks name this one, and a link per block
+ * that opens that pipeline with the block picked out. */
+function DelegatedFrom({ pipeline }: { pipeline: RequestApprovalPipelineSummary }) {
+  const groups = useMemo(() => {
+    const byPipeline = new Map<string, PipelineDelegation[]>();
+    for (const delegation of pipeline.referenced_by) {
+      const blocks = byPipeline.get(delegation.pipeline_key) ?? [];
+      blocks.push(delegation);
+      byPipeline.set(delegation.pipeline_key, blocks);
+    }
+    return [...byPipeline.values()];
+  }, [pipeline.referenced_by]);
+  if (pipeline.archived_at) {
+    return <span className="text-ink-muted">None</span>;
+  }
+  if (groups.length === 0) {
+    return <span className="text-micro text-ink-muted">No delegate block hands requests here</span>;
+  }
+  return (
+    <span
+      className="flex min-w-0 flex-col items-start gap-1.5 py-1"
+      onClick={(event) => event.stopPropagation()}
+      onKeyDown={(event) => event.stopPropagation()}
+    >
+      {groups.map((blocks) => {
+        const from = blocks[0];
+        return (
+          <span key={from.pipeline_key} className="flex min-w-0 max-w-full flex-col items-start gap-0.5">
+            <span className="flex min-w-0 max-w-full items-center gap-1.5">
+              <ReferenceChip
+                reference={{ kind: "pipeline", pipelineKey: from.pipeline_key, name: from.pipeline_name }}
+                link={pipelineLink(from.pipeline_key)}
+              />
+              <span className="shrink-0 text-micro text-ink-muted">
+                {blocks.length === 1 ? "1 delegate block" : `${blocks.length} delegate blocks`}
+              </span>
+            </span>
+            {blocks.map((block) => (
+              <Link
+                key={block.block_key}
+                {...pipelineLink(block.pipeline_key, { block: block.block_key })}
+                aria-label={`Open the delegate block “${block.block_name || block.block_key}” in ${block.pipeline_name}`}
+                className="ml-2 flex min-w-0 max-w-full items-center gap-1 rounded-sm text-micro text-ink-secondary hover:text-ink hover:underline"
+                onClick={(event) => event.stopPropagation()}
+              >
+                <CornerDownRightIcon width={12} height={12} className="shrink-0 text-ink-muted" />
+                <span className="truncate">{block.block_name || block.block_key}</span>
+              </Link>
+            ))}
+          </span>
+        );
+      })}
+    </span>
   );
 }

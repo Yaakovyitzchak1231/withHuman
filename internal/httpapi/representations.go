@@ -42,6 +42,9 @@ type requestApprovalPipelineSummaryResponse struct {
 	RevisionCount   int64      `json:"revision_count"`
 	LatestCreatedAt time.Time  `json:"latest_created_at"`
 	ArchivedAt      *time.Time `json:"archived_at,omitempty"`
+	// ReferencedBy is every delegate block in an active revision that
+	// hands requests to this pipeline.
+	ReferencedBy []domain.PipelineDelegation `json:"referenced_by"`
 }
 
 func newRequestApprovalPipelineSummaryResponses(summaries []domain.RequestApprovalPipelineSummary) []requestApprovalPipelineSummaryResponse {
@@ -51,7 +54,10 @@ func newRequestApprovalPipelineSummaryResponses(summaries []domain.RequestApprov
 			PipelineKey: summary.PipelineKey, Name: summary.Name,
 			ActiveRevision: summary.ActiveRevision, LatestRevision: summary.LatestRevision,
 			RevisionCount: summary.RevisionCount, LatestCreatedAt: summary.LatestCreatedAt,
-			ArchivedAt: summary.ArchivedAt,
+			ArchivedAt: summary.ArchivedAt, ReferencedBy: summary.ReferencedBy,
+		}
+		if responses[index].ReferencedBy == nil {
+			responses[index].ReferencedBy = []domain.PipelineDelegation{}
 		}
 	}
 	return responses

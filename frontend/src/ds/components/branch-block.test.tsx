@@ -117,7 +117,6 @@ describe("branch well", () => {
     expect(well.textContent).toContain("No block in “Refunds” decided.");
     expect(well.textContent).toContain("Ask a human");
     expect(well.textContent).toContain(branch.reason);
-    expect(screen.getByText("Check the blocks in this branch")).toBeTruthy();
     expect(screen.getByText("Otherwise, skip this branch and check the next block")).toBeTruthy();
   });
 

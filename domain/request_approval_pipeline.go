@@ -60,14 +60,28 @@ type RequestApprovalPipelineRevision struct {
 // key. Every live pipeline has exactly one active revision. An archived
 // pipeline has none and carries ArchivedAt instead. Name is the active
 // revision's, or the latest revision's for an archived pipeline.
+// ReferencedBy lists the delegate blocks in active revisions that hand
+// requests to the pipeline, in pipeline and then block order.
 type RequestApprovalPipelineSummary struct {
-	PipelineKey     string     `json:"pipeline_key"`
-	Name            string     `json:"name"`
-	ActiveRevision  *int64     `json:"active_revision,omitempty"`
-	LatestRevision  int64      `json:"latest_revision"`
-	RevisionCount   int64      `json:"revision_count"`
-	LatestCreatedAt time.Time  `json:"latest_created_at"`
-	ArchivedAt      *time.Time `json:"archived_at,omitempty"`
+	PipelineKey     string               `json:"pipeline_key"`
+	Name            string               `json:"name"`
+	ActiveRevision  *int64               `json:"active_revision,omitempty"`
+	LatestRevision  int64                `json:"latest_revision"`
+	RevisionCount   int64                `json:"revision_count"`
+	LatestCreatedAt time.Time            `json:"latest_created_at"`
+	ArchivedAt      *time.Time           `json:"archived_at,omitempty"`
+	ReferencedBy    []PipelineDelegation `json:"referenced_by"`
+}
+
+// PipelineDelegation is one delegate block in an active pipeline
+// revision, named with its pipeline so a list can say who hands requests
+// to a pipeline and link straight to the block.
+type PipelineDelegation struct {
+	PipelineKey  string `json:"pipeline_key"`
+	PipelineName string `json:"pipeline_name"`
+	Revision     int64  `json:"revision"`
+	BlockKey     string `json:"block_key"`
+	BlockName    string `json:"block_name"`
 }
 
 // PipelineUse is one reference from an active pipeline revision to a
