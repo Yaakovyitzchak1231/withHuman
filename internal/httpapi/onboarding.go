@@ -165,6 +165,8 @@ func (a *API) onboardingSessionEvents(c *gin.Context) {
 		select {
 		case <-c.Request.Context().Done():
 			return
+		case <-a.drain.streamsEnded():
+			return
 		case <-ticker.C:
 			fmt.Fprint(c.Writer, ": keepalive\n\n")
 			c.Writer.Flush()

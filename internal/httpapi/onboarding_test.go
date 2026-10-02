@@ -164,6 +164,11 @@ func (onboardingClock) Now() time.Time { return time.Date(2026, 9, 8, 12, 0, 0, 
 
 func newOnboardingRouter(t *testing.T) (*gin.Engine, *onboardingSessionsStub) {
 	t.Helper()
+	return newDrainingOnboardingRouter(t, nil)
+}
+
+func newDrainingOnboardingRouter(t *testing.T, drain *Drain) (*gin.Engine, *onboardingSessionsStub) {
+	t.Helper()
 	gin.SetMode(gin.TestMode)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	principal := domain.Principal{
@@ -178,7 +183,7 @@ func newOnboardingRouter(t *testing.T) (*gin.Engine, *onboardingSessionsStub) {
 		PublicOrigin: "http://localhost:8080", CLIDownloadURL: "https://downloads.withhuman.ai",
 	})
 	router := NewRouter(Dependencies{
-		Auth: auth, Identities: identities, Onboarding: service, Logger: logger,
+		Auth: auth, Identities: identities, Onboarding: service, Drain: drain, Logger: logger,
 		Config: Config{PublicOrigin: "http://localhost:8080", CLIDownloadURL: "https://downloads.withhuman.ai"},
 	})
 	return router, sessions
@@ -361,6 +366,26 @@ func TestOnboardingSessionEventsStreamsTheSession(t *testing.T) {
 	}
 	body := response.Body.String()
 	if !strings.HasPrefix(body, "event: session\ndata: {") || !strings.Contains(body, `"status":"awaiting_cli"`) {
+		t.Fatalf("stream body: %q", body)
+	}
+}
+
+// A stream would otherwise hold the server's shutdown open until its
+// timeout; ending it lets the browser reconnect to another replica.
+func TestOnboardingSessionEventsEndWhenTheDrainEndsStreams(t *testing.T) {
+	drain := NewDrain()
+	router, _ := newDrainingOnboardingRouter(t, drain)
+	serve(router, onboardingRequest(http.MethodPost, "/api/v1/onboarding/sessions", map[string]any{}, true, ""))
+	drain.EndStreams()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	request := onboardingRequest(http.MethodGet, "/api/v1/onboarding/session/events", nil, true, "").WithContext(ctx)
+	started := time.Now()
+	response := serve(router, request)
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("the stream outlived the drain: %s", elapsed)
+	}
+	if body := response.Body.String(); !strings.HasPrefix(body, "event: session\ndata: {") {
 		t.Fatalf("stream body: %q", body)
 	}
 }

@@ -110,6 +110,34 @@ func TestReadinessWaitsForStartupPipelineCompilation(t *testing.T) {
 	}
 }
 
+func TestReadinessFailsOnceTheDrainBegins(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	drain := NewDrain()
+	router := NewRouter(Dependencies{
+		ApprovalRepo: healthApprovalRepository{},
+		Orchestrator: healthOrchestrator{},
+		Drain:        drain,
+		Logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("readiness before the drain: %d %s", response.Code, response.Body.String())
+	}
+
+	drain.Begin()
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), `"shutdown":"draining"`) {
+		t.Fatalf("readiness while draining: %d %s", response.Code, response.Body.String())
+	}
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/livez", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("liveness while draining: %d", response.Code)
+	}
+}
+
 func TestGinContextIsEnrichedAsIdentifiersBecomeKnown(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	var output bytes.Buffer

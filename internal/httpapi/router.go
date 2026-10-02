@@ -115,8 +115,12 @@ type Dependencies struct {
 	// is not the API's; nil serves the API alone, which is what tests
 	// compose.
 	Frontend fs.FS
-	Logger   *slog.Logger
-	Config   Config
+	// Drain is the process's shutdown sequence: readiness fails once it
+	// begins and event streams end when shutdown starts. Nil gets a drain
+	// that never begins, which is what tests compose.
+	Drain  *Drain
+	Logger *slog.Logger
+	Config Config
 }
 
 type API struct {
@@ -144,6 +148,7 @@ type API struct {
 	routingSnapshots   routingSnapshotReader
 	teamEscalation     *teamescalation.Service
 	mcpOAuth           *mcpoauth.Service
+	drain              *Drain
 	logger             *slog.Logger
 	config             Config
 	// access records every registered route with its label; see access.go.
@@ -165,6 +170,10 @@ func NewRouter(dependencies Dependencies) *gin.Engine {
 
 func newAPI(dependencies Dependencies) *API {
 	policies, _ := dependencies.Roles.(application.PermissionPolicyRepository)
+	drain := dependencies.Drain
+	if drain == nil {
+		drain = NewDrain()
+	}
 	return &API{
 		permissionPolicies: policies, auth: dependencies.Auth, approvals: dependencies.Approvals, members: dependencies.Members,
 		contacts: dependencies.Contacts, slack: dependencies.Slack, discord: dependencies.Discord,
@@ -176,7 +185,7 @@ func newAPI(dependencies Dependencies) *API {
 		pipelines:         dependencies.Pipelines,
 		compiledPipelines: dependencies.CompiledPipelines, routing: dependencies.Routing,
 		routingSnapshots: dependencies.RoutingSnapshots, teamEscalation: dependencies.TeamEscalation,
-		mcpOAuth: dependencies.MCPOAuth, frontend: dependencies.Frontend,
+		mcpOAuth: dependencies.MCPOAuth, frontend: dependencies.Frontend, drain: drain,
 		logger: loggermdc.Wrap(dependencies.Logger), config: dependencies.Config,
 	}
 }
@@ -350,6 +359,10 @@ func (a *API) observability() gin.HandlerFunc {
 }
 
 func (a *API) readiness(c *gin.Context) {
+	if a.drain.Draining() {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"status": "not_ready", "checks": map[string]string{"shutdown": "draining"}})
+		return
+	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Second)
 	defer cancel()
 	checks := map[string]string{"postgres": "ready", "temporal": "ready"}
@@ -790,6 +803,8 @@ func (a *API) events(c *gin.Context) {
 		}
 		select {
 		case <-c.Request.Context().Done():
+			return
+		case <-a.drain.streamsEnded():
 			return
 		case <-ticker.C:
 			fmt.Fprint(c.Writer, ": keepalive\n\n")

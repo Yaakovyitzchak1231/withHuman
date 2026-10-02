@@ -31,8 +31,13 @@ type Config struct {
 	OnboardingSessionTTL time.Duration
 	// CLIDownloadURL is where the onboarding page sends people for the
 	// withhuman CLI: the base that serves install.sh and cli/<version>/.
-	CLIDownloadURL       string
-	ShutdownTimeout      time.Duration
+	CLIDownloadURL  string
+	ShutdownTimeout time.Duration
+	// ShutdownDrainDelay is how long the server keeps serving after a stop
+	// signal with readiness failing, before it closes its listener, so a
+	// load balancer stops routing to it first. Zero, the default, suits a
+	// process nothing balances across.
+	ShutdownDrainDelay   time.Duration
 	SMTPHost             string
 	SMTPPort             int
 	SMTPUsername         string
@@ -103,6 +108,7 @@ func Load() (Config, error) {
 		OnboardingSessionTTL:        envDuration("WITHHUMAN_ONBOARDING_SESSION_TTL", time.Hour),
 		CLIDownloadURL:              strings.TrimRight(env("WITHHUMAN_CLI_DOWNLOAD_URL", "https://downloads.withhuman.ai"), "/"),
 		ShutdownTimeout:             envDuration("WITHHUMAN_SHUTDOWN_TIMEOUT", 15*time.Second),
+		ShutdownDrainDelay:          envDuration("WITHHUMAN_SHUTDOWN_DRAIN_DELAY", 0),
 		SMTPHost:                    env("WITHHUMAN_SMTP_HOST", ""),
 		SMTPUsername:                env("WITHHUMAN_SMTP_USERNAME", ""),
 		SMTPPassword:                env("WITHHUMAN_SMTP_PASSWORD", ""),
