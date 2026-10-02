@@ -1,4 +1,3 @@
-import type { ToolSchema } from "@/ds/lib/tool-schema";
 import {
   useEffect,
   useMemo,
@@ -47,7 +46,6 @@ import {
   type PipelineReferences,
   type PipelineUse,
   type RequestApprovalBlockDefinition,
-  type RequestApprovalPipelinePreviewSample,
   type RequestApprovalPipelineRevision,
   type RequestApprovalPipelineRevisionSummary,
   type RequestApprovalPipelineSummary,
@@ -89,8 +87,16 @@ import {
 } from "./pipeline-rail";
 import { useTitle } from "./use-title";
 import { useRevisionActivation } from "./use-revision-activation";
-import { conditionFieldPaths, conditionValueSuggestions, loadPipelineSuggestions, mergeValueSuggestions, sampleValueSuggestions } from "./pipeline-suggestions";
-import { FIXED_FIELDS, type ConditionValueDetails, type ConditionValueSuggestions } from "@/ds/components/condition-builder";
+import {
+  NO_SUGGESTIONS,
+  conditionFieldPaths,
+  conditionValueSuggestions,
+  mergeValueSuggestions,
+  requestPipelineSuggestions,
+  sampleValueSuggestions,
+  usePipelineSuggestions,
+} from "./pipeline-suggestions";
+import { FIXED_FIELDS } from "@/ds/components/condition-builder";
 import { TestRequestDialog } from "./test-request-dialog";
 
 export { TestRequestDialog } from "./test-request-dialog";
@@ -118,9 +124,10 @@ type PendingAction = { kind: "activate"; revision: RequestApprovalPipelineRevisi
  * escalation paths a human exit may name, the pipelines a delegate may
  * hand to with the active revisions of the ones this pipeline hands to,
  * who hands to this one, and which block types this deployment can run.
- * A failed pipeline load is reported by the screen rather than thrown,
- * so an expired session reaches the sign-in gate, not the router's
- * error boundary. */
+ * The editors' suggestions are not here: the page never waits for them
+ * (see requestPipelineSuggestions). A failed pipeline load is reported
+ * by the screen rather than thrown, so an expired session reaches the
+ * sign-in gate, not the router's error boundary. */
 export interface PipelineViewPage {
   /* The first page of the pipeline's history, newest first; the screen
    * fetches the rest on demand. */
@@ -145,14 +152,6 @@ export interface PipelineViewPage {
   /* The active pipeline revisions whose delegate blocks hand requests
    * here. Empty for the entry pipeline. */
   uses: PipelineUse[];
-  valueSuggestions: ConditionValueSuggestions;
-  valueDetails: ConditionValueDetails;
-  /* Argument fields the agents have sent, most common first. */
-  argumentPaths: string[];
-  toolSchemas?: ToolSchema[];
-  /* The newest real request, seeding the test sample; null before the
-   * first request, when the placeholder stands in. */
-  sample: RequestApprovalPipelinePreviewSample | null;
   /* Which of the block kinds that depend on deployment configuration
    * (webhook, and every kind the edition adds) this deployment can run,
    * by type. */
@@ -228,8 +227,11 @@ export function pipelineOptions(summaries: RequestApprovalPipelineSummary[]): Pi
     }));
 }
 
-export async function loadPipelineView(pipelineKey: string, revision?: number): Promise<PipelineViewPage> {
-  const [pipeline, roster, summaries, uses, availability, suggestions] = await Promise.all([
+/* editing starts the editors' suggestions loading beside the page, for
+ * a link that opens the pipeline already in the editor. */
+export async function loadPipelineView(pipelineKey: string, revision?: number, editing = false): Promise<PipelineViewPage> {
+  if (editing) void requestPipelineSuggestions();
+  const [pipeline, roster, summaries, uses, availability] = await Promise.all([
     loadPipelineRevisions(pipelineKey).then(async (own) => ({
       ...own,
       linkedRevision: revision === undefined ? null
@@ -269,7 +271,6 @@ export async function loadPipelineView(pipelineKey: string, revision?: number): 
       ? Promise.resolve([] as PipelineUse[])
       : api.requestApprovalPipelineUses(pipelineKey).then((result) => result.uses, () => [] as PipelineUse[]),
     loadBlockAvailability(),
-    loadPipelineSuggestions(),
   ]);
   return {
     ...pipeline,
@@ -277,7 +278,6 @@ export async function loadPipelineView(pipelineKey: string, revision?: number): 
     pipelines: pipelineOptions(summaries),
     uses,
     ...availability,
-    ...suggestions,
   };
 }
 
@@ -394,9 +394,11 @@ export function PipelineViewScreen({
   const [testOpen, setTestOpen] = useState(false);
   const [test, setTest] = useState<TestRun | null>(null);
   const [cursor, setCursor] = useState(0);
-  const [sampleText, setSampleText] = useState(() =>
-    JSON.stringify(page.sample ?? defaultSample(), null, 2),
-  );
+  /* Tool, field and value suggestions for the editors, and the newest
+   * real request, which seeds the test sample until someone edits it. */
+  const offered = usePipelineSuggestions() ?? NO_SUGGESTIONS;
+  const [sampleDraft, setSampleText] = useState<string | null>(null);
+  const sampleText = sampleDraft ?? JSON.stringify(offered.sample ?? defaultSample(), null, 2);
   const settled = test !== null && cursor >= test.steps.length;
 
   /* Structural edits, drag reordering, and the confirmation before a
@@ -450,15 +452,15 @@ export function PipelineViewScreen({
    * actually sent, then what saved conditions compare, then whatever the
    * current sample holds. */
   const suggestions = useMemo(() => [...new Set([
-    ...page.argumentPaths,
+    ...offered.argumentPaths,
     ...conditionFieldPaths(savedConditions),
     ...suggestPaths(sampleText),
-  ])].sort((a, b) => Number(FIXED_FIELD_PATHS.has(b)) - Number(FIXED_FIELD_PATHS.has(a))), [page.argumentPaths, savedConditions, sampleText]);
+  ])].sort((a, b) => Number(FIXED_FIELD_PATHS.has(b)) - Number(FIXED_FIELD_PATHS.has(a))), [offered.argumentPaths, savedConditions, sampleText]);
   const valueSuggestions = useMemo(() => mergeValueSuggestions(
-    page.valueSuggestions,
+    offered.valueSuggestions,
     sampleValueSuggestions(sampleText),
     conditionValueSuggestions(savedConditions),
-  ), [page.valueSuggestions, sampleText, savedConditions]);
+  ), [offered.valueSuggestions, sampleText, savedConditions]);
   const railBlocks = editing ? (jsonDraft?.blocks ?? draft) : viewBlocks;
   const reachability = pipelineReachability(railBlocks);
 
@@ -530,6 +532,7 @@ export function PipelineViewScreen({
     setMode("blocks");
     setJsonError("");
     setExpandedKey(null);
+    void requestPipelineSuggestions();
     setEditing(true);
   }
 
@@ -779,10 +782,10 @@ export function PipelineViewScreen({
     endpoints: endpointOptions,
     pipelines,
     onOpenPipeline: (key) => void navigate(pipelineLink(key)),
-    tools: page.toolSchemas,
+    tools: offered.toolSchemas,
     suggestions,
     valueSuggestions,
-    valueDetails: page.valueDetails,
+    valueDetails: offered.valueDetails,
     defaultTarget: currentDefault,
     describeRoute: describeTargetRoute,
     expandedKey,
@@ -925,7 +928,10 @@ export function PipelineViewScreen({
                     ? [{
                         id: "test",
                         label: "Test request",
-                        action: () => setTestOpen(true),
+                        action: () => {
+                          void requestPipelineSuggestions();
+                          setTestOpen(true);
+                        },
                       }]
                     : []),
                   ...(!entry && !archived && !editing && canActivate

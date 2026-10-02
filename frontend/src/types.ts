@@ -1606,3 +1606,23 @@ export interface ToolCatalogPage {
  total: number;
  next_offset: number | null;
 }
+/* One place a distinct definition is offered. */
+export interface ToolDefinitionUse {
+ runtime: string;
+ instance_name?: string;
+ available: boolean;
+ stale: boolean;
+}
+/* A tool name on a server with one schema and description, however many
+ * agents and instances offer it. */
+export interface CatalogToolDefinition {
+ name: string;
+ server?: string;
+ description?: string;
+ input_schema?: Record<string, unknown>;
+ uses: ToolDefinitionUse[];
+}
+export interface ToolDefinitionList {
+ tool_definitions: CatalogToolDefinition[];
+ servers: string[];
+}

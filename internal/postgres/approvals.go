@@ -188,8 +188,11 @@ func (s *Store) listApprovalCandidates(ctx context.Context, input application.Li
 		AND ($8::text = '' OR strpos(lower(r.tool || ' ' || COALESCE(r.agent_instance_name, '')), lower($8)) > 0)
 		AND ($9::text = '' OR EXISTS (SELECT 1 FROM approval_request_notifications n
 			WHERE n.request_id = r.id AND n.organization_id = r.organization_id AND n.membership_id = NULLIF($9, '')::uuid))
+		AND ($10::int = 0 OR r.id IN (SELECT newest.id FROM agents a CROSS JOIN LATERAL (
+			SELECT x.id FROM approval_requests x WHERE x.organization_id = a.organization_id AND x.agent_id = a.id
+			ORDER BY x.created_at DESC, x.id DESC LIMIT $10) newest WHERE a.organization_id = $1))
 		ORDER BY r.created_at DESC, r.id DESC LIMIT $4 OFFSET $6`, input.OrganizationID, input.HumanReviewOnly,
-		string(domain.DecisionSourcePipeline), limit, string(input.AgentSlug), offset, input.Status, input.Query, string(input.NotifiedTo))
+		string(domain.DecisionSourcePipeline), limit, string(input.AgentSlug), offset, input.Status, input.Query, string(input.NotifiedTo), input.PerAgent)
 	if err != nil {
 		return nil, err
 	}

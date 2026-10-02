@@ -396,6 +396,13 @@ func TestListIsTheHumanReviewQueue(t *testing.T) {
 	if repository.listInput.HumanReviewOnly || repository.listInput.AgentSlug != "release" {
 		t.Fatalf("agent listing did not scope to the agent: %#v", repository.listInput)
 	}
+	// So is every agent's recent history.
+	if _, err := service.List(context.Background(), reviewer, application.ListApprovalsInput{Limit: 200, PerAgent: 20}); err != nil {
+		t.Fatalf("recent history listing by a reviewer failed: %v", err)
+	}
+	if repository.listInput.HumanReviewOnly || repository.listInput.PerAgent != 20 {
+		t.Fatalf("recent history listing excluded automatic decisions: %#v", repository.listInput)
+	}
 }
 
 // limitedEntitlements fixes one dimension's limit for one organization

@@ -1,14 +1,27 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
 import { extensions, registerExtensions } from "./extensions";
-import type { AgentSummary, ApprovalRequest, ToolCatalogEntry } from "../types";
-import { argumentPathSuggestions, conditionFieldPaths, conditionValueSuggestions, loadPipelineSuggestions, mergeValueSuggestions, sampleValueSuggestions } from "./pipeline-suggestions";
+import type { AgentSummary, ApprovalRequest, Session } from "../types";
+import {
+  argumentPathSuggestions,
+  conditionFieldPaths,
+  conditionValueSuggestions,
+  loadPipelineSuggestions,
+  mergeValueSuggestions,
+  requestPipelineSuggestions,
+  resetPipelineSuggestions,
+  sampleValueSuggestions,
+} from "./pipeline-suggestions";
+import { setSession } from "./session-store";
 import { sampleFromRequest, suggestPaths } from "./pipeline-blocks";
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.useRealTimers();
   extensions.serverDirectory = null;
   extensions.toolSources.length = 0;
+  resetPipelineSuggestions();
+  setSession(null);
 });
 
 describe("condition value suggestions", () => {
@@ -31,32 +44,42 @@ describe("condition value suggestions", () => {
     });
   });
 
-  const history: Record<string, Partial<ApprovalRequest>[]> = {
-    support: [
-      { agent_slug: "support", agent_name: "Support agent", tool: "refund", arguments: { currency: "GBP", order: { id: "o-2" } }, created_at: "2026-09-15T10:00:00Z", agent_reasoning: "Duplicate charge." },
-      { agent_slug: "support", agent_name: "Support agent", tool: "refund", arguments: { currency: "EUR", note: "late" }, created_at: "2026-09-14T10:00:00Z" },
-    ],
-    release: [
-      { agent_slug: "release", agent_name: "Release agent", tool: "deploy", arguments: { environment: "production" }, created_at: "2026-09-13T10:00:00Z" },
-    ],
-  };
+  /* Every agent's recent history, newest first, as the listing returns
+   * it. */
+  const history = [
+    { agent_slug: "support", agent_name: "Support agent", tool: "refund", arguments: { currency: "GBP", order: { id: "o-2" } }, created_at: "2026-09-15T10:00:00Z", agent_reasoning: "Duplicate charge." },
+    { agent_slug: "support", agent_name: "Support agent", tool: "refund", arguments: { currency: "EUR", note: "late" }, created_at: "2026-09-14T10:00:00Z" },
+    { agent_slug: "release", agent_name: "Release agent", tool: "deploy", arguments: { environment: "production" }, created_at: "2026-09-13T10:00:00Z" },
+  ] as ApprovalRequest[];
 
   function mockDirectory() {
     vi.spyOn(api, "agents").mockResolvedValue({ agents: [
       { slug: "support", name: "Support agent", last_seen_at: "2026-09-15T10:00:00Z" },
       { slug: "release", name: "Release agent", last_seen_at: "2026-09-13T10:00:00Z" },
     ] as AgentSummary[] });
-    vi.spyOn(api, "agentApprovals").mockImplementation(async (agentSlug) => ({ requests: (history[agentSlug] ?? []) as ApprovalRequest[] }));
-    vi.spyOn(api, "approvals").mockResolvedValue({ requests: [] });
-    vi.spyOn(api, "toolCatalog").mockResolvedValue({ tools: [{ id: "merge", name: "merge", agent_slug: "support", runtime: "claude-code", source: "mcp", server: "github", available: true, stale: false, discovery_context: "project", schema_fingerprint: "schema", last_seen_at: "2026-09-22T09:00:00Z", last_attempt_at: "2026-09-22T09:00:00Z", input_schema: { type: "object", properties: { branch: { type: "string" } } } }] as ToolCatalogEntry[], sources: [], total: 1, next_offset: null });
+    vi.spyOn(api, "recentApprovals").mockResolvedValue({ requests: history });
+    vi.spyOn(api, "toolDefinitions").mockResolvedValue({
+      tool_definitions: [{
+        name: "merge",
+        server: "github",
+        input_schema: { type: "object", properties: { branch: { type: "string" } } },
+        uses: [
+          { runtime: "claude-code", instance_name: "alice-laptop", available: true, stale: false },
+          { runtime: "claude-code", instance_name: "bob-desktop", available: false, stale: false },
+        ],
+      }],
+      servers: ["github"],
+    });
   }
 
-  it("uses every agent's catalogue and history with actual approval-request names", async () => {
+  it("uses the whole catalogue and every agent's history with actual approval-request names", async () => {
     mockDirectory();
     const page = await loadPipelineSuggestions();
-    expect(vi.mocked(api.agentApprovals).mock.calls.map(([agentSlug]) => agentSlug)).toEqual(["support", "release"]);
-    expect(api.approvals).not.toHaveBeenCalled();
-    expect(page.toolSchemas.find((tool) => tool.name === "merge")?.inputSchema).toEqual({ type: "object", properties: { branch: { type: "string" } } });
+    expect(vi.mocked(api.recentApprovals).mock.calls).toEqual([[{ perAgent: 20, limit: 200 }]]);
+    expect(page.toolSchemas.find((tool) => tool.name === "merge")).toMatchObject({
+      inputSchema: { type: "object", properties: { branch: { type: "string" } } },
+      source: "github · alice-laptop, github · bob-desktop · unavailable",
+    });
     expect(page.valueSuggestions["/agent/slug"]).toEqual(["support", "release"]);
     expect(page.valueSuggestions["/agent/name"]).toEqual(["Support agent", "Release agent"]);
     expect(page.valueSuggestions["/request/tool"]).toEqual(["merge", "refund", "deploy"]);
@@ -80,16 +103,16 @@ describe("condition value suggestions", () => {
     });
   });
 
-  it("falls back to the review queue without agents and leaves the sample to the placeholder without requests", async () => {
+  it("keeps the history when agents cannot be listed and leaves the sample to the placeholder without requests", async () => {
     mockDirectory();
     vi.mocked(api.agents).mockRejectedValue(new Error("Forbidden"));
-    vi.mocked(api.approvals).mockResolvedValue({ requests: history.release as ApprovalRequest[] });
+    vi.mocked(api.recentApprovals).mockResolvedValue({ requests: history.slice(2) });
     const page = await loadPipelineSuggestions();
-    expect(api.agentApprovals).not.toHaveBeenCalled();
     expect(page.argumentPaths).toEqual(["/request/arguments/environment"]);
     expect(page.sample?.agent).toEqual({ slug: "release", name: "Release agent" });
+    expect(page.valueSuggestions["/agent/slug"]).toEqual([]);
 
-    vi.mocked(api.approvals).mockResolvedValue({ requests: [] });
+    vi.mocked(api.recentApprovals).mockResolvedValue({ requests: [] });
     const empty = await loadPipelineSuggestions();
     expect(empty.argumentPaths).toEqual([]);
     expect(empty.sample).toBeNull();
@@ -97,7 +120,7 @@ describe("condition value suggestions", () => {
 
   it("keeps available choices when optional directories are forbidden or unavailable", async () => {
     mockDirectory();
-    vi.mocked(api.toolCatalog).mockRejectedValue(new Error("Forbidden"));
+    vi.mocked(api.toolDefinitions).mockRejectedValue(new Error("Forbidden"));
     const page = await loadPipelineSuggestions();
     expect(page.valueSuggestions["/request/tool"]).toEqual(["refund", "deploy"]);
     expect(page.valueSuggestions["/agent/name"]).toEqual(["Support agent", "Release agent"]);
@@ -105,12 +128,7 @@ describe("condition value suggestions", () => {
 
   it("offers the edition's registered servers first, named by their source, and catalogue sources without tools", async () => {
     mockDirectory();
-    vi.mocked(api.toolCatalog).mockResolvedValue({
-      tools: [],
-      sources: [{ id: "src", agent_slug: "support", runtime: "claude-code", discovery_context: "project", source: "mcp", server: "linear", last_attempt_at: "2026-09-22T09:00:00Z", last_success_at: "2026-09-22T09:00:00Z" }],
-      total: 0,
-      next_offset: null,
-    });
+    vi.mocked(api.toolDefinitions).mockResolvedValue({ tool_definitions: [], servers: ["linear"] });
     registerExtensions({
       toolSources: [{ source: "gateway", label: "Gateway", external: true }],
       serverDirectory: async () => [{ server: "github-prod", name: "GitHub production", source: "gateway" }],
@@ -145,6 +163,40 @@ describe("condition value suggestions", () => {
     const page = await loadPipelineSuggestions();
     expect(page.valueSuggestions["/request/server"]).toEqual(["github"]);
     expect(page.valueDetails).toEqual({ "/request/server": {} });
+  });
+});
+
+describe("the shared suggestions", () => {
+  function signIn(organization: string) {
+    setSession({ principal: { actor_type: "human", actor_id: "user-1", organization_id: organization, permissions: [], grants: [] }, assignments: [] } as unknown as Session);
+  }
+
+  function mockReads() {
+    vi.spyOn(api, "agents").mockResolvedValue({ agents: [] });
+    vi.spyOn(api, "recentApprovals").mockResolvedValue({ requests: [] });
+    vi.spyOn(api, "toolDefinitions").mockResolvedValue({ tool_definitions: [], servers: [] });
+  }
+
+  it("loads once for every pipeline while fresh, and again once it ages", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    signIn("org-1");
+    mockReads();
+    void requestPipelineSuggestions();
+    await requestPipelineSuggestions();
+    await requestPipelineSuggestions();
+    expect(api.toolDefinitions).toHaveBeenCalledTimes(1);
+    vi.setSystemTime(Date.now() + 61_000);
+    void requestPipelineSuggestions();
+    expect(api.toolDefinitions).toHaveBeenCalledTimes(2);
+  });
+
+  it("loads again for someone else signed in", async () => {
+    signIn("org-1");
+    mockReads();
+    await requestPipelineSuggestions();
+    signIn("org-2");
+    void requestPipelineSuggestions();
+    expect(api.toolDefinitions).toHaveBeenCalledTimes(2);
   });
 });
 

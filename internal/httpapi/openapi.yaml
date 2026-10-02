@@ -1039,6 +1039,10 @@ paths:
 
         Pass `agent_slug` to list one agent's requests instead. That list
         includes the requests the pipeline decided automatically.
+
+        Pass `per_agent` to list every agent's recent history instead: at
+        most that many of each agent's newest requests, automatic decisions
+        included, newest first overall.
       operationId: listReviewerQueue
       x-withhuman-permission: request.read
       x-withhuman-credential-kinds: [session, personal_api_key, organization_api_key]
@@ -1054,6 +1058,11 @@ paths:
           required: false
           description: "Show one agent's requests instead of the queue, including the ones the pipeline decided."
           schema: { type: string, pattern: '^[a-z0-9][a-z0-9._-]{0,62}$' }
+        - name: per_agent
+          in: query
+          required: false
+          description: "Show each agent's newest requests instead of the queue, at most this many per agent, including the ones the pipeline decided. `limit` still caps the whole list, and the other filters apply to those newest requests."
+          schema: { type: integer, minimum: 1, maximum: 50 }
         - name: offset
           in: query
           description: Number of visible matching requests to skip before returning this page.
@@ -5409,6 +5418,32 @@ paths:
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+  /api/v1/tool_definitions:
+    get:
+      tags: [Agents]
+      summary: List distinct tool definitions
+      operationId: listToolDefinitions
+      x-withhuman-permission: agent.read
+      x-withhuman-credential-kinds: [session, personal_api_key, organization_api_key]
+      security: [{ cookieAuth: [] }, { apiKeyAuth: [] }]
+      description: >-
+        Returns the catalogue within the caller's agent scope in one response,
+        folded to distinct definitions: a tool name on a server with one
+        schema and description appears once, listing every runtime and
+        instance that offers it, however many agents see it. Also returns
+        every server a catalogue source names, including sources where
+        discovery found no tools. The edition's own tool source is refreshed
+        as for the catalogue listing. Useful for suggesting tools and argument
+        fields while writing pipeline conditions; the information is advisory
+        and never changes approval decisions.
+      responses:
+        "200":
+          description: Distinct definitions and the servers the catalogue names
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ToolDefinitionList" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
 components:
   examples:
     AAPPendingRequest:
@@ -5750,6 +5785,29 @@ components:
         last_attempt_at: { type: string, format: date-time }
         last_success_at: { type: [string, 'null'], format: date-time }
         error: { type: string }
+    ToolDefinitionUse:
+      type: object
+      required: [runtime, available, stale]
+      properties:
+        runtime: { type: string, description: "The runtime that offers the definition, or the source an edition adds (the hosted gateway's `gateway`)" }
+        instance_name: { type: string, description: "The instance that reported the definition, when an instance did" }
+        available: { type: boolean }
+        stale: { type: boolean }
+    CatalogToolDefinition:
+      type: object
+      required: [name, uses]
+      properties:
+        name: { type: string, description: Exact tool name sent in approval requests }
+        server: { type: string }
+        description: { type: string }
+        input_schema: { type: object, additionalProperties: true }
+        uses: { type: array, items: { $ref: "#/components/schemas/ToolDefinitionUse" } }
+    ToolDefinitionList:
+      type: object
+      required: [tool_definitions, servers]
+      properties:
+        tool_definitions: { type: array, items: { $ref: "#/components/schemas/CatalogToolDefinition" } }
+        servers: { type: array, items: { type: string } }
     ToolCatalogPage:
       type: object
       required: [tools, sources, total, next_offset]

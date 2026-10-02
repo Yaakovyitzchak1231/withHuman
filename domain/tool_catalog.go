@@ -149,3 +149,32 @@ type ToolCatalogPage struct {
 	Total      int                 `json:"total"`
 	NextOffset *int                `json:"next_offset"`
 }
+
+// ToolDefinitionUse is one place a tool definition is offered: a runtime,
+// the instance that reported it when an instance did, and whether it can
+// serve there now.
+type ToolDefinitionUse struct {
+	Runtime      string `json:"runtime"`
+	InstanceName string `json:"instance_name,omitempty"`
+	Available    bool   `json:"available"`
+	Stale        bool   `json:"stale"`
+}
+
+// CatalogToolDefinition is one distinct definition in the catalogue: a
+// tool name on a server with one schema and description, however many
+// agents and instances offer it.
+type CatalogToolDefinition struct {
+	Name        string              `json:"name"`
+	Server      string              `json:"server,omitempty"`
+	Description string              `json:"description,omitempty"`
+	InputSchema json.RawMessage     `json:"input_schema,omitempty"`
+	Uses        []ToolDefinitionUse `json:"uses"`
+}
+
+// ToolDefinitionList is the catalogue folded for the pipeline editors:
+// every distinct definition, and every server a source names, including
+// sources where discovery found no tools.
+type ToolDefinitionList struct {
+	ToolDefinitions []CatalogToolDefinition `json:"tool_definitions"`
+	Servers         []string                `json:"servers"`
+}

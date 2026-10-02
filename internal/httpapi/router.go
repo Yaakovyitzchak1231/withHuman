@@ -247,6 +247,7 @@ func (a *API) router() *gin.Engine {
 	a.installAPIKeyRoutes(appAPI)
 	a.handle(appAPI, http.MethodGet, "/tool_catalog", string(domain.PermissionAgentRead), a.listToolCatalog)
 	a.handle(appAPI, http.MethodGet, "/tool_catalog/:id", string(domain.PermissionAgentRead), a.listToolCatalog)
+	a.handle(appAPI, http.MethodGet, "/tool_definitions", string(domain.PermissionAgentRead), a.listToolDefinitions)
 	a.handle(appAPI, http.MethodGet, "/members", string(domain.PermissionMembershipRead), a.listMembers)
 	a.handle(appAPI, http.MethodPatch, "/members/:id", string(domain.PermissionMembershipWrite), a.updateMember)
 	a.handle(appAPI, http.MethodDelete, "/members/:id", string(domain.PermissionMembershipWrite), a.removeMember)
@@ -697,7 +698,7 @@ func (a *API) getQueueApproval(c *gin.Context) {
 func (a *API) listApprovals(c *gin.Context) {
 	requests, err := a.approvals.List(c.Request.Context(), currentPrincipal(c), application.ListApprovalsInput{
 		Limit: queryInt(c, "limit", 50), Offset: queryInt(c, "offset", 0),
-		AgentSlug: domain.AgentSlug(c.Query("agent_slug")), Query: strings.TrimSpace(c.Query("q")), Status: domain.ApprovalStatus(c.Query("status")),
+		AgentSlug: domain.AgentSlug(c.Query("agent_slug")), PerAgent: queryInt(c, "per_agent", 0), Query: strings.TrimSpace(c.Query("q")), Status: domain.ApprovalStatus(c.Query("status")),
 		Scope: application.QueueScope(c.Query("scope")),
 	})
 	if err != nil {

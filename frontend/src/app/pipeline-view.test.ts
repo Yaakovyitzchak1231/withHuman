@@ -3,6 +3,7 @@ import { api, RequestError } from "../api";
 import type { RequestApprovalPipelineRevision } from "../types";
 import { loadPipelineView } from "./pipeline-view";
 import { pipelineLink, pipelineSearch } from "./pipeline-link";
+import { resetPipelineSuggestions } from "./pipeline-suggestions";
 
 function revision(number: number, pipelineKey = "entry"): RequestApprovalPipelineRevision {
   return {
@@ -18,7 +19,10 @@ function revision(number: number, pipelineKey = "entry"): RequestApprovalPipelin
   };
 }
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  resetPipelineSuggestions();
+});
 
 describe("pipeline review links", () => {
   it("preserves the pipeline key, historical revision, and exact block key", () => {
@@ -55,8 +59,18 @@ describe("loading a pipeline from a review link", () => {
     vi.spyOn(api, "escalationPaths").mockResolvedValue({ escalation_paths: [] });
     vi.spyOn(api, "runtimeConfig").mockRejectedValue(new Error("No optional block configuration"));
     vi.spyOn(api, "agents").mockResolvedValue({ agents: [] });
-    vi.spyOn(api, "approvals").mockResolvedValue({ requests: [] });
+    vi.spyOn(api, "recentApprovals").mockResolvedValue({ requests: [] });
+    vi.spyOn(api, "toolDefinitions").mockResolvedValue({ tool_definitions: [], servers: [] });
   }
+
+  it("never waits for the editors' suggestions, and starts them only for the editor", async () => {
+    mockPage();
+    vi.mocked(api.toolDefinitions).mockReturnValue(new Promise(() => {}));
+    await loadPipelineView("release");
+    expect(api.toolDefinitions).not.toHaveBeenCalled();
+    await loadPipelineView("release", undefined, true);
+    expect(api.toolDefinitions).toHaveBeenCalledTimes(1);
+  });
 
   it.each(["entry", "release"])("loads the pinned revision separately from the active revision for pipeline %s", async (pipelineKey) => {
     mockPage();
