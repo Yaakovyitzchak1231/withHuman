@@ -89,8 +89,8 @@ export function RoleBadges({
   );
 }
 
-/* One predefined role, explained. Owner is offered only to owners: only
- * an owner may grant it. */
+/* One predefined role, explained, as a single bordered list. Owner is
+ * offered only to owners: only an owner may grant it. */
 export function RolePicker({
   roles,
   value,
@@ -110,18 +110,15 @@ export function RolePicker({
       value={value}
       onValueChange={(next) => onChange(next as RoleKey)}
       disabled={disabled}
+      className="gap-0 overflow-hidden rounded-lg border-hairline border-edge"
     >
       {roles.map((role) => (
         <RadioOption
           key={role.key}
           value={role.key}
           disabled={role.key === "owner" && !canGrantOwner}
-          label={
-            <span className="flex items-center gap-2">
-              {role.name}
-              {role.dangerous ? <Badge tone="warn">Sensitive</Badge> : null}
-            </span>
-          }
+          className="rounded-none border-t-hairline border-edge px-3 py-2.5 first:border-t-0"
+          label={role.name}
           description={
             role.key === "owner" && !canGrantOwner
               ? `${role.description} Only an owner can grant it.`

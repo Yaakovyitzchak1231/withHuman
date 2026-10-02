@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { cn } from "@/ds/lib/cn";
 import { Link, type LinkProps, useRouter } from "@tanstack/react-router";
 import { Badge } from "@/ds/components/badge";
 import { Button } from "@/ds/components/button";
@@ -110,6 +111,7 @@ export function PermissionPolicyFields({
   resources,
   disabled = false,
   holder = "human",
+  className,
 }: {
   value: PermissionPolicyDraft;
   onChange: (value: PermissionPolicyDraft) => void;
@@ -117,6 +119,9 @@ export function PermissionPolicyFields({
   resources: PermissionResource[];
   disabled?: boolean;
   holder?: "human" | "organization_api_key";
+  /* Given flex-1 inside a fixed-height column, the empty state centres
+   * in the space left under the scope pickers. */
+  className?: string;
 }) {
   const principal = usePrincipal();
   const [query, setQuery] = useState("");
@@ -142,7 +147,7 @@ export function PermissionPolicyFields({
     });
   }
   return (
-    <div className="flex flex-col gap-4">
+    <div className={cn("flex flex-col gap-4", className)}>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-[1fr_2fr]">
         <div className="flex min-w-0 flex-col gap-1.5">
           <span className="text-label text-ink">Scope</span>
@@ -231,7 +236,7 @@ export function PermissionPolicyFields({
       </div>
       {!value.scope_kind ? (
         <EmptyState
-          className="border-t-hairline border-edge px-0 py-6"
+          className="flex-1 justify-center border-t-hairline border-edge px-0 py-6"
           title="Select a scope"
           description="Choose a scope to see its available permissions."
         />

@@ -841,12 +841,13 @@ function InviteDialog({
               className={cn(
                 "flex flex-col gap-4",
                 customPermissions &&
-                  "h-[min(400px,calc(100dvh-220px))] [scrollbar-gutter:stable]",
+                  "h-[min(372px,calc(100dvh-220px))] [scrollbar-gutter:stable]",
               )}
             >
               <TextField
                 label="Email"
                 type="email"
+                placeholder="name@company.com"
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
@@ -864,9 +865,12 @@ function InviteDialog({
                   aria-label="How to choose access"
                   value={access}
                   onValueChange={(value) => setAccess(value as InviteAccess)}
+                  className="flex w-full"
                 >
-                  <ToggleGroupItem value="role">Predefined role</ToggleGroupItem>
-                  <ToggleGroupItem value="custom">
+                  <ToggleGroupItem value="role" className="h-7 flex-1">
+                    Predefined role
+                  </ToggleGroupItem>
+                  <ToggleGroupItem value="custom" className="h-7 flex-1">
                     Custom permissions
                   </ToggleGroupItem>
                 </ToggleGroup>
@@ -874,7 +878,10 @@ function InviteDialog({
               {access === "role" ? (
                 roles.length > 0 ? (
                   <div className="flex flex-col gap-1.5">
-                    <span className="text-label text-ink">Role</span>
+                    {/* The tab already says it is a role. */}
+                    {customPermissions ? null : (
+                      <span className="text-label text-ink">Role</span>
+                    )}
                     <RolePicker
                       roles={roles}
                       value={role}
@@ -895,6 +902,7 @@ function InviteDialog({
                   permissions={options.permissions}
                   resources={options.resources}
                   disabled={submitting}
+                  className="flex-1"
                 />
               ) : (
                 <Callout tone="warn">
