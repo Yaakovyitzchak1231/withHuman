@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from "react";
+import { cn } from "@/ds/lib/cn";
 import { ToggleGroup, ToggleGroupItem } from "@/ds/components/toggle-group";
 import { Avatar } from "@/ds/components/avatar";
 import { Referenced } from "@/ds/components/reference";
@@ -43,7 +44,18 @@ import {
   policyValid,
   type PermissionPolicyDraft,
 } from "./permission-policies";
-import type { PermissionPoliciesPage } from "../types";
+import type {
+  PermissionPoliciesPage,
+  PermissionPolicyInput,
+  RoleDescriptor,
+  RoleKey,
+} from "../types";
+import {
+  ChangeRoleDialog,
+  RoleBadges,
+  RolePicker,
+  useCustomPermissions,
+} from "./roles";
 import { useAccess } from "./authorization";
 import { extensionLink, extensions, useAuditLinks } from "./extensions";
 import { capitalize, formatRelative, formatUntil } from "./format";
@@ -62,6 +74,8 @@ export interface MembersPage {
   invitations: Invitation[];
   error: string;
   permissionOptions: PermissionPoliciesPage | null;
+  /* The predefined roles, owner first. */
+  roles: RoleDescriptor[];
 }
 
 export function MembersScreen({
@@ -89,6 +103,8 @@ export function MembersScreen({
   const auditLinkFor = useAuditLinks();
   const navigate = useNavigate();
   const { members, teams, invitations, error } = page;
+  const customPermissions = useCustomPermissions();
+  const roleNames = new Map(page.roles.map((role) => [role.key, role.name]));
   /* Deprovisioned members stay on the record but not on the roster:
    * the table shows provisioned members unless asked for everyone. */
   const [roster, setRoster] = useState<"provisioned" | "all">("provisioned");
@@ -106,6 +122,11 @@ export function MembersScreen({
       member.display_name,
       member.email,
       ...member.assignments.flatMap((assignment) => assignment.permissions),
+      ...member.assignments.map((assignment) =>
+        assignment.built_in_role
+          ? (roleNames.get(assignment.built_in_role) ?? "")
+          : "custom",
+      ),
       ...member.team_ids.map((teamID) => teamNames.get(teamID) ?? ""),
     ].some((text) => (text ?? "").toLowerCase().includes(needle));
   const shown = members.filter(
@@ -116,6 +137,7 @@ export function MembersScreen({
   const [inviteOpen, setInviteOpen] = useState(false);
 
   const [removing, setRemoving] = useState<Member | null>(null);
+  const [changingRole, setChangingRole] = useState<Member | null>(null);
   /* A suspension or removal the server refused because active escalation
    * paths still name the member; the dialog lists them and offers to
    * force the change. */
@@ -220,17 +242,22 @@ export function MembersScreen({
       ),
     },
     {
-      id: "permissions",
-      label: "Permissions",
-      width: 150,
-      info: "Hover or focus the count to see each permission, its scope, and where it comes from.",
-      docsLinks: [{ href: "https://withhuman.ai/docs/web-app/permissions#direct-and-inherited-access", label: "Direct and inherited permissions" }],
+      id: "role",
+      label: "Role",
+      width: 170,
+      info: customPermissions
+        ? "The predefined role a member holds, or Custom when permission policies grant them access. Hover or focus the count to see each permission."
+        : "The predefined role a member holds: owner, admin, reviewer, or auditor.",
+      docsLinks: [{ href: "https://withhuman.ai/docs/web-app/permissions#direct-and-inherited-access", label: "Roles and permissions" }],
       cell: (member) => (
         <div className="flex flex-col items-start gap-1">
-          <PermissionsSummary
-            assignments={member.assignments}
-            definitions={page.permissionOptions?.permissions}
-          />
+          <RoleBadges assignments={member.assignments} roles={page.roles} />
+          {customPermissions ? (
+            <PermissionsSummary
+              assignments={member.assignments}
+              definitions={page.permissionOptions?.permissions}
+            />
+          ) : null}
           {member.directory_managed ? (
             <Badge tone="accent" icon={<ShieldIcon width={14} height={14} />}>
               Directory
@@ -307,15 +334,25 @@ export function MembersScreen({
           ]
         : []),
       {
-        id: "permissions",
-        label: "Edit permissions",
-        disabled: !canAssign || locked,
-        action: () =>
-          void navigate({
-            to: "/settings/permissions/$kind/$principalId",
-            params: { kind: "members", principalId: member.id },
-          }),
+        id: "role",
+        label: "Change role",
+        disabled: !canAssign || locked || page.roles.length === 0,
+        action: () => setChangingRole(member),
       },
+      ...(customPermissions
+        ? [
+            {
+              id: "permissions",
+              label: "Edit permissions",
+              disabled: !canAssign || locked,
+              action: () =>
+                void navigate({
+                  to: "/settings/permissions/$kind/$principalId",
+                  params: { kind: "members", principalId: member.id },
+                }),
+            },
+          ]
+        : []),
       {
         id: "suspend",
         label: member.status === "suspended" ? "Reactivate" : "Suspend",
@@ -448,10 +485,10 @@ export function MembersScreen({
             >
               {invitation.grants.map((grant) => (
                 <Badge
-                  key={`${grant.permissions.join(":")}:${grant.scope_kind}:${grant.scope_id ?? ""}`}
+                  key={`${grant.role ?? grant.permissions.join(":")}:${grant.scope_kind}:${grant.scope_id ?? ""}`}
                   icon={<PersonIcon width={14} height={14} />}
                 >
-                  {grant.permissions.length} permissions
+                  {grant.role_name ?? `${grant.permissions.length} permissions`}
                 </Badge>
               ))}
               {canInvite ? (
@@ -503,8 +540,32 @@ export function MembersScreen({
         open={inviteOpen}
         onOpenChange={setInviteOpen}
         options={page.permissionOptions}
+        roles={page.roles}
+        customPermissions={customPermissions}
+        canGrantOwner={isOwner}
         onRefresh={() => router.invalidate()}
       />
+      {changingRole ? (
+        <ChangeRoleDialog
+          name={changingRole.display_name || changingRole.email}
+          assignments={changingRole.assignments}
+          roles={page.roles}
+          canGrantOwner={isOwner}
+          onClose={() => setChangingRole(null)}
+          onSave={async (role) => {
+            const saved = await act(
+              () => api.setMemberRole(changingRole.id, role),
+              "Role change failed",
+            );
+            if (saved)
+              toast.add({
+                type: "approve",
+                title: `${changingRole.display_name || changingRole.email} is now ${roleNames.get(role) ?? role}`,
+              });
+            return saved;
+          }}
+        />
+      ) : null}
       {removing ? (
         <Dialog open onOpenChange={(open) => !open && setRemoving(null)}>
           <DialogContent>
@@ -671,20 +732,32 @@ function TargetedPathList({
 const TITLE = "Members";
 const DESCRIPTION = "Manage your organization's people.";
 
+/* How the invitee's access is chosen: a predefined role everywhere, or,
+ * where the edition offers them, custom permissions. */
+type InviteAccess = "role" | "custom";
+
 function InviteDialog({
   open,
   onOpenChange,
   options,
+  roles,
+  customPermissions,
+  canGrantOwner,
   onRefresh,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   options: PermissionPoliciesPage | null;
+  roles: RoleDescriptor[];
+  customPermissions: boolean;
+  canGrantOwner: boolean;
   onRefresh: () => Promise<void>;
 }) {
   const toast = useToast();
   const [quotaBlocked, setQuotaBlocked] = useState(false);
   const [email, setEmail] = useState("");
+  const [access, setAccess] = useState<InviteAccess>("role");
+  const [role, setRole] = useState<RoleKey | null>("reviewer");
   const [policy, setPolicy] = useState<PermissionPolicyDraft>(emptyPolicy);
   const [submitting, setSubmitting] = useState(false);
   const [inviteURL, setInviteURL] = useState("");
@@ -692,6 +765,8 @@ function InviteDialog({
   function close(next: boolean) {
     onOpenChange(next);
     if (!next) {
+      setAccess("role");
+      setRole("reviewer");
       setPolicy(emptyPolicy());
       setEmail("");
       setInviteURL("");
@@ -701,12 +776,17 @@ function InviteDialog({
   }
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (!policyValid(policy)) return;
+    if (!ready) return;
     setSubmitting(true);
     setFailure("");
     setQuotaBlocked(false);
     try {
-      const result = await api.createInvitation(email, [policy]);
+      const result = await api.createInvitation(
+        email,
+        access === "role" && role
+          ? { role }
+          : { permission_policies: [policy as PermissionPolicyInput] },
+      );
       await onRefresh();
       if (result.invite_url) {
         setInviteURL(result.invite_url);
@@ -728,6 +808,8 @@ function InviteDialog({
       setSubmitting(false);
     }
   }
+  const ready =
+    access === "role" ? role !== null : customPermissions && policyValid(policy);
   return (
     <Dialog open={open} onOpenChange={close}>
       <DialogContent className="w-[min(560px,calc(100vw-32px))]">
@@ -748,12 +830,24 @@ function InviteDialog({
           <form onSubmit={submit} className="flex min-h-0 flex-col">
             <DialogTitle>Invite a member</DialogTitle>
             <DialogDescription>
-              Choose the permissions they receive when they accept.
+              {customPermissions
+                ? "Choose a role, or the exact permissions they receive when they accept."
+                : "Choose the role they receive when they accept."}
             </DialogDescription>
-            <DialogBody className="flex flex-col gap-4">
+            {/* With the role and custom tabs the body keeps one height,
+             * sized to the role list, so switching never resizes the
+             * dialog; the permission list scrolls inside it. */}
+            <DialogBody
+              className={cn(
+                "flex flex-col gap-4",
+                customPermissions &&
+                  "h-[min(372px,calc(100dvh-220px))] [scrollbar-gutter:stable]",
+              )}
+            >
               <TextField
                 label="Email"
                 type="email"
+                placeholder="name@company.com"
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
@@ -766,13 +860,49 @@ function InviteDialog({
                   ) : null}
                 </Callout>
               ) : null}
-              {options ? (
+              {customPermissions ? (
+                <ToggleGroup
+                  aria-label="How to choose access"
+                  value={access}
+                  onValueChange={(value) => setAccess(value as InviteAccess)}
+                  className="flex w-full"
+                >
+                  <ToggleGroupItem value="role" className="h-7 flex-1">
+                    Predefined role
+                  </ToggleGroupItem>
+                  <ToggleGroupItem value="custom" className="h-7 flex-1">
+                    Custom permissions
+                  </ToggleGroupItem>
+                </ToggleGroup>
+              ) : null}
+              {access === "role" ? (
+                roles.length > 0 ? (
+                  <div className="flex flex-col gap-1.5">
+                    {/* The tab already says it is a role. */}
+                    {customPermissions ? null : (
+                      <span className="text-label text-ink">Role</span>
+                    )}
+                    <RolePicker
+                      roles={roles}
+                      value={role}
+                      onChange={setRole}
+                      canGrantOwner={canGrantOwner}
+                      disabled={submitting}
+                    />
+                  </div>
+                ) : (
+                  <Callout tone="warn">
+                    Roles could not be loaded. Reload Members to try again.
+                  </Callout>
+                )
+              ) : options ? (
                 <PermissionPolicyFields
                   value={policy}
                   onChange={setPolicy}
                   permissions={options.permissions}
                   resources={options.resources}
                   disabled={submitting}
+                  className="flex-1"
                 />
               ) : (
                 <Callout tone="warn">
@@ -793,7 +923,7 @@ function InviteDialog({
                 type="submit"
                 variant="primary"
                 loading={submitting}
-                disabled={!options || !policyValid(policy)}
+                disabled={!ready}
               >
                 Create invitation
               </Button>

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { cn } from "@/ds/lib/cn";
 import { Link, type LinkProps, useRouter } from "@tanstack/react-router";
 import { Badge } from "@/ds/components/badge";
 import { Button } from "@/ds/components/button";
@@ -35,6 +36,7 @@ import { areaLabel } from "./permission-labels";
 import { can } from "./authorization";
 import { usePrincipal } from "./principal";
 import { ReferenceChip } from "./reference-chip";
+import { useCustomPermissions } from "./roles";
 import { refreshSession } from "./session-store";
 import { useTitle } from "./use-title";
 
@@ -109,6 +111,7 @@ export function PermissionPolicyFields({
   resources,
   disabled = false,
   holder = "human",
+  className,
 }: {
   value: PermissionPolicyDraft;
   onChange: (value: PermissionPolicyDraft) => void;
@@ -116,6 +119,9 @@ export function PermissionPolicyFields({
   resources: PermissionResource[];
   disabled?: boolean;
   holder?: "human" | "organization_api_key";
+  /* Given flex-1 inside a fixed-height column, the empty state centres
+   * in the space left under the scope pickers. */
+  className?: string;
 }) {
   const principal = usePrincipal();
   const [query, setQuery] = useState("");
@@ -141,7 +147,7 @@ export function PermissionPolicyFields({
     });
   }
   return (
-    <div className="flex flex-col gap-4">
+    <div className={cn("flex flex-col gap-4", className)}>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-[1fr_2fr]">
         <div className="flex min-w-0 flex-col gap-1.5">
           <span className="text-label text-ink">Scope</span>
@@ -230,7 +236,7 @@ export function PermissionPolicyFields({
       </div>
       {!value.scope_kind ? (
         <EmptyState
-          className="border-t-hairline border-edge px-0 py-6"
+          className="flex-1 justify-center border-t-hairline border-edge px-0 py-6"
           title="Select a scope"
           description="Choose a scope to see its available permissions."
         />
@@ -410,6 +416,9 @@ export function PermissionPoliciesScreen({
   const router = useRouter();
   const toast = useToast();
   const principal = usePrincipal();
+  /* Without custom permissions the edition offers predefined roles alone:
+   * the page still explains what someone holds but edits nothing. */
+  const customPermissions = useCustomPermissions();
   const [draft, setDraft] = useState<PermissionPolicyDraft | null>(null);
   const [existing, setExisting] = useState<PermissionPolicy | undefined>();
   const [baseline, setBaseline] = useState("");
@@ -574,7 +583,12 @@ export function PermissionPoliciesScreen({
               Ownership is protected separately from permission policies.
             </Callout>
           ) : null}
-          {page.read_only_reason ? (
+          {!customPermissions ? (
+            <Callout title="Predefined roles">
+              This deployment offers predefined roles only. Change a
+              member's role from Members.
+            </Callout>
+          ) : page.read_only_reason ? (
             <Callout>{page.read_only_reason}</Callout>
           ) : null}
           {failure ? (
@@ -647,7 +661,7 @@ export function PermissionPoliciesScreen({
                     onChange={(e) => setQuery(e.target.value)}
                   />
                 </div>
-                {page.can_create ? (
+                {page.can_create && customPermissions ? (
                   <Button variant="primary" onClick={() => start()}>
                     Add permission policy
                   </Button>
@@ -667,7 +681,7 @@ export function PermissionPoliciesScreen({
                       `${SCOPE_LABELS[p.scope_kind]} permission policy`
                     }
                     rowActions={(p) =>
-                      p.can_edit
+                      p.can_edit && customPermissions
                         ? [
                             {
                               id: "edit",

@@ -3286,6 +3286,73 @@ paths:
                     items: { $ref: "#/components/schemas/Member" }
         "401": { $ref: "#/components/responses/Error", description: "You are not signed in" }
         "403": { $ref: "#/components/responses/Error", description: "You cannot read members" }
+  /api/v1/roles:
+    get:
+      summary: List predefined roles
+      operationId: listRoles
+      x-withhuman-permission: self
+      x-withhuman-credential-kinds: [session, personal_api_key]
+      tags: [Members]
+      security: [{ cookieAuth: [] }, { apiKeyAuth: [] }]
+      description: The predefined roles a person can be invited with or given, owner first, with the permissions each
+        holds. They are the same in every organization.
+      responses:
+        "200":
+          description: The predefined roles
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [roles]
+                properties:
+                  roles:
+                    type: array
+                    items: { $ref: "#/components/schemas/Role" }
+        "401": { $ref: "#/components/responses/Error", description: "You are not signed in" }
+  /api/v1/members/{id}/role:
+    put:
+      summary: Give a member a predefined role
+      operationId: setMemberRole
+      x-withhuman-permission: permission_policy.write
+      x-withhuman-credential-kinds: [session]
+      tags: [Members]
+      security: [{ cookieAuth: [] }]
+      description: >-
+        Gives the member one predefined role everywhere in the organization,
+        replacing every permission they hold directly, custom permission
+        policies included. What they inherit from teams and what your
+        directory manages stay.
+
+        You cannot change your own role. Only an owner may grant the owner
+        role or change a member who holds it, the organization must keep at
+        least one active owner, and a role holding a sensitive permission
+        needs a fresh sign-in.
+      parameters:
+        - $ref: "#/components/parameters/MembershipID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [role]
+              properties:
+                role: { $ref: "#/components/schemas/RoleKey" }
+      responses:
+        "200":
+          description: The updated membership
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [member]
+                properties:
+                  member: { $ref: "#/components/schemas/Membership" }
+        "400": { $ref: "#/components/responses/Error", description: "The role is unknown" }
+        "403": { $ref: "#/components/responses/Error", description: "You cannot change permissions, this is your own membership, the role or the member is an owner and you are not, or the role needs a fresher sign-in" }
+        "404": { $ref: "#/components/responses/Error", description: "No such member" }
+        "409": { $ref: "#/components/responses/Error", description: "The member is managed by your directory, or is the last active owner" }
   /api/v1/members/{id}:
     patch:
       summary: Suspend or reactivate a member
@@ -3297,7 +3364,8 @@ paths:
       description: >-
         Sets a member's status to `suspended` or `active`. A suspended
         member cannot sign in or act until reactivated. Permissions are changed
-        through the member's permission policies.
+        through `PUT /api/v1/members/{id}/role` or, where the edition offers
+        custom permissions, the member's permission policies.
 
         You cannot change your own membership. Changing a member who holds
         the owner role requires holding it yourself. Members managed by
@@ -4144,8 +4212,10 @@ paths:
       - Invitations
       security:
       - cookieAuth: []
-      description: Invite a member with explicit permission policies. Every permission must be held by the inviter at the
-        selected scope or wider.
+      description: Invite a member with a predefined role, or, where the edition offers custom permissions
+        (`custom_permissions_enabled` in the runtime config), with explicit permission policies. Send exactly one of `role`
+        and `permission_policies`. Only an owner may invite an owner, every permission must be held by the inviter at the
+        selected scope or wider, and a role or policy holding a sensitive permission needs a fresh sign-in.
       requestBody:
         required: true
         content:
@@ -4154,16 +4224,21 @@ paths:
               type: object
               required:
               - email
-              - permission_policies
               properties:
                 email:
                   type: string
                   format: email
                   description: Where to send the invitation. The person must accept with this address.
+                role:
+                  $ref: '#/components/schemas/RoleKey'
+                  description: The predefined role the person receives everywhere in the organization.
                 permission_policies:
                   type: array
+                  minItems: 1
                   items:
                     $ref: '#/components/schemas/PermissionPolicySpec'
+                  description: Custom permissions instead of a role. Refused with 403 `custom_permissions_unavailable`
+                    where the edition offers predefined roles alone.
               additionalProperties: false
       responses:
         '201':
@@ -4172,9 +4247,13 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/InvitationWithURL'
+        '400':
+          $ref: '#/components/responses/Error'
+          description: Neither or both of `role` and `permission_policies` were sent, or the role is unknown
         '403':
           $ref: '#/components/responses/Error'
-          description: You cannot invite people, or a grant exceeds what you hold or needs a fresher sign-in
+          description: You cannot invite people, a grant exceeds what you hold or needs a fresher sign-in, or custom
+            permissions are not available in this edition (`custom_permissions_unavailable`)
         '409':
           $ref: '#/components/responses/Error'
           description: A member or a pending invitation with this email already exists, or the organization is at its seat
@@ -4913,6 +4992,7 @@ paths:
       tags:
       - Members
       summary: Post members permission policies
+      description: Refused with 403 `custom_permissions_unavailable` where the edition offers predefined roles alone (`custom_permissions_enabled` false).
       security:
       - cookieAuth: []
       responses:
@@ -5000,6 +5080,7 @@ paths:
       tags:
       - Members
       summary: Put members permission policy
+      description: Refused with 403 `custom_permissions_unavailable` where the edition offers predefined roles alone (`custom_permissions_enabled` false).
       security:
       - cookieAuth: []
       responses:
@@ -5052,6 +5133,7 @@ paths:
       tags:
       - Members
       summary: Delete members permission policy
+      description: Refused with 403 `custom_permissions_unavailable` where the edition offers predefined roles alone (`custom_permissions_enabled` false).
       security:
       - cookieAuth: []
       responses:
@@ -5135,6 +5217,7 @@ paths:
       tags:
       - Teams
       summary: Post teams permission policies
+      description: Refused with 403 `custom_permissions_unavailable` where the edition offers predefined roles alone (`custom_permissions_enabled` false).
       security:
       - cookieAuth: []
       responses:
@@ -5222,6 +5305,7 @@ paths:
       tags:
       - Teams
       summary: Put teams permission policy
+      description: Refused with 403 `custom_permissions_unavailable` where the edition offers predefined roles alone (`custom_permissions_enabled` false).
       security:
       - cookieAuth: []
       responses:
@@ -5274,6 +5358,7 @@ paths:
       tags:
       - Teams
       summary: Delete teams permission policy
+      description: Refused with 403 `custom_permissions_unavailable` where the edition offers predefined roles alone (`custom_permissions_enabled` false).
       security:
       - cookieAuth: []
       responses:
@@ -7691,9 +7776,32 @@ components:
             type: string
         is_owner:
           type: boolean
+        built_in_role:
+          $ref: '#/components/schemas/RoleKey'
+          description: The predefined role this assignment grants. Absent for a custom permission policy.
         permission_policy_id:
           type: string
           format: uuid
+    RoleKey:
+      type: string
+      enum: [owner, admin, reviewer, auditor]
+      description: A predefined role. `owner` is full control and only an owner may grant it; `admin` manages agents,
+        pipelines, paths, members and teams; `reviewer` decides the requests routed to them; `auditor` reads everything
+        without changing anything.
+    Role:
+      type: object
+      required: [key, name, description, permissions, dangerous]
+      properties:
+        key: { $ref: '#/components/schemas/RoleKey' }
+        name: { type: string, example: Reviewer }
+        description: { type: string }
+        permissions:
+          type: array
+          items: { type: string }
+          description: Every permission the role holds, including the ones this edition registers.
+        dangerous:
+          type: boolean
+          description: The role holds a sensitive permission, so granting it needs a fresh sign-in.
     InvitationGrant:
       type: object
       description: Permissions granted at one scope, with provenance.
@@ -7701,6 +7809,12 @@ components:
       - scope_kind
       - permissions
       properties:
+        role:
+          $ref: '#/components/schemas/RoleKey'
+          description: The predefined role the grant makes. Absent for custom permissions.
+        role_name:
+          type: string
+          description: That role's name.
         scope_kind:
           type: string
           enum:
@@ -7789,11 +7903,12 @@ components:
       type: object
       description: "What the frontend needs to know about this deployment before anyone signs in. An edition adds entries of its own (the hosted edition's signup_enabled, billing_enabled, and the phone and push channel flags); it never changes the ones listed here."
       additionalProperties: true
-      required: [public_origin, version, bootstrap_enabled, social_providers, setup_assistant_enabled, webhook_enabled, slack_enabled, discord_enabled, agent_mcp_servers]
+      required: [public_origin, version, bootstrap_enabled, custom_permissions_enabled, social_providers, setup_assistant_enabled, webhook_enabled, slack_enabled, discord_enabled, agent_mcp_servers]
       properties:
         public_origin: { type: string, format: uri }
         version: { type: string }
         bootstrap_enabled: { type: boolean, description: The first-owner ceremony accepts requests }
+        custom_permissions_enabled: { type: boolean, description: "The edition offers custom permission policies beside the predefined roles: a member's or team's own policies, and invitations that carry them. The open edition offers predefined roles alone and reports false." }
         setup_assistant_enabled: { type: boolean, description: "The edition wired a model for the guided setup's assistant, so the rules step can take the caller's own words" }
         webhook_enabled: { type: boolean, description: "The deployment configured a secrets key, so webhook endpoints can be stored and webhook blocks can run" }
         discord_enabled: { type: boolean, description: "The deployment configured a Discord app, so an organization can connect a server and members can link their accounts" }

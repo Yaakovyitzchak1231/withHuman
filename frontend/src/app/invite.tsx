@@ -80,6 +80,10 @@ export function InviteScreen({ token }: { token: string }) {
   }
 
   const sessionEmail = session?.user?.email ?? "";
+  /* The predefined role the invitation grants, when it grants one. */
+  const roleName =
+    preview?.grants.length === 1 ? preview.grants[0].role_name : undefined;
+  const asRole = roleName ? ` as ${/^[AEIOU]/.test(roleName) ? "an" : "a"} ${roleName.toLowerCase()}` : "";
   const emailMatches =
     preview !== null &&
     sessionEmail.toLowerCase() === preview.email.toLowerCase();
@@ -103,13 +107,15 @@ export function InviteScreen({ token }: { token: string }) {
                 <>
                   {preview.inviter_display_name} invited{" "}
                   <span className="text-ink">{preview.email}</span> to join{" "}
-                  {preview.organization_name}.
+                  {preview.organization_name}
+                  {asRole}.
                 </>
               ) : (
                 <>
                   This invitation lets{" "}
                   <span className="text-ink">{preview.email}</span> join{" "}
-                  {preview.organization_name}.
+                  {preview.organization_name}
+                  {asRole}.
                 </>
               )}
             </p>

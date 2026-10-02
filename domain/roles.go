@@ -106,11 +106,33 @@ func BuiltInRole(key Role) (RoleDefinition, bool) {
 	return RoleDefinition{}, false
 }
 
-// ValidRole reports whether the key names a built-in human role, the
-// only roles a membership can hold until roles become rows.
+// BuiltInRoleByID finds a built-in definition by its fixed row id.
+func BuiltInRoleByID(id ID) (RoleDefinition, bool) {
+	for _, def := range BuiltInRoles() {
+		if def.ID == id {
+			return def, true
+		}
+	}
+	return RoleDefinition{}, false
+}
+
+// ValidRole reports whether the key names a built-in human role: the
+// predefined roles a person can be invited with or given.
 func ValidRole(role Role) bool {
 	_, ok := BuiltInRole(role)
 	return ok && role != RoleAgent
+}
+
+// HumanRoles lists the predefined roles a person can hold, in the order
+// the pickers offer them: owner first, the agent's role left out.
+func HumanRoles() []RoleDefinition {
+	roles := make([]RoleDefinition, 0, 4)
+	for _, def := range BuiltInRoles() {
+		if def.Key != RoleAgent {
+			roles = append(roles, def)
+		}
+	}
+	return roles
 }
 
 // GrantsForRoles flattens built-in roles held at organization scope into

@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { PermissionsSummary } from "./permission-summary";
+import { useCustomPermissions } from "./roles";
 import { Badge } from "@/ds/components/badge";
 import { Referenced } from "@/ds/components/reference";
 import { Button } from "@/ds/components/button";
@@ -71,6 +72,7 @@ export function TeamsScreen({
   /* Granting a team a role is the same checked action as granting a
    * person one, so it gates on the same permission. */
   const { holdsAnywhere, isOwner } = useAccess();
+  const customPermissions = useCustomPermissions();
   const canAssign = holdsAnywhere("permission_policy.write");
   const { teams, error } = page;
   const [query, setQuery] = useState("");
@@ -130,12 +132,16 @@ export function TeamsScreen({
         </span>
       ),
     },
-    {
-      id: "permissions",
-      label: "Permissions",
-      width: 130,
-      cell: (team) => <PermissionsSummary assignments={team.assignments} />,
-    },
+    ...(customPermissions
+      ? [
+          {
+            id: "permissions",
+            label: "Permissions",
+            width: 130,
+            cell: (team: Team) => <PermissionsSummary assignments={team.assignments} />,
+          },
+        ]
+      : []),
     {
       id: "policy",
       label: "Escalation policy",
@@ -188,7 +194,9 @@ export function TeamsScreen({
           params: { teamId: team.id },
         }),
     },
-    { id: "permissions", label: "Edit permissions", disabled: !canAssign || !!team.archived_at, action: () => void navigate({ to: "/settings/permissions/$kind/$principalId", params: { kind: "teams", principalId: team.id } }) },
+    ...(customPermissions
+      ? [{ id: "permissions", label: "Edit permissions", disabled: !canAssign || !!team.archived_at, action: () => void navigate({ to: "/settings/permissions/$kind/$principalId", params: { kind: "teams", principalId: team.id } }) }]
+      : []),
     {
       id: "rename",
       label: "Rename",

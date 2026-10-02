@@ -144,6 +144,20 @@ recorded in this file with both the reason and the replacement rule.
   a definition's `BuiltInRoles` names the admin, reviewer, or auditor
   roles that hold it, merged into the built-in role lists at reconcile
   time the way the owner's list already resolves against the registry.
+- Every edition offers the predefined roles (`domain.HumanRoles`: owner,
+  admin, reviewer, auditor; `GET /api/v1/roles`): an invitation carries
+  a `role`, `PUT /api/v1/members/{id}/role` (browser-only) replaces a
+  member's direct grants with one role everywhere through
+  `members.SetMemberRole`, and `RoleAssignment.built_in_role` names the
+  role an assignment grants. Custom permission policies (member and team
+  `/permission_policies` writes, an invitation's `permission_policies`)
+  are the edition's choice: `runtime.ServerOptions.CustomPermissionsEnabled`
+  admits them and runtime-config reports `custom_permissions_enabled`.
+  The open edition leaves it off, so those writes answer 403
+  `custom_permissions_unavailable` and the frontend offers roles alone;
+  the hosted edition turns it on and offers both. The policy engine
+  itself (private role snapshots, reads, the grant kernel) stays in core
+  either way, since organization keys and directory grants use it.
 - Personal API keys use `whk_` and follow a membership's live grants.
   Organization keys use `who_` and are `ActorAPIKey` with live policies assigned
   through `permission_policies`, private `roles`, and `role_assignments`.

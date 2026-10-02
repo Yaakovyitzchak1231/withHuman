@@ -84,8 +84,11 @@ func (s AssignmentSpec) Scope() Scope { return Scope{Kind: s.ScopeKind, ID: s.Sc
 // ViaTeamID is set when a membership inherits the assignment through a
 // team rather than holding it directly.
 type RoleAssignment struct {
-	Permissions        []Permission     `json:"permissions"`
-	IsOwner            bool             `json:"is_owner"`
+	Permissions []Permission `json:"permissions"`
+	IsOwner     bool         `json:"is_owner"`
+	// BuiltInRole names the predefined role the assignment grants; it is
+	// empty for the private role a permission policy mints.
+	BuiltInRole        Role             `json:"built_in_role,omitempty"`
 	PermissionPolicyID ID               `json:"permission_policy_id,omitempty"`
 	ID                 ID               `json:"id"`
 	OrganizationID     ID               `json:"organization_id"`

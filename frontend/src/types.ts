@@ -311,12 +311,28 @@ export interface APIKeyInput {
 
 /* One role pinned to one principal at one scope. via_team_id is set on
  * rows a membership inherits through a team it belongs to. */
+/* A predefined role: the same four in every organization. */
+export type RoleKey = "owner" | "admin" | "reviewer" | "auditor";
+
+export interface RoleDescriptor {
+  key: RoleKey;
+  name: string;
+  description: string;
+  permissions: string[];
+  /* Holds a sensitive permission, so granting it asks for a fresh
+   * sign-in. */
+  dangerous: boolean;
+}
+
 export interface RoleAssignment {
   id: string;
   principal_kind: "membership" | "team" | "agent";
   principal_id: string;
   permissions: string[];
   is_owner: boolean;
+  /* The predefined role the assignment grants; absent for a custom
+   * permission policy. */
+  built_in_role?: RoleKey;
   permission_policy_id?: string;
   scope_kind: ScopeKind;
   scope_id?: string;
@@ -331,6 +347,8 @@ export interface RoleAssignment {
 
 /* Explicit permissions carried by an invitation. */
 export interface InvitationGrant {
+  role?: RoleKey;
+  role_name?: string;
   permissions: string[];
   scope_kind: ScopeKind;
   scope_id?: string;

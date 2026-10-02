@@ -157,6 +157,10 @@ var (
 	// ErrAPIKeyScopingUnavailable refuses a permission list on a key in
 	// the open edition, whose keys inherit the member's role unchanged.
 	ErrAPIKeyScopingUnavailable = errors.New("API key permission scoping is not available in this edition")
+	// ErrCustomPermissionsUnavailable refuses a permission policy write
+	// (a member's or team's own policies, or an invitation carrying them)
+	// on an edition that offers predefined roles alone.
+	ErrCustomPermissionsUnavailable = errors.New("custom permissions are not available in this edition; choose a predefined role")
 	// ErrAPIKeyNotAllowed refuses a browser-only operation (issuing keys,
 	// changing a password, browser hand-offs) presented with an API key.
 	ErrAPIKeyNotAllowed = errors.New("this operation cannot be performed with an API key")

@@ -60,6 +60,7 @@ type routeKey struct{ Method, Path string }
 // contract says which is which; the conformance test keeps the two lists
 // equal.
 var browserOnlyRoutes = map[routeKey]struct{}{
+	{http.MethodPut, "/api/v1/members/:id/role"}:                              {},
 	{http.MethodPost, "/api/v1/members/:id/permission_policies"}:              {},
 	{http.MethodPut, "/api/v1/members/:id/permission_policies/:policy_id"}:    {},
 	{http.MethodDelete, "/api/v1/members/:id/permission_policies/:policy_id"}: {},

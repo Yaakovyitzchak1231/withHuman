@@ -73,6 +73,10 @@ func (a *API) mutatePermissionPolicy(c *gin.Context) {
 		a.writeError(c, domain.ErrNotFound)
 		return
 	}
+	if !a.config.CustomPermissions {
+		a.writeError(c, domain.ErrCustomPermissionsUnavailable)
+		return
+	}
 	input := application.MutatePermissionPolicyInput{ReadPermissionPoliciesInput: permissionPolicyTarget(c), PolicyID: domain.ID(c.Param("policy_id")), IdempotencyKey: c.GetHeader("Idempotency-Key"), Now: time.Now().UTC(), Delete: c.Request.Method == http.MethodDelete}
 	if input.Delete {
 		input.Revision, _ = strconv.ParseInt(c.Query("revision"), 10, 64)

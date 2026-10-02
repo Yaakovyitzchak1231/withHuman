@@ -1,6 +1,8 @@
 #!/bin/sh
-# Smoke test explicit permission policies, inheritance, resource scope,
-# revisions, retries, and revocation against a running open-edition server.
+# Smoke test predefined roles against a running open-edition server:
+# inviting with a role, changing it, what each role may do, and the
+# refusal of custom permission policies, which only an edition that
+# switches them on offers.
 set -eu
 
 origin=${WITHHUMAN_ORIGIN:-http://localhost:8080}
@@ -35,12 +37,20 @@ else
 fi
 
 # Ownership remains protected, and role identifiers stay private.
-test "$(status_of --cookie "$owner_jar" "$app_api/roles")" = "404"
 curl --silent --fail --cookie "$owner_jar" "$app_api/me" \
-  | jq -e 'any(.assignments[]; .is_owner) and all(.assignments[]; has("role_id") | not)' >/dev/null
+  | jq -e 'any(.assignments[]; .is_owner and .built_in_role == "owner") and all(.assignments[]; has("role_id") | not)' >/dev/null
+curl --silent --fail "$origin/api/runtime-config" | jq -e '.custom_permissions_enabled == false' >/dev/null
+curl --silent --fail --cookie "$owner_jar" "$app_api/roles" \
+  | jq -e '[.roles[].key] == ["owner","admin","reviewer","auditor"]' >/dev/null
+
+# Custom permissions are refused, on an invitation and on a team.
+policy='{"scope_kind":"organization","resource_ids":[],"permissions":["request.read"]}'
+test "$(status_of --cookie "$owner_jar" --header 'Content-Type: application/json' \
+  --data "{\"email\":\"custom-$unique@example.com\",\"permission_policies\":[$policy]}" "$app_api/invitations")" = "403"
 
 invitation=$(curl --silent --fail --cookie "$owner_jar" --header 'Content-Type: application/json' \
-  --data "{\"email\":\"reviewer-$unique@example.com\",\"permission_policies\":[{\"scope_kind\":\"organization\",\"resource_ids\":[],\"permissions\":[\"request.read\",\"request.decide\"]}]}" "$app_api/invitations")
+  --data "{\"email\":\"reviewer-$unique@example.com\",\"role\":\"reviewer\"}" "$app_api/invitations")
+printf '%s' "$invitation" | jq -e '(.invitation.grants | length) == 1 and .invitation.grants[0].role == "reviewer"' >/dev/null
 url=$(printf '%s' "$invitation" | jq -r .invite_url)
 token=${url##*/invite/}
 curl --silent --fail --cookie-jar "$member_jar" --header 'Content-Type: application/json' \
@@ -49,41 +59,30 @@ curl --silent --fail --cookie-jar "$member_jar" --header 'Content-Type: applicat
 member_id=$(curl --silent --fail --cookie "$member_jar" "$app_api/me" | jq -r .principal.membership_id)
 team=$(curl --silent --fail --cookie "$owner_jar" --header 'Content-Type: application/json' \
   --data "{\"name\":\"Payments $unique\"}" "$app_api/teams" | jq -r .team.id)
-curl --silent --fail --cookie "$owner_jar" --request PUT --header 'Content-Type: application/json' \
-  --data "{\"membership_ids\":[\"$member_id\"]}" "$app_api/teams/$team/members" >/dev/null
-# Two pipelines of their own; the team is given one of them.
-for kind in "refund-$unique" "release-$unique"; do
-  curl --silent --fail --cookie "$owner_jar" --header 'Content-Type: application/json' \
-    --data "{\"pipeline_key\":\"$kind\",\"name\":\"$kind\",\"blocks\":[]}" "$app_api/request-approval-pipelines" >/dev/null
-done
-policy=$(jq -nc --arg resource "refund-$unique" '{scope_kind:"pipeline",resource_ids:[$resource],permissions:["pipeline.read","pipeline.write"]}')
-endpoint="$app_api/teams/$team/permission_policies"
-saved=$(curl --silent --fail --cookie "$owner_jar" --header 'Content-Type: application/json' \
-  --header "Idempotency-Key: scoped-$unique" --data "$policy" "$endpoint")
-policy_id=$(printf '%s' "$saved" | jq -r .id)
+test "$(status_of --cookie "$owner_jar" --header 'Content-Type: application/json' \
+  --header "Idempotency-Key: team-$unique" --data "$policy" "$app_api/teams/$team/permission_policies")" = "403"
+
+# A reviewer decides requests but does not author pipelines; an admin does.
+kind="refund-$unique"
 curl --silent --fail --cookie "$owner_jar" --header 'Content-Type: application/json' \
-  --header "Idempotency-Key: scoped-$unique" --data "$policy" "$endpoint" | jq -e --arg id "$policy_id" '.id == $id and .revision == 1' >/dev/null
-curl --silent --fail --cookie "$member_jar" "$app_api/members/$member_id/permission_policies" \
-  | jq -e --arg team "$team" 'any(.policies[]; .via_team_id == $team and .can_edit == false)' >/dev/null
+  --data "{\"pipeline_key\":\"$kind\",\"name\":\"$kind\",\"blocks\":[]}" "$app_api/request-approval-pipelines" >/dev/null
 revision='{"blocks":[]}'
 test "$(status_of --cookie "$member_jar" --header 'Content-Type: application/json' --data "$revision" \
-  "$app_api/request-approval-pipelines/refund-$unique/revisions")" = "201"
-test "$(status_of --cookie "$member_jar" --header 'Content-Type: application/json' --data "$revision" \
-  "$app_api/request-approval-pipelines/release-$unique/revisions")" = "403"
-test "$(status_of --cookie "$member_jar" --header 'Content-Type: application/json' --data "$policy" \
-  --header "Idempotency-Key: forbidden-$unique" "$endpoint")" = "403"
-updated=$(printf '%s' "$policy" | jq -c --arg second "release-$unique" '. + {revision:1} | .resource_ids += [$second]')
+  "$app_api/request-approval-pipelines/$kind/revisions")" = "403"
 curl --silent --fail --cookie "$owner_jar" --request PUT --header 'Content-Type: application/json' \
-  --header "Idempotency-Key: update-$unique" --data "$updated" "$endpoint/$policy_id" \
-  | jq -e '.revision == 2 and (.resource_ids | length) == 2' >/dev/null
-test "$(status_of --cookie "$owner_jar" --request PUT --header 'Content-Type: application/json' \
-  --header "Idempotency-Key: stale-$unique" --data "$updated" "$endpoint/$policy_id")" = "409"
-for retry in 1 2; do
-  test "$(status_of --cookie "$owner_jar" --request DELETE --header "Idempotency-Key: delete-$unique" \
-    "$endpoint/$policy_id?revision=2")" = "204"
-done
+  --data '{"role":"admin"}' "$app_api/members/$member_id/role" >/dev/null
+curl --silent --fail --cookie "$owner_jar" "$app_api/members" \
+  | jq -e --arg id "$member_id" '.members[] | select(.id == $id) | [.assignments[].built_in_role] == ["admin"]' >/dev/null
 test "$(status_of --cookie "$member_jar" --header 'Content-Type: application/json' --data "$revision" \
-  "$app_api/request-approval-pipelines/refund-$unique/revisions")" = "403"
-curl --silent --fail --cookie "$owner_jar" "$endpoint" \
-  | jq -e --arg id "$policy_id" 'all(.policies[]; .id != $id)' >/dev/null
-echo "permission policy smoke passed"
+  "$app_api/request-approval-pipelines/$kind/revisions")" = "201"
+
+# Nobody changes their own role, and only an owner grants owner.
+test "$(status_of --cookie "$member_jar" --request PUT --header 'Content-Type: application/json' \
+  --data '{"role":"owner"}' "$app_api/members/$member_id/role")" = "403"
+test "$(status_of --cookie "$member_jar" --header 'Content-Type: application/json' \
+  --data "{\"email\":\"owner-$unique@example.com\",\"role\":\"owner\"}" "$app_api/invitations")" = "403"
+curl --silent --fail --cookie "$owner_jar" --request PUT --header 'Content-Type: application/json' \
+  --data '{"role":"reviewer"}' "$app_api/members/$member_id/role" >/dev/null
+test "$(status_of --cookie "$member_jar" --header 'Content-Type: application/json' --data "$revision" \
+  "$app_api/request-approval-pipelines/$kind/revisions")" = "403"
+echo "predefined role smoke passed"

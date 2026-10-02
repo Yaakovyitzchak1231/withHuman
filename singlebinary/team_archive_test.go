@@ -55,6 +55,8 @@ func testTeamArchiveAPI(t *testing.T, api *apiClient) {
 	api.request(http.MethodGet, "/api/v1/teams?status=invalid", nil, http.StatusBadRequest, nil)
 	api.request(http.MethodPatch, path, map[string]any{"name": "Cannot rename"}, http.StatusConflict, nil)
 	api.request(http.MethodPut, path+"/members", map[string]any{"membership_ids": []string{}}, http.StatusConflict, nil)
-	api.request(http.MethodPost, path+"/permission_policies", map[string]any{"scope_kind": "organization", "resource_ids": []string{}, "permissions": []string{"request.read"}}, http.StatusConflict, nil, "Idempotency-Key", "archived-team-policy")
+	// The open edition offers predefined roles alone, so a team policy
+	// write is refused before the archived team is even looked at.
+	api.request(http.MethodPost, path+"/permission_policies", map[string]any{"scope_kind": "organization", "resource_ids": []string{}, "permissions": []string{"request.read"}}, http.StatusForbidden, nil, "Idempotency-Key", "archived-team-policy")
 	api.request(http.MethodGet, "/settings/teams?status=archived", nil, http.StatusOK, nil)
 }
