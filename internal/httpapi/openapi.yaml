@@ -266,7 +266,7 @@ paths:
       responses:
         "200": { description: PostgreSQL and compiled pipelines are ready }
         "404": { $ref: "#/components/responses/Error" }
-        "503": { description: A required dependency is unavailable }
+        "503": { description: A required dependency is unavailable or the server is draining before shutdown }
   /metrics:
     get:
       summary: Read Prometheus operational metrics

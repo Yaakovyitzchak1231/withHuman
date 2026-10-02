@@ -183,6 +183,7 @@ type Server struct {
 	store          *postgres.Store
 	toolCatalog    *toolcatalog.Service
 	temporalClient client.Client
+	drain          *httpapi.Drain
 }
 
 // RequestReader is the product read of one approval request: the
@@ -369,6 +370,7 @@ func NewServer(ctx context.Context, options ServerOptions) (*Server, error) {
 	mcpOAuthService := mcpoauth.NewService(store, authService, store, clock, mcpoauth.Config{
 		PublicOrigin: cfg.PublicOrigin, MCPPath: httpapi.MCPPath, AuthorizePath: httpapi.MCPAuthorizePath,
 	})
+	drain := httpapi.NewDrain()
 	router := httpapi.NewRouter(httpapi.Dependencies{
 		Auth: authService, Approvals: approvalService, Members: memberService, Teams: teamService, Contacts: contactService, Slack: slackService, Discord: discordService,
 		ToolCatalog: catalogService, WebhookEndpoints: webhookService, Onboarding: onboardingService, OrgSettings: orgSettingsService, ToolPresentations: toolPresentationService,
@@ -376,7 +378,7 @@ func NewServer(ctx context.Context, options ServerOptions) (*Server, error) {
 		Orchestrator: orchestrator,
 		Pipelines:    pipelineService, CompiledPipelines: compiledPipelines,
 		Routing: routingService, RoutingSnapshots: store, TeamEscalation: teamEscalationService, MCPOAuth: mcpOAuthService,
-		Frontend: options.Frontend, Logger: logger,
+		Frontend: options.Frontend, Drain: drain, Logger: logger,
 		Config: httpapi.Config{
 			PublicOrigin: cfg.PublicOrigin, CookieSecure: cookieSecure(cfg.PublicOrigin), Version: options.Version,
 			BootstrapEnabled: cfg.BootstrapSecret != "", Extras: extras, CustomPermissions: options.CustomPermissionsEnabled,
@@ -394,7 +396,7 @@ func NewServer(ctx context.Context, options ServerOptions) (*Server, error) {
 		toolCatalog: catalogService,
 		Config:      cfg, Router: router, Auth: authService, Tenants: tenantService,
 		Clock: clock, Logger: logger, Notifications: notifier, Roles: store, PermissionPolicies: store, Requests: approvalService, Contacts: contactService, Directory: store, Members: memberService, Temporal: temporalClient,
-		store: store, temporalClient: temporalClient,
+		store: store, temporalClient: temporalClient, drain: drain,
 	}
 	if options.RegisterRoutes != nil {
 		options.RegisterRoutes(server)
@@ -503,23 +505,47 @@ func (s *Server) Listen() (net.Listener, error) {
 }
 
 // Serve serves HTTP on the listener until the context is canceled, then
-// shuts down gracefully and releases the store and Temporal client.
+// drains and releases the store and Temporal client; see serveUntilDrained.
 func (s *Server) Serve(ctx context.Context, listener net.Listener) error {
 	defer s.Close()
 	server := &http.Server{Handler: s.Router, ReadHeaderTimeout: 5 * time.Second}
-	go func() {
-		<-ctx.Done()
-		shutdownContext, cancel := context.WithTimeout(context.Background(), s.Config.ShutdownTimeout)
-		defer cancel()
-		_ = server.Shutdown(shutdownContext)
-	}()
 	address := listener.Addr().String()
 	s.Logger.Info("withHuman server listening - "+address, "address", address)
-	err := server.Serve(listener)
-	if errors.Is(err, http.ErrServerClosed) {
-		return nil
+	return serveUntilDrained(ctx, server, listener, s.drain, s.Config.ShutdownDrainDelay, s.Config.ShutdownTimeout, s.Logger)
+}
+
+// serveUntilDrained serves until the context is canceled, then keeps
+// serving for drainDelay with readiness failing, so load balancers stop
+// routing here before the listener closes, and finally gives in-flight
+// requests up to shutdownTimeout to finish. It returns only once they
+// have: http.Server.Serve returns the moment Shutdown begins, and a
+// caller that exits then cuts every request off and leaves a balancer
+// routing to an address that no longer answers.
+func serveUntilDrained(ctx context.Context, server *http.Server, listener net.Listener, drain *httpapi.Drain, drainDelay, shutdownTimeout time.Duration, logger *slog.Logger) error {
+	server.RegisterOnShutdown(drain.EndStreams)
+	served := make(chan error, 1)
+	go func() { served <- server.Serve(listener) }()
+	select {
+	case err := <-served:
+		return err
+	case <-ctx.Done():
 	}
-	return err
+	drain.Begin()
+	logger.Info("withHuman server draining - "+drainDelay.String(), "drain_delay", drainDelay.String(), "shutdown_timeout", shutdownTimeout.String())
+	select {
+	case err := <-served:
+		return err
+	case <-time.After(drainDelay):
+	}
+	shutdownContext, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+	if err := server.Shutdown(shutdownContext); err != nil {
+		// What is still running at the deadline is cut off rather than
+		// holding the process past its grace period.
+		logger.Warn("withHuman server shutdown timed out - closing open connections", "error", err)
+		_ = server.Close()
+	}
+	return nil
 }
 
 // Close releases the store and Temporal client without serving, for a
