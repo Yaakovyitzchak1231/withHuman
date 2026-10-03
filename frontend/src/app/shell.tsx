@@ -7,7 +7,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
-import { useLocation, useNavigate } from "@tanstack/react-router";
+import { Link, useLocation, useNavigate } from "@tanstack/react-router";
 import { DocsLink } from "@/ds/components/docs-link";
 import {
   CommandPalette,
@@ -439,7 +439,9 @@ export function Shell({
                 Back to app
               </button>
             ) : (
-              <Logo className="text-[13px] text-ink" />
+              <Link to="/queue" className={cn("flex rounded-sm", focusRing)}>
+                <Logo className="text-[13px] text-ink" />
+              </Link>
             )}
             <Tooltip content="Hide sidebar" keys="[">
               <IconButton aria-label="Hide sidebar" size="sm" onClick={toggleSidebar}>
