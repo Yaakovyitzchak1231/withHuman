@@ -15,13 +15,16 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/withHumanAI/withHuman/application"
 	"github.com/withHumanAI/withHuman/domain"
+	"github.com/withHumanAI/withHuman/mcptools"
 )
 
 // MCPPath is where the product server speaks MCP. It is the management
 // surface for AI agents: a coding agent or assistant holding a personal
-// (whk_) or organization (who_) API key connects here and sets up
-// approval pipelines, escalation paths, teams and webhook endpoints
-// through tools instead of hand-written HTTP calls. It is a protocol
+// (whk_) or organization (who_) API key connects here and manages
+// approval pipelines, escalation paths, teams, agents and webhook
+// endpoints (plus whatever the edition adds through
+// runtime.ServerOptions.MCPTools) through tools instead of hand-written
+// HTTP calls. It is a protocol
 // namespace like /api/aap/v1, distinct from the chokepoint gateway's
 // /gateway/mcp, which sits in the data path of an agent's own tool calls.
 const MCPPath = "/api/mcp/v1"
@@ -153,20 +156,25 @@ func peekMCPCall(request *http.Request) (mcpCallUse, bool) {
 	return call, true
 }
 
-// mcpServer builds the tool catalog once. Tools carry no per-session
-// state: each call reads the bearer from its own request headers.
+// mcpServer builds the tool catalog once: core's tools, then the
+// edition's. Tools carry no per-session state: each call reads the
+// bearer from its own request headers.
 func (a *API) mcpServer() *mcp.Server {
 	a.mcpOnce.Do(func() {
 		server := mcp.NewServer(&mcp.Implementation{Name: "withhuman", Title: "withHuman", Version: a.config.Version}, &mcp.ServerOptions{
 			Instructions: mcpInstructions,
 		})
-		a.registerMCPTools(server)
+		catalog := mcptools.NewCatalog(server, a.newMCPCall)
+		a.registerMCPTools(catalog)
+		for _, register := range a.mcpTools {
+			register(catalog)
+		}
 		a.mcp = server
 	})
 	return a.mcp
 }
 
-// mcpCall is one tool invocation's view of the product API: every
+// mcpCall is one tool invocation's door onto the product API: every
 // request it dispatches carries the caller's bearer and request id, or,
 // for the setup assistant, the person's resolved principal.
 type mcpCall struct {
@@ -176,46 +184,12 @@ type mcpCall struct {
 	principal *domain.Principal
 }
 
-func (a *API) newMCPCall(ctx context.Context, request *mcp.CallToolRequest) *mcpCall {
+func (a *API) newMCPCall(ctx context.Context, request *mcp.CallToolRequest) *mcptools.Call {
 	header := http.Header{}
 	if request != nil && request.Extra != nil && request.Extra.Header != nil {
 		header = request.Extra.Header
 	}
-	return &mcpCall{api: a, ctx: ctx, header: header}
-}
-
-// mcpToolError is a product API refusal relayed to the agent verbatim:
-// the same code, message, parameter and details the HTTP client would
-// read, because the agent has to act on them the same way.
-type mcpToolError struct {
-	Status  int
-	Type    string          `json:"type"`
-	Code    string          `json:"code"`
-	Message string          `json:"message"`
-	Param   string          `json:"param,omitempty"`
-	Details json.RawMessage `json:"details,omitempty"`
-}
-
-func (e *mcpToolError) Error() string {
-	var text strings.Builder
-	text.WriteString(e.Code)
-	text.WriteString(": ")
-	text.WriteString(e.Message)
-	if e.Param != "" {
-		fmt.Fprintf(&text, " (param: %s)", e.Param)
-	}
-	if len(e.Details) > 0 {
-		text.WriteString("\ndetails: ")
-		text.Write(e.Details)
-	}
-	return text.String()
-}
-
-// loopbackResponse is what one in-process product API request answered.
-type loopbackResponse struct {
-	Status int
-	Header http.Header
-	Body   []byte
+	return mcptools.NewCall((&mcpCall{api: a, ctx: ctx, header: header}).dispatch)
 }
 
 // loopbackRecorder is the response writer the in-process dispatch hands
@@ -242,12 +216,12 @@ func (r *loopbackRecorder) WriteHeader(status int) {
 	}
 }
 
-// do dispatches one request to the product API in process. A non-2xx
-// answer becomes an mcpToolError carrying the API's own error envelope.
-func (c *mcpCall) do(method, path string, query url.Values, body any, extra http.Header) (loopbackResponse, error) {
+// dispatch sends one request to the product API in process and answers
+// what it answered; mcptools turns a refusal into the agent's error.
+func (c *mcpCall) dispatch(method, path string, query url.Values, body any, extra http.Header) (mcptools.Response, error) {
 	engine := c.api.engine
 	if engine == nil {
-		return loopbackResponse{}, &mcpToolError{Status: http.StatusInternalServerError, Type: "internal", Code: "internal_error", Message: "The management API is unavailable."}
+		return mcptools.Response{}, &mcptools.Refusal{Status: http.StatusInternalServerError, Type: "internal", Code: "internal_error", Message: "The management API is unavailable."}
 	}
 	target := path
 	if len(query) > 0 {
@@ -257,7 +231,7 @@ func (c *mcpCall) do(method, path string, query url.Values, body any, extra http
 	if body != nil {
 		encoded, err := json.Marshal(body)
 		if err != nil {
-			return loopbackResponse{}, &mcpToolError{Status: http.StatusBadRequest, Type: "invalid_request", Code: "invalid_request", Message: err.Error()}
+			return mcptools.Response{}, &mcptools.Refusal{Status: http.StatusBadRequest, Type: "invalid_request", Code: "invalid_request", Message: err.Error()}
 		}
 		reader = bytes.NewReader(encoded)
 	} else {
@@ -269,7 +243,7 @@ func (c *mcpCall) do(method, path string, query url.Values, body any, extra http
 	}
 	request, err := http.NewRequestWithContext(ctx, method, target, reader)
 	if err != nil {
-		return loopbackResponse{}, &mcpToolError{Status: http.StatusBadRequest, Type: "invalid_request", Code: "invalid_request", Message: err.Error()}
+		return mcptools.Response{}, &mcptools.Refusal{Status: http.StatusBadRequest, Type: "invalid_request", Code: "invalid_request", Message: err.Error()}
 	}
 	if c.principal == nil {
 		request.Header.Set("Authorization", c.header.Get("Authorization"))
@@ -288,62 +262,7 @@ func (c *mcpCall) do(method, path string, query url.Values, body any, extra http
 	}
 	recorder := &loopbackRecorder{header: http.Header{}}
 	engine.ServeHTTP(recorder, request)
-	response := loopbackResponse{Status: recorder.status, Header: recorder.header, Body: recorder.body.Bytes()}
-	if response.Status >= 200 && response.Status < 300 {
-		return response, nil
-	}
-	return response, decodeMCPToolError(response)
-}
-
-func decodeMCPToolError(response loopbackResponse) *mcpToolError {
-	var envelope struct {
-		Error mcpToolError `json:"error"`
-	}
-	if err := json.Unmarshal(response.Body, &envelope); err != nil || envelope.Error.Code == "" {
-		return &mcpToolError{Status: response.Status, Type: "internal", Code: "unexpected_response", Message: fmt.Sprintf("The management API answered status %d.", response.Status)}
-	}
-	envelope.Error.Status = response.Status
-	return &envelope.Error
-}
-
-func (c *mcpCall) get(path string, query url.Values) (loopbackResponse, error) {
-	return c.do(http.MethodGet, path, query, nil, nil)
-}
-
-func (c *mcpCall) post(path string, body any, extra http.Header) (loopbackResponse, error) {
-	return c.do(http.MethodPost, path, nil, body, extra)
-}
-
-// mcpResult turns a JSON answer into the tool result: the structured
-// content is the API's own object, and the text block is the same JSON
-// for clients that read only text. A bodiless success answers ok.
-func mcpResult(body []byte) (*mcp.CallToolResult, any, error) {
-	if len(bytes.TrimSpace(body)) == 0 {
-		body = []byte(`{"ok":true}`)
-	}
-	return &mcp.CallToolResult{
-		Content:           []mcp.Content{&mcp.TextContent{Text: string(body)}},
-		StructuredContent: json.RawMessage(body),
-	}, nil, nil
-}
-
-// mcpObject assembles a composed answer (a saved revision plus whether it
-// was activated) from raw JSON parts.
-func mcpObject(fields map[string]any) (*mcp.CallToolResult, any, error) {
-	encoded, err := json.Marshal(fields)
-	if err != nil {
-		return nil, nil, err
-	}
-	return mcpResult(encoded)
-}
-
-// addMCPTool registers one typed tool whose handler answers with raw
-// JSON from the product API, so every tool shares the same result and
-// error shaping.
-func addMCPTool[In any](a *API, server *mcp.Server, tool *mcp.Tool, handler func(call *mcpCall, input In) (*mcp.CallToolResult, any, error)) {
-	mcp.AddTool(server, tool, func(ctx context.Context, request *mcp.CallToolRequest, input In) (*mcp.CallToolResult, any, error) {
-		return handler(a.newMCPCall(ctx, request), input)
-	})
+	return mcptools.Response{Status: recorder.status, Header: recorder.header, Body: recorder.body.Bytes()}, nil
 }
 
 // mcpAssistantGrammar hands the setup assistant the deployment's block
@@ -353,26 +272,13 @@ type mcpAssistantGrammar struct{ api *API }
 
 func (t mcpAssistantGrammar) Grammar() string { return t.api.compiledPipelines.Grammar() }
 
-var (
-	mcpReadOnly = &mcp.ToolAnnotations{ReadOnlyHint: true, DestructiveHint: boolPointer(false), OpenWorldHint: boolPointer(false)}
-	// Additive writes: a new revision, a new key, a new team. Nothing
-	// earlier is lost, so a retry at worst adds another revision.
-	mcpAdditive = &mcp.ToolAnnotations{DestructiveHint: boolPointer(false), OpenWorldHint: boolPointer(false)}
-	// Replacing writes: the call sets the whole value and repeating it
-	// changes nothing further.
-	mcpReplacing = &mcp.ToolAnnotations{DestructiveHint: boolPointer(false), IdempotentHint: true, OpenWorldHint: boolPointer(false)}
-	// Archiving ends a resource for good, even though its history stays.
-	mcpArchiving = &mcp.ToolAnnotations{DestructiveHint: boolPointer(true), IdempotentHint: true, OpenWorldHint: boolPointer(false)}
-)
-
-func boolPointer(value bool) *bool { return &value }
-
 // mcpServerState lives on the API so the catalog is built once per
-// process and shared by every stateless request and by the setup
-// assistant.
+// process and shared by every stateless request. mcpTools are the
+// edition's own tools, registered after core's.
 type mcpServerState struct {
-	mcpOnce sync.Once
-	mcp     *mcp.Server
+	mcpOnce  sync.Once
+	mcp      *mcp.Server
+	mcpTools []mcptools.Registration
 }
 
 // mcpInstructions is what the client hands its model at initialize: the
@@ -382,11 +288,14 @@ const mcpInstructions = `withHuman decides which of an AI agent's tool calls nee
 How the pieces fit:
 - Every approval request starts in the organization's entry pipeline (key entry). Blocks run in order; the first block that decides (approve, deny, or human) ends the pipeline. A delegate block hands the requests its condition matches to another pipeline by key, and that pipeline's owners decide what happens to them: a request that enters it is decided inside it or goes to a person, and nothing after the delegate runs for it. A request no block decides falls through to human review, so end a pipeline with an outcome block whose outcome is approve when the rest should be automatic. "If this, then that" is a branch whose condition tests the request and whose blocks end in an outcome block. Pipelines other than entry are created explicitly (create_pipeline) and owned through grants at pipeline:<key>.
 - A block that answers "human" hands the request to an escalation path, which names who reviews it (members by membership id, teams by team id), in what order, and what happens when nobody answers. A pipeline revision also carries a default_escalation_path for human exits that name no path. Setting ask_agent_owner beside a block's escalation_path (default_ask_agent_owner beside the default) sends the request to the person who owns the agent instance instead; the path, if any, is the fallback for agents without an owner, else the pipeline default applies.
-- Pipelines, escalation paths and webhook endpoints are revisioned: every save creates a new numbered revision and the write tools activate it right away unless activate is false. Earlier revisions stay readable for rollback through the activate_* tools. Activating a pipeline requires every escalation path and webhook endpoint it names to be active.
+- A team target without its own escalation policy pages every member at once; update_team_escalation_policy orders how the team is paged.
+- Pipelines, escalation paths, team escalation policies and webhook endpoints are revisioned: every save creates a new numbered revision and the write tools activate it right away unless activate is false. Earlier revisions stay readable for rollback through the activate_* tools. Activating a pipeline requires every escalation path and webhook endpoint it names to be active; get_pipeline_revision_references and the *_uses tools explain an activation or archive refusal before you try.
+- Credentials, webhook signing secrets and provisioner tokens a tool mints are shown once in its answer. Relay them to the person who needs them and do not repeat them elsewhere.
+- Deciding requests, inviting people and granting roles or permission policies are a person's acts in the app; no tool does them.
 
 Typical setup:
 1. list_agents to find the agent slug (or create_agent).
-2. list_members and list_teams to find reviewer targets; create_team and set_team_members to shape a team.
+2. list_members and list_teams to find reviewer targets; create_team and set_team_members to shape a team. list_tool_definitions gives the exact tool names and arguments conditions test.
 3. create_escalation_path naming those targets.
 4. update_pipeline for the entry pipeline (pipeline_key entry) with blocks that send risky calls to that path and approve the rest; create_pipeline and a delegate block when another team should own part of the rules.
 5. preview_pipeline with a sample request to check the outcome before or after activating.

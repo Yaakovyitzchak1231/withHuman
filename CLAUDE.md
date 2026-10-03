@@ -831,7 +831,7 @@ recorded in this file with both the reason and the replacement rule.
   tables stay dead in core's chain until it is squashed.
 - The hosted management MCP server is
   `POST /api/mcp/v1` on the product server (`internal/httpapi/mcp.go`,
-  tools in `mcp_tools.go`, grammar in `mcp_reference/`): a stateless
+  core's tools in `mcp_tools.go`, grammar in `internal/mcpreference/`): a stateless
   streamable HTTP endpoint that admits `whk_` and `who_` bearers only
   (never a session cookie) and whose tools re-enter `/api/v1` in process
   with the caller's bearer, so permissions, organization-key route
@@ -841,7 +841,15 @@ recorded in this file with both the reason and the replacement rule.
   revision and activate it against the current `ETag` unless
   `activate: false`, refusals relay the API's error envelope as tool
   error text, and `read_reference` serves the block, condition and path
-  document grammar. It is distinct from the chokepoint gateway's
+  document grammar. The catalog is the exported `mcptools` package
+  (`Catalog`, `Add`, `Call` with its revision helpers, `Result`, the
+  annotations): core registers its tools there and an edition hands its
+  own for its own routes through `runtime.ServerOptions.MCPTools` (the
+  hosted gateway servers and audit log), so every tool dispatches,
+  shapes results and relays refusals the same way. A tool exists only for
+  a route that admits API keys: a member's role, permission policy
+  writes and invitations are browser-only, so no tool hands out
+  authority. It is distinct from the chokepoint gateway's
   `/gateway/mcp`, which sits in the data path of an agent's tool calls.
   Keys are obtained through OAuth rather than copied: `internal/mcpoauth`
   is an OAuth 2.1 authorization server (RFC 8414 and 9728 discovery at

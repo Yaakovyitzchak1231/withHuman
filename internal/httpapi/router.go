@@ -40,6 +40,7 @@ import (
 	"github.com/withHumanAI/withHuman/internal/toolpresentations"
 	"github.com/withHumanAI/withHuman/internal/webhookendpoints"
 	"github.com/withHumanAI/withHuman/loggermdc"
+	"github.com/withHumanAI/withHuman/mcptools"
 )
 
 //go:embed openapi.yaml
@@ -111,6 +112,9 @@ type Dependencies struct {
 	// MCPOAuth is the authorization server in front of the management
 	// MCP endpoint; nil leaves the OAuth routes answering not found.
 	MCPOAuth *mcpoauth.Service
+	// MCPTools are the edition's own management MCP tools, for its own
+	// routes; they join core's catalog and dispatch the same way.
+	MCPTools []mcptools.Registration
 	// Frontend is the built product frontend, served at every path that
 	// is not the API's; nil serves the API alone, which is what tests
 	// compose.
@@ -187,6 +191,7 @@ func newAPI(dependencies Dependencies) *API {
 		routingSnapshots: dependencies.RoutingSnapshots, teamEscalation: dependencies.TeamEscalation,
 		mcpOAuth: dependencies.MCPOAuth, frontend: dependencies.Frontend, drain: drain,
 		logger: loggermdc.Wrap(dependencies.Logger), config: dependencies.Config,
+		mcpServerState: mcpServerState{mcpTools: dependencies.MCPTools},
 	}
 }
 
