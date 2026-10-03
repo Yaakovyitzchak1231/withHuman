@@ -1,6 +1,6 @@
 ---
 name: withhuman-pipelines
-description: Decide which AI agent tool calls need human approval in withHuman, and who approves them, by writing approval pipelines and escalation paths through the withHuman MCP server. Covers connecting the MCP server, reading the current rules, drafting branch, outcome, delegate and webhook blocks, conditions on tools and arguments, escalation paths with teams, levels and working hours, previewing sample requests, activating and rolling back revisions. Trigger keywords - withhuman, approval pipeline, approval rules, gate tool calls, require approval, human review, escalation path, on-call reviewers, who approves, auto-approve, deny tool call, delegate pipeline, preview pipeline, withHuman MCP server.
+description: Decide which AI agent tool calls need human approval in withHuman, and who approves them, by writing approval pipelines and escalation paths through the withHuman MCP server. Covers connecting the MCP server, reading the current rules and the agents' tool catalogue, drafting branch, outcome, delegate and webhook blocks, conditions on tools and arguments, escalation paths with teams, levels and working hours, team escalation policies, webhook endpoints, previewing sample requests, activating and rolling back revisions. Trigger keywords - withhuman, approval pipeline, approval rules, gate tool calls, require approval, human review, escalation path, on-call reviewers, who approves, auto-approve, deny tool call, delegate pipeline, preview pipeline, withHuman MCP server.
 ---
 
 # withHuman approval pipelines
@@ -68,6 +68,12 @@ strict and differs between deployments, so never write blocks from memory.
   answers. A human exit names one with `escalation_path`, or falls back to
   the pipeline's `default_escalation_path`. `ask_agent_owner` sends the
   request to the person who owns the agent instance instead.
+- **A team's escalation policy** orders how a level that targets the team
+  pages its members (`update_team_escalation_policy`). Without one, the
+  whole team is paged at once.
+- **A webhook endpoint** is a service of yours a `webhook` block asks for
+  an outcome (`save_webhook_endpoint`). Its signing secret is shown once,
+  when the endpoint is created or the secret rotated.
 - **Every save is a new revision.** Earlier revisions stay available for
   rollback.
 
@@ -80,7 +86,9 @@ strict and differs between deployments, so never write blocks from memory.
    unambiguous. Don't guess thresholds or reviewers.
 2. **Read what exists.** `list_agents` for slugs, `list_pipelines` and
    `get_pipeline` for `entry` (and any delegated pipeline you will change),
-   `list_escalation_paths`, `list_members` and `list_teams` for reviewers.
+   `list_escalation_paths`, `list_members` and `list_teams` for reviewers,
+   and `list_tool_definitions` for the exact tool names and arguments the
+   agents use.
 3. **Read the reference** topics you need with `read_reference`.
 4. **Reviewers first.** Create or update the escalation path
    (`create_escalation_path`, `update_escalation_path`) before a pipeline
@@ -100,7 +108,9 @@ strict and differs between deployments, so never write blocks from memory.
    once when they asked for that. New requests use the active revision
    immediately.
 8. **Roll back** with `list_pipeline_revisions` and
-   `activate_pipeline_revision` if something is wrong.
+   `activate_pipeline_revision` if something is wrong. Escalation paths,
+   team escalation policies and webhook endpoints roll back the same way
+   with their own `activate_*_revision` tools.
 
 ## Matching tool calls
 
@@ -113,9 +123,11 @@ strict and differs between deployments, so never write blocks from memory.
 - `/request/arguments/...` reaches any argument, for example
   `/request/arguments/command` for a shell command or
   `/request/arguments/amount` for a refund.
-- Exact tool names and argument schemas are in the app under **Agents**, the
-  agent's **Tool Catalogue** tab. Ask the person to check there when you are
-  unsure; a condition on a misspelled tool silently never matches.
+- Exact tool names and argument schemas come from `list_tool_definitions`
+  (or `list_tool_catalog` for one agent). A tool nobody has reported yet is
+  not there; ask the person to run `withhuman agent refresh-tools` or check
+  the agent's **Tool Catalogue** tab, because a condition on a misspelled
+  tool silently never matches.
 
 ## Pitfalls
 
@@ -134,14 +146,20 @@ strict and differs between deployments, so never write blocks from memory.
   accepts after the core grammar. Use only those.
 - **A refusal explains itself.** Tool errors carry the same reason the app
   shows, such as a path still in use or a permission you were not granted.
-  Fix the cause rather than retrying.
+  Fix the cause rather than retrying. `list_escalation_path_uses`,
+  `list_pipeline_uses`, `list_webhook_endpoint_uses` and
+  `get_pipeline_revision_references` explain an archive or activation
+  refusal before you try.
 
 ## Out of scope
 
-Connecting runtimes, issuing credentials and deciding requests are not
-available through the MCP server. Use the `withhuman-cli` skill to connect
-a runtime; people approve or deny requests in the app, the phone apps or
-their notification channels.
+Deciding requests, inviting people and granting roles or permissions are
+not available through the MCP server: a person does them in the app. Use
+the `withhuman-cli` skill to connect a coding agent; people approve or deny
+requests in the app, the phone apps or their notification channels. The
+server also manages agents, their instances and credentials, and members'
+status; on hosted withHuman it adds MCP Gateway servers and the audit log.
+Use those tools only when the person asks for that.
 
 User guides: <https://withhuman.ai/docs/web-app/approval-pipelines.md>,
 <https://withhuman.ai/docs/web-app/escalation-paths.md>.

@@ -101,7 +101,7 @@ export const DOCS_SCREEN_PAGES: DocsPage[] = [
     route: "/oauth/authorize",
     slug: "web-app/mcp-server",
     title: "withHuman MCP server",
-    description: "Let an AI agent set up approval pipelines, escalation paths, teams and webhook endpoints for you.",
+    description: "Let an AI agent set up approval pipelines, escalation paths, teams, agents and webhook endpoints for you.",
   },
   {
     route: "/agents/$agentSlug",

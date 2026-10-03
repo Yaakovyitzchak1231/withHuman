@@ -74,7 +74,7 @@ Specification: <https://agentapprovalprotocol.io>; withHuman's reference:
 | Review queue | Where reviewers see requests waiting for them, with the tool, arguments and why review was needed. |
 | Decision | `approved`, `denied`, `expired` (nobody decided in time) or `cancelled` (the agent withdrew it). An approval only lets the call start shortly afterwards. |
 | Tool Catalogue | The tools and argument schemas each agent reported, used to write rules. |
-| withHuman MCP server | Lets an agent manage the organization's rules, escalation paths and teams on a person's behalf. Usually added as `withhuman`. |
+| withHuman MCP server | Lets an agent manage the organization's rules, escalation paths, teams, agents and webhook endpoints on a person's behalf (hosted withHuman adds MCP Gateway servers and the audit log). Usually added as `withhuman`. |
 | MCP Gateway | Hosted only. Holds the organization's MCP servers and credentials and gives each agent the tools it was granted. The CLI adds it as `withhuman-gateway`; its tools reach external services and cannot change withHuman's rules. |
 
 User guide: <https://withhuman.ai/docs/concepts/how-withhuman-works.md>.

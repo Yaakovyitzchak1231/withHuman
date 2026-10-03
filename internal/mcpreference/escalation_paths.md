@@ -121,3 +121,19 @@ The revision's `warnings` report a targeted team whose members cannot
 decide requests (`team_members_cannot_decide`) or a layout some request
 could walk without meeting a level (`path_may_reach_nobody`). Warnings do
 not block activation.
+
+## Team escalation policies
+
+A team can own one escalation policy that says how a level targeting the
+team pages its members (`update_team_escalation_policy`). Without an
+active policy such a level reaches every current member at once. A
+policy document has the same `nodes`, `working_hours` and `repeat` as a
+path, with two differences in level targets:
+
+- `user` targets must be current members of the team (membership ids from
+  `get_team`), and `team` targets are refused.
+- `{ "type": "broadcast" }` (no id) pages every current member; a
+  document holds at most one.
+
+Every current member of a team a request reaches may decide it, whatever
+the policy pages first: the policy orders notifications, not authority.

@@ -24,6 +24,7 @@ import (
 	"github.com/withHumanAI/withHuman/domain"
 	"github.com/withHumanAI/withHuman/entitlements"
 	"github.com/withHumanAI/withHuman/internal/approvalpipeline"
+	"github.com/withHumanAI/withHuman/mcptools"
 )
 
 // The management MCP surface is a door onto /api/v1 for API keys: these
@@ -145,13 +146,15 @@ func (s *mcpPipelineStore) ActivateRequestApprovalPipelineRevision(_ context.Con
 // ActorAPIKey holding the same.
 type mcpHarness struct {
 	server   *httptest.Server
+	router   *gin.Engine
+	auth     *authn.Service
 	store    *mcpPipelineStore
 	keys     *mcpAPIKeyStore
 	token    string
 	orgToken string
 }
 
-func newMCPHarness(t *testing.T) *mcpHarness {
+func newMCPHarness(t *testing.T, tools ...mcptools.Registration) *mcpHarness {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -171,11 +174,12 @@ func newMCPHarness(t *testing.T) *mcpHarness {
 		Auth: auth, Identities: identities, Logger: logger,
 		Pipelines: approvalpipeline.NewManagementService(store, approvalpipeline.NewCompiledPipelineState(store, registry), pipelineHTTPClock{}),
 		Config:    Config{PublicOrigin: "http://localhost:8080", Version: "test"},
+		MCPTools:  tools,
 	})
 	server := httptest.NewServer(router)
 	t.Cleanup(server.Close)
 	return &mcpHarness{
-		server: server, store: store, keys: keys,
+		server: server, router: router, auth: auth, store: store, keys: keys,
 		token:    "whk_" + apiKeyTestKeyID + "_secret",
 		orgToken: "who_" + apiKeyTestKeyID + "_secret",
 	}
@@ -394,10 +398,20 @@ func TestMCPListsTheManagementCatalog(t *testing.T) {
 		names[tool.Name] = tool
 	}
 	for _, want := range []string{
-		"list_agents", "create_agent", "list_members", "list_teams", "get_team", "create_team", "set_team_members",
-		"list_pipelines", "get_pipeline", "create_pipeline", "archive_pipeline", "list_pipeline_revisions", "get_pipeline_revision", "update_pipeline", "activate_pipeline_revision", "preview_pipeline",
-		"list_escalation_paths", "get_escalation_path", "list_escalation_path_revisions", "create_escalation_path", "update_escalation_path", "activate_escalation_path_revision", "archive_escalation_path",
-		"list_webhook_endpoints", "get_webhook_endpoint", "save_webhook_endpoint", "read_reference",
+		"list_agents", "get_agent", "create_agent", "update_agent", "archive_agent", "restore_agent", "update_agent_instance",
+		"create_agent_instance", "create_provisioner_token", "revoke_provisioner_token", "revoke_agent_credential",
+		"list_tool_catalog", "get_tool_catalog_entry", "list_tool_definitions",
+		"list_members", "update_member", "remove_member", "list_roles", "list_permissions", "list_member_permission_policies",
+		"list_teams", "get_team", "create_team", "rename_team", "archive_team", "set_team_members", "list_team_permission_policies",
+		"get_team_escalation_policy", "list_team_escalation_policy_revisions", "get_team_escalation_policy_revision",
+		"update_team_escalation_policy", "activate_team_escalation_policy_revision", "archive_team_escalation_policy",
+		"list_pipelines", "get_pipeline", "create_pipeline", "archive_pipeline", "list_pipeline_uses", "list_pipeline_revisions", "get_pipeline_revision",
+		"get_pipeline_revision_references", "update_pipeline", "activate_pipeline_revision", "preview_pipeline",
+		"list_escalation_paths", "get_escalation_path", "list_escalation_path_revisions", "get_escalation_path_revision", "list_escalation_path_uses",
+		"create_escalation_path", "update_escalation_path", "activate_escalation_path_revision", "archive_escalation_path",
+		"list_webhook_endpoints", "get_webhook_endpoint", "list_webhook_endpoint_revisions", "get_webhook_endpoint_revision", "list_webhook_endpoint_uses",
+		"save_webhook_endpoint", "activate_webhook_endpoint_revision", "test_webhook_endpoint", "archive_webhook_endpoint", "rotate_webhook_endpoint_secret",
+		"read_reference",
 	} {
 		tool, ok := names[want]
 		if !ok {
@@ -414,7 +428,7 @@ func TestMCPListsTheManagementCatalog(t *testing.T) {
 	if err != nil || len(skills) == 0 {
 		t.Fatalf("no skills found: %v", err)
 	}
-	toolMention := regexp.MustCompile("`((?:list|get|create|update|delete|remove|archive|activate|preview|save|set|read)_[a-z_]+)`")
+	toolMention := regexp.MustCompile("`((?:list|get|create|update|delete|remove|archive|restore|activate|preview|save|set|read|rename|revoke|test|rotate)_[a-z_]+)`")
 	for _, path := range skills {
 		text, err := os.ReadFile(path)
 		if err != nil {
@@ -429,11 +443,62 @@ func TestMCPListsTheManagementCatalog(t *testing.T) {
 	if !names["get_pipeline"].Annotations.ReadOnlyHint || names["update_pipeline"].Annotations.ReadOnlyHint {
 		t.Fatal("read-only hints do not match the tools' effects")
 	}
+	for _, name := range []string{"archive_agent", "revoke_agent_credential", "remove_member", "archive_team", "rotate_webhook_endpoint_secret"} {
+		if hint := names[name].Annotations.DestructiveHint; hint == nil || !*hint {
+			t.Errorf("%s ends something for good but is not marked destructive", name)
+		}
+	}
+	// Routes a key can never use have no tool: handing out authority
+	// stays a person's act in the browser.
+	for _, name := range []string{"set_member_role", "create_member_permission_policy", "create_invitation"} {
+		if names[name] != nil {
+			t.Errorf("%s is served, but its route admits browser sessions only", name)
+		}
+	}
 	schema, _ := json.Marshal(names["update_pipeline"].InputSchema)
 	for _, property := range []string{`"pipeline_key"`, `"name"`, `"blocks"`, `"default_escalation_path"`, `"activate"`} {
 		if !strings.Contains(string(schema), property) {
 			t.Errorf("update_pipeline schema lacks %s: %s", property, schema)
 		}
+	}
+}
+
+// An edition's tools join core's catalog and reach its own routes the
+// way core's do: in process, with the caller's bearer, refusals relayed.
+func TestMCPServesTheEditionsTools(t *testing.T) {
+	h := newMCPHarness(t, func(catalog *mcptools.Catalog) {
+		mcptools.Add(catalog, &mcp.Tool{Name: "list_edition_records", Description: "List the edition's records.", Annotations: mcptools.ReadOnly},
+			func(call *mcptools.Call, input struct {
+				Kind string `json:"kind,omitempty"`
+			}) (*mcp.CallToolResult, any, error) {
+				return mcptools.Answer(call.Get("/api/v1/edition_records", mcptools.Query("kind", input.Kind)))
+			})
+	})
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	h.router.GET("/api/v1/edition_records", PrincipalAuth(h.auth, logger), func(c *gin.Context) {
+		if c.Query("kind") == "secret" {
+			WriteError(c, logger, domain.ErrForbidden)
+			return
+		}
+		principal := Principal(c)
+		c.JSON(http.StatusOK, gin.H{"records": []string{}, "actor_id": principal.ActorID, "kind": c.Query("kind")})
+	})
+	session := h.connect(t, h.token)
+	listed, err := session.ListTools(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(listed.Tools, func(tool *mcp.Tool) bool { return tool.Name == "list_edition_records" }) ||
+		!slices.ContainsFunc(listed.Tools, func(tool *mcp.Tool) bool { return tool.Name == "get_pipeline" }) {
+		t.Fatal("the edition's tool must join core's catalog")
+	}
+	answer := mcpStructured(t, h.call(t, session, "list_edition_records", map[string]any{"kind": "audit"}))
+	if answer["actor_id"] != string(h.keys.principal.ActorID) || answer["kind"] != "audit" {
+		t.Fatalf("edition tool answer = %v", answer)
+	}
+	refused := h.call(t, session, "list_edition_records", map[string]any{"kind": "secret"})
+	if !refused.IsError || !strings.HasPrefix(mcpText(refused), "forbidden: ") {
+		t.Fatalf("edition refusal = %q", mcpText(refused))
 	}
 }
 

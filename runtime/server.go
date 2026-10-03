@@ -51,6 +51,7 @@ import (
 	"github.com/withHumanAI/withHuman/internal/webhookdelivery"
 	"github.com/withHumanAI/withHuman/internal/webhookendpoints"
 	"github.com/withHumanAI/withHuman/loggermdc"
+	"github.com/withHumanAI/withHuman/mcptools"
 	"github.com/withHumanAI/withHuman/notifications"
 	"github.com/withHumanAI/withHuman/tenants"
 	"go.temporal.io/sdk/client"
@@ -133,6 +134,12 @@ type ServerOptions struct {
 	// agent_mcp_servers so the withhuman CLI registers them with each
 	// runtime it installs. The open edition offers none.
 	AgentMCPServers []domain.AgentMCPServer
+	// MCPTools are the edition's own tools on the management MCP server
+	// (/api/mcp/v1), for the routes it adds (the hosted gateway servers
+	// and audit log). Each dispatches into the composed router with the
+	// caller's credential exactly as core's tools do, so a tool may only
+	// reach a route that admits the caller's key.
+	MCPTools []mcptools.Registration
 }
 
 // Server is a composed withHuman product server. The exported fields are
@@ -377,7 +384,7 @@ func NewServer(ctx context.Context, options ServerOptions) (*Server, error) {
 		Identities: store, Roles: store, ApprovalRepo: store,
 		Orchestrator: orchestrator,
 		Pipelines:    pipelineService, CompiledPipelines: compiledPipelines,
-		Routing: routingService, RoutingSnapshots: store, TeamEscalation: teamEscalationService, MCPOAuth: mcpOAuthService,
+		Routing: routingService, RoutingSnapshots: store, TeamEscalation: teamEscalationService, MCPOAuth: mcpOAuthService, MCPTools: options.MCPTools,
 		Frontend: options.Frontend, Drain: drain, Logger: logger,
 		Config: httpapi.Config{
 			PublicOrigin: cfg.PublicOrigin, CookieSecure: cookieSecure(cfg.PublicOrigin), Version: options.Version,
