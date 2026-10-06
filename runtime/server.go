@@ -279,7 +279,7 @@ func NewServer(ctx context.Context, options ServerOptions) (*Server, error) {
 	tenantService := tenants.NewService(store, orchestrator, options.Hooks, clock, logger, tenants.Config{})
 	authService := authn.NewService(store, store, store, tenantService, plan, authn.NewArgon2idPasswordHasher(), clock, authn.ServiceConfig{
 		BootstrapSecret: cfg.BootstrapSecret, PublicOrigin: cfg.PublicOrigin,
-		SessionTTL: cfg.SessionTTL, CredentialTTL: cfg.CredentialTTL,
+		SessionTTL: cfg.SessionTTL, NativeSessionTTL: cfg.NativeSessionTTL, CredentialTTL: cfg.CredentialTTL,
 		ProvisionerTTL: cfg.ProvisionerTTL, EnrollmentCodeTTL: cfg.EnrollmentCodeTTL,
 		APIKeyScopingEnabled: options.APIKeyScopingEnabled, APIKeyMaxTTL: cfg.APIKeyMaxTTL,
 	})

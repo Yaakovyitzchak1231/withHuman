@@ -530,7 +530,9 @@ paths:
         selection step. Organizations with an enterprise connection are never
         reachable with a password: when every organization is connected the
         response is status sso_required with the connected organizations and
-        no ticket, and the client continues through the SSO flow.
+        no ticket, and the client continues through the SSO flow. A phone
+        app names itself in client, which gives its session the longer
+        native lifetime; a browser omits it.
       operationId: login
       x-withhuman-permission: public
       security: []
@@ -544,6 +546,15 @@ paths:
               properties:
                 email: { type: string, format: email }
                 password: { type: string, maxLength: 1024 }
+                client:
+                  type: object
+                  description: The phone app signing in. Omitted by the browser.
+                  required: [kind]
+                  properties:
+                    kind: { type: string, enum: [ios, android] }
+                    context:
+                      type: object
+                      description: What the app reports about itself (app version, OS version, device model, device id), stored as given.
       responses:
         "200":
           description: Session set, an organization selection step, or a hand-off to enterprise SSO

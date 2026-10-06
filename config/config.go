@@ -19,10 +19,15 @@ type Config struct {
 	PublicOrigin        string
 	TrustedProxyCIDRs   []string
 	BootstrapSecret     string
-	SessionTTL          time.Duration
-	CredentialTTL       time.Duration
-	ProvisionerTTL      time.Duration
-	EnrollmentCodeTTL   time.Duration
+	// SessionTTL is a browser session's lifetime; NativeSessionTTL is the
+	// longer one a phone app gets, so a reviewer is not signed out of the
+	// device that carries their approval prompts. The organization's
+	// session max age caps both.
+	SessionTTL        time.Duration
+	NativeSessionTTL  time.Duration
+	CredentialTTL     time.Duration
+	ProvisionerTTL    time.Duration
+	EnrollmentCodeTTL time.Duration
 	// APIKeyMaxTTL caps how far out a personal API key may expire. Zero,
 	// the default, lets a key live until revoked, the Cloudflare way.
 	APIKeyMaxTTL time.Duration
@@ -100,7 +105,8 @@ func Load() (Config, error) {
 		PublicOrigin:                env("WITHHUMAN_PUBLIC_ORIGIN", "http://localhost:8080"),
 		TrustedProxyCIDRs:           split(env("WITHHUMAN_TRUSTED_PROXIES", "")),
 		BootstrapSecret:             os.Getenv("WITHHUMAN_BOOTSTRAP_SECRET"),
-		SessionTTL:                  envDuration("WITHHUMAN_SESSION_TTL", 24*time.Hour),
+		SessionTTL:                  envDuration("WITHHUMAN_SESSION_TTL", 7*24*time.Hour),
+		NativeSessionTTL:            envDuration("WITHHUMAN_NATIVE_SESSION_TTL", 30*24*time.Hour),
 		CredentialTTL:               envDuration("WITHHUMAN_CREDENTIAL_TTL", 90*24*time.Hour),
 		ProvisionerTTL:              envDuration("WITHHUMAN_PROVISIONER_TTL", 365*24*time.Hour),
 		EnrollmentCodeTTL:           envDuration("WITHHUMAN_ENROLLMENT_CODE_TTL", 10*time.Minute),

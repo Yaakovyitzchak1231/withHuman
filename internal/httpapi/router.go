@@ -538,12 +538,17 @@ func (a *API) login(c *gin.Context) {
 	var request struct {
 		Email    string `json:"email" binding:"required,email"`
 		Password string `json:"password" binding:"required"`
+		Client   struct {
+			Kind    string          `json:"kind"`
+			Context json.RawMessage `json:"context"`
+		} `json:"client"`
 	}
 	if !bind(c, &request) {
 		return
 	}
 	result, err := a.auth.LoginLocal(c.Request.Context(), authn.LocalLoginInput{
 		Email: request.Email, Password: request.Password,
+		Client: application.SessionClient{Kind: request.Client.Kind, Context: request.Client.Context},
 	})
 	if err != nil {
 		a.writeError(c, err)

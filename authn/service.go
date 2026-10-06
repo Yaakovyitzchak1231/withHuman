@@ -24,9 +24,12 @@ import (
 const SessionCookieName = "withhuman_session"
 
 type ServiceConfig struct {
-	BootstrapSecret   string
-	PublicOrigin      string
-	SessionTTL        time.Duration
+	BootstrapSecret string
+	PublicOrigin    string
+	SessionTTL      time.Duration
+	// NativeSessionTTL is the lifetime of a session for a phone app (a
+	// client kind in NativeClients); zero falls back to SessionTTL.
+	NativeSessionTTL  time.Duration
 	CredentialTTL     time.Duration
 	EnrollmentCodeTTL time.Duration
 	ProvisionerTTL    time.Duration
@@ -243,6 +246,10 @@ func (s *Service) LoginMethods(ctx context.Context, email string) (LoginMethods,
 type LocalLoginInput struct {
 	Email    string
 	Password string
+	// Client is the phone app that signed in, empty for the browser. Only
+	// kinds in NativeClients are accepted: the kind picks the session's
+	// lifetime.
+	Client application.SessionClient
 }
 
 // LoginResult is one of three outcomes: a completed login (Authentication
@@ -262,6 +269,9 @@ type LoginResult struct {
 // to the shared organization step: exactly one organization completes the
 // login, several mint a single-use ticket for the organization picker.
 func (s *Service) LoginLocal(ctx context.Context, input LocalLoginInput) (LoginResult, error) {
+	if _, native := NativeClients[input.Client.Kind]; input.Client.Kind != "" && !native {
+		return LoginResult{}, fmt.Errorf("client kind %q is not registered: %w", input.Client.Kind, domain.ErrInvalid)
+	}
 	assertion, err := s.local.Complete(ctx, map[string]string{"email": input.Email, "password": input.Password})
 	if err != nil {
 		return LoginResult{}, err
@@ -276,7 +286,7 @@ func (s *Service) LoginLocal(ctx context.Context, input LocalLoginInput) (LoginR
 	}
 	return s.finishLogin(ctx, userID, login.Organizations, domain.AuthContext{
 		Method: "local_password", Assurance: AssuranceFor(assertion), AuthenticatedAt: assertion.AuthenticatedAt,
-	}, application.SessionClient{})
+	}, input.Client)
 }
 
 // finishLogin is the organization step shared by every global
@@ -436,6 +446,9 @@ func (s *Service) createSessionFor(ctx context.Context, userID, organizationID d
 		return AuthenticationResult{}, err
 	}
 	ttl := s.config.SessionTTL
+	if _, native := NativeClients[client.Kind]; native && s.config.NativeSessionTTL > 0 {
+		ttl = s.config.NativeSessionTTL
+	}
 	policy, err := s.identities.GetOrganizationPolicy(ctx, application.GetOrganizationPolicyInput{
 		OrganizationID: organizationID,
 	})
