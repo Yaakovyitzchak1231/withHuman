@@ -7,7 +7,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -173,4 +175,163 @@ func TestRelayEndsWithTheRuntime(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the endpoint call was not abandoned")
 	}
+}
+
+// restartingGateway hands out a session on initialize and answers 404 for
+// any session it has forgotten, the way the gateway does after its pods
+// restart.
+type restartingGateway struct {
+	mu          sync.Mutex
+	sessions    map[string]bool
+	issued      int
+	initializes int
+	initialized []string
+	calls       []string
+	versions    []string
+	refuse      bool
+}
+
+func (g *restartingGateway) restart(refuseInitialize bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.sessions, g.refuse = map[string]bool{}, refuseInitialize
+}
+
+func (g *restartingGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	body, _ := io.ReadAll(r.Body)
+	var msg struct {
+		ID     json.RawMessage `json:"id"`
+		Method string          `json:"method"`
+	}
+	_ = json.Unmarshal(body, &msg)
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if msg.Method == "initialize" {
+		g.initializes++
+		if r.Header.Get("Mcp-Session-Id") != "" || g.refuse {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		g.issued++
+		session := "session-" + strconv.Itoa(g.issued)
+		g.sessions[session] = true
+		w.Header().Set("Mcp-Session-Id", session)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"jsonrpc\":\"2.0\",\"id\":" + string(msg.ID) + ",\"result\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"t\",\"version\":\"1\"}}}\n\n"))
+		return
+	}
+	session := r.Header.Get("Mcp-Session-Id")
+	if !g.sessions[session] {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+	switch msg.Method {
+	case "notifications/initialized":
+		g.initialized = append(g.initialized, session)
+		w.WriteHeader(http.StatusAccepted)
+	case "tools/call":
+		g.calls = append(g.calls, session)
+		g.versions = append(g.versions, r.Header.Get("MCP-Protocol-Version"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":` + string(msg.ID) + `,"result":{"content":[{"type":"text","text":"done"}]}}`))
+	default:
+		w.WriteHeader(http.StatusAccepted)
+	}
+}
+
+// startHandshake initializes through the relay and waits for the
+// gateway to hold the runtime's notifications/initialized, which the
+// relay forwards concurrently with later frames.
+func startHandshake(t *testing.T, h *host, gateway *restartingGateway) {
+	t.Helper()
+	h.send(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"claude","version":"1"}}}`)
+	if answer := h.recv(); answer["id"] != float64(1) || answer["result"] == nil {
+		t.Fatalf("initialize = %v", answer)
+	}
+	h.send(`{"jsonrpc":"2.0","method":"notifications/initialized"}`)
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		gateway.mu.Lock()
+		held := len(gateway.initialized) > 0
+		gateway.mu.Unlock()
+		if held {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("notifications/initialized never reached the gateway")
+		}
+	}
+}
+
+// After a gateway restart forgets the session, the relay starts a new one
+// with the runtime's own handshake and retries the calls on it. The
+// runtime sees only the answers to its calls: no error and no second
+// initialize result. Calls that fail together start one session.
+func TestRelayStartsANewSessionWhenTheGatewayForgetsIt(t *testing.T) {
+	gateway := &restartingGateway{sessions: map[string]bool{}}
+	server := httptest.NewServer(gateway)
+	defer server.Close()
+	h := startHost(t, server.URL, "whc_secret")
+	startHandshake(t, h, gateway)
+	h.send(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"echo"}}`)
+	if answer := h.recv(); answer["id"] != float64(2) || answer["result"] == nil {
+		t.Fatalf("call before the restart = %v", answer)
+	}
+
+	gateway.restart(false)
+	h.send(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"echo"}}`)
+	h.send(`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"echo"}}`)
+	answered := map[float64]bool{}
+	for range 2 {
+		answer := h.recv()
+		if answer["result"] == nil {
+			t.Fatalf("call after the restart = %v", answer)
+		}
+		answered[answer["id"].(float64)] = true
+	}
+	if !answered[3] || !answered[4] {
+		t.Fatalf("answered %v", answered)
+	}
+	h.close()
+
+	gateway.mu.Lock()
+	defer gateway.mu.Unlock()
+	if gateway.initializes != 2 {
+		t.Fatalf("initializes = %d, want the runtime's and one replay", gateway.initializes)
+	}
+	if strings.Join(gateway.initialized, ",") != "session-1,session-2" {
+		t.Fatalf("notifications/initialized on %v", gateway.initialized)
+	}
+	if strings.Join(gateway.calls, ",") != "session-1,session-2,session-2" {
+		t.Fatalf("calls on %v", gateway.calls)
+	}
+	for _, version := range gateway.versions {
+		if version != "2025-06-18" {
+			t.Fatalf("protocol versions %v", gateway.versions)
+		}
+	}
+}
+
+// When the new session cannot be started the call fails as before, and
+// the next call tries again.
+func TestRelayReportsTheForgottenSessionWhenRenewalFails(t *testing.T) {
+	gateway := &restartingGateway{sessions: map[string]bool{}}
+	server := httptest.NewServer(gateway)
+	defer server.Close()
+	h := startHost(t, server.URL, "whc_secret")
+	startHandshake(t, h, gateway)
+
+	gateway.restart(true)
+	h.send(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"echo"}}`)
+	answer := h.recv()
+	problem, _ := answer["error"].(map[string]any)
+	if answer["id"] != float64(2) || problem == nil || problem["message"] != "the withHuman gateway answered HTTP 404" {
+		t.Fatalf("answer = %v", answer)
+	}
+
+	gateway.restart(false)
+	h.send(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"echo"}}`)
+	if answer := h.recv(); answer["id"] != float64(3) || answer["result"] == nil {
+		t.Fatalf("call after recovery = %v", answer)
+	}
+	h.close()
 }
