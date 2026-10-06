@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { cn } from "@/ds/lib/cn";
 import { Badge } from "./badge";
-import { BlockPositionPill, type BlockPosition } from "./block-card";
+import { BlockPositionLabel, type BlockPosition } from "./block-card";
 import { IconButton } from "./icon-button";
 import { ArrowUpRightIcon, ChevronDownIcon } from "@/ds/icons";
 
@@ -66,10 +66,10 @@ export function BlockSummaryCard({
           open && "rounded-b-none",
         )}
       >
-        <BlockPositionPill position={position} className="text-ink-faint" />
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-            <span className="font-medium text-ink-secondary">{title}</span>
+            <BlockPositionLabel position={position} />
+            <span className="font-medium text-ink">{title}</span>
             {!enabled ? <Badge>Off</Badge> : null}
           </div>
           <p className="mt-0.5 truncate font-mono text-[11px] text-ink-muted">{subtitle}</p>

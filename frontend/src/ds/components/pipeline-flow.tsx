@@ -1,6 +1,5 @@
 import { useState, type ReactNode } from "react";
 import { cn } from "@/ds/lib/cn";
-import { wellTone } from "@/ds/lib/well";
 import { Badge } from "./badge";
 import { Button } from "./button";
 import { IconButton } from "./icon-button";
@@ -216,13 +215,13 @@ export function PipelineDelegateExits({
  * A branch's fork on the rail. When the branch's conditions are met the
  * request drops through an elbow into the indented well that holds the
  * branch's own blocks and its end; when they are not, the parent rail
- * runs on past the well, to the left of it, to the next block. Wells
- * alternate surface levels with depth, and each level indents about
- * 48px (less on a phone).
+ * runs on past the well, to the left of it, to the next block. The well
+ * is no box: the elbow runs on down as a guide line beside the branch's
+ * blocks, which share the rail's right edge, and each level indents
+ * about 36px (less on a phone).
  */
 export function PipelineBranchWell({
   name,
-  depth,
   taken,
   blocked = false,
   label = "If conditions are met",
@@ -231,9 +230,6 @@ export function PipelineBranchWell({
 }: {
   /* The branch's name, for the well's accessible label. */
   name: string;
-  /* 1 for a branch on a pipeline's own rail, 2 for one inside it, and so
-   * on; decides the well's surface level. */
-  depth: number;
   /* The exit a test run took: into the branch, or past it. That row
    * carries the color so the taken path reads at a glance. */
   taken?: "enter" | "skip";
@@ -255,7 +251,7 @@ export function PipelineBranchWell({
           <span className={cn("absolute top-0 w-px bg-edge-strong", blocked ? "bottom-1/2" : "bottom-0")} />
         </span>
         {/* The elbow: right from the rail, then down into the well's
-          * square corner. Its width is the well's indent. */}
+          * guide line. Its width is the well's indent. */}
         <span aria-hidden className="relative w-3 shrink-0 self-stretch sm:w-5">
           <span className={cn("absolute top-1/2 right-0 left-0 h-px", line)} />
           <span className={cn("absolute top-1/2 -right-px bottom-0 w-px", line)} />
@@ -270,8 +266,8 @@ export function PipelineBranchWell({
           role="group"
           aria-label={`Blocks in “${name || "Untitled branch"}”`}
           className={cn(
-            "ml-3 min-w-0 flex-1 rounded-lg rounded-tl-none border-hairline border-edge px-2 py-3 sm:ml-5 sm:px-3",
-            wellTone(depth),
+            "ml-3 min-w-0 flex-1 border-l py-1.5 pl-3 transition-colors duration-200 sm:ml-5 sm:pl-4",
+            entered ? "border-accent" : "border-edge-strong",
           )}
         >
           {children}

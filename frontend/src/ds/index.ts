@@ -178,7 +178,7 @@ export {
 export {
   BlockCard,
   BlockCardHeader,
-  BlockPositionPill,
+  BlockPositionLabel,
   blockMenuActions,
   type BlockCardHeaderProps,
   type BlockCardProps,
