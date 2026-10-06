@@ -5,7 +5,6 @@ import { Badge } from "@/ds/components/badge";
 import { Button } from "@/ds/components/button";
 import { EmptyState } from "@/ds/components/empty-state";
 import { List, ListCell, ListRowContent, type ListRowProps } from "@/ds/components/list";
-import { LoadingDots } from "@/ds/components/loading-dots";
 import { SelectionBar } from "@/ds/components/selection-bar";
 import { SidebarReopenControl } from "@/ds/components/sidebar-reopen";
 import { useToast } from "@/ds/components/toast";
@@ -20,7 +19,7 @@ import {
 import { ToggleGroup, ToggleGroupItem } from "@/ds/components/toggle-group";
 import { Tooltip } from "@/ds/components/tooltip";
 import { Page } from "@/ds/components/page";
-import { CheckIcon, ChevronDownIcon, ClockIcon, DashIcon, InboxIcon, ProgressIcon, XIcon } from "@/ds/icons";
+import { AlertIcon, CheckIcon, ChevronDownIcon, ClockIcon, DashIcon, InboxIcon, ProgressIcon, XIcon } from "@/ds/icons";
 import { cn } from "@/ds/lib/cn";
 import { focusRing } from "@/ds/lib/focus";
 import { useMediaQuery } from "@/ds/lib/use-media-query";
@@ -288,7 +287,7 @@ export function QueueScreen({
   const filter: Filter = search.filter ?? "pending";
   const view: View = { scope, filter };
 
-  const { requests, loaded, liveError } = useQueue(scope);
+  const { requests, loaded, loadFailed } = useQueue(scope);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkSaving, setBulkSaving] = useState(false);
   const toast = useToast();
@@ -394,12 +393,6 @@ export function QueueScreen({
 
   const setScope = (next: QueueScope) => setView({ scope: next, filter });
 
-  const reconnecting = liveError ? (
-    <Tooltip content="Reconnecting to live updates">
-      <LoadingDots aria-label="Reconnecting to live updates" />
-    </Tooltip>
-  ) : null;
-
   const filterControl = (
     <ToggleGroup
       aria-label="Queue filter"
@@ -416,6 +409,16 @@ export function QueueScreen({
   const emptyList = (
     <EmptyState icon={<InboxIcon />} title={empty.title} description={empty.description} />
   );
+  /* Only a queue that never loaded says so. Once a snapshot is on screen
+   * it stays there without comment while the stream reconnects. */
+  const loadError = (
+    <EmptyState
+      icon={<AlertIcon />}
+      title="The queue could not load"
+      description="withHuman is trying again. Requests will appear here once it connects."
+    />
+  );
+  const unloaded = loadFailed ? loadError : null;
 
   const selectionBar = (
     <SelectionBar count={selected.size} onClear={() => setSelected(new Set())}>
@@ -449,13 +452,12 @@ export function QueueScreen({
               <SidebarReopenControl className="-ml-1 flex" claim />
               <div className="mr-auto flex min-w-0 items-center gap-2">
                 <LayerHeading scope={scope} onChange={setScope} size="title" />
-                {reconnecting}
               </div>
               {filterControl}
             </div>
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto border-t-hairline border-edge">
-            {!loaded ? null : visible.length === 0 ? (
+            {!loaded ? unloaded : visible.length === 0 ? (
               emptyList
             ) : (
               <List
@@ -540,13 +542,12 @@ export function QueueScreen({
       <div className="flex items-center justify-between gap-4">
         <div className="flex min-w-0 items-center gap-2">
           <LayerHeading scope={scope} onChange={setScope} size="title-lg" />
-          {reconnecting}
         </div>
         {filterControl}
       </div>
 
       <div className="overflow-hidden rounded-lg border-hairline border-edge bg-surface shadow-sm">
-        {!loaded ? null : visible.length === 0 ? (
+        {!loaded ? unloaded : visible.length === 0 ? (
           emptyList
         ) : (
           <List
