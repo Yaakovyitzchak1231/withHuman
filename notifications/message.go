@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/withHumanAI/withHuman/application"
+	"github.com/withHumanAI/withHuman/domain"
 )
 
 // mailMessage is one rendered RFC 5322 message ready for a transport.
@@ -45,6 +46,56 @@ func approvalPromptMessage(request approvalMailRequest, recipient application.No
 	return mailMessage{
 		To:      address,
 		Subject: fmt.Sprintf("Approval needed: %s", request.Tool),
+		Body:    strings.Join(lines, "\r\n"),
+	}
+}
+
+// digestListLimit is how many requests a digest names one by one; the
+// rest are counted, and the queue lists everything.
+const digestListLimit = 10
+
+// digestShown splits a digest's requests into the ones it names and how
+// many more it only counts.
+func digestShown(requests []domain.ApprovalRequest) ([]domain.ApprovalRequest, int) {
+	if len(requests) <= digestListLimit {
+		return requests, 0
+	}
+	return requests[:digestListLimit], len(requests) - digestListLimit
+}
+
+// approvalDigestMessage renders a notification window's digest: one line
+// per request with its link, then the queue. Like the prompt it names the
+// tool, the agent and the deadline, never the arguments.
+func approvalDigestMessage(input application.SendApprovalDigestInput, address string, requestURL func(domain.ID) string, queueURL string) mailMessage {
+	greeting := "Hello,"
+	if name := strings.TrimSpace(input.Recipient.DisplayName); name != "" {
+		greeting = fmt.Sprintf("Hello %s,", name)
+	}
+	shown, more := digestShown(input.Requests)
+	lines := []string{
+		greeting,
+		"",
+		fmt.Sprintf("%d requests are waiting for your approval:", len(input.Requests)),
+		"",
+	}
+	for _, request := range shown {
+		lines = append(lines,
+			fmt.Sprintf("- %s from %s (%s), expires %s", request.Tool, request.AgentName, request.AgentInstanceName, request.DeadlineAt.UTC().Format(time.RFC1123)),
+			"  "+requestURL(request.ID))
+	}
+	if more > 0 {
+		lines = append(lines, fmt.Sprintf("And %d more.", more))
+	}
+	lines = append(lines,
+		"",
+		"Review them all here:",
+		queueURL,
+		"",
+		"The request details are in the app, where your decisions are recorded.",
+	)
+	return mailMessage{
+		To:      address,
+		Subject: fmt.Sprintf("%d approvals waiting", len(input.Requests)),
 		Body:    strings.Join(lines, "\r\n"),
 	}
 }

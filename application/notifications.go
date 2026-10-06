@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"sort"
 	"time"
 
 	"github.com/withHumanAI/withHuman/domain"
@@ -27,6 +28,7 @@ const (
 type NotificationChannel interface {
 	Key() NotificationChannelKey
 	SendApprovalPrompt(ctx context.Context, input SendApprovalPromptInput) error
+	SendApprovalDigest(ctx context.Context, input SendApprovalDigestInput) error
 	SendTransactional(ctx context.Context, input SendTransactionalInput) error
 }
 
@@ -36,6 +38,7 @@ type NotificationChannel interface {
 // reason to fail the action that triggered it.
 type NotificationDispatcher interface {
 	SendApprovalPrompt(ctx context.Context, input SendApprovalPromptInput) error
+	SendApprovalDigest(ctx context.Context, input SendApprovalDigestInput) error
 	SendTransactional(ctx context.Context, input SendTransactionalInput) error
 }
 
@@ -91,6 +94,78 @@ type RecipientTarget struct {
 	Address  string
 }
 
+// DueKinds lists the kinds this step reaches the person on: the kinds
+// whose windows the step passes through. A Slack fallback is not one of
+// them; it replaces a message the person never got and goes at once.
+func (recipient NotificationRecipient) DueKinds() []domain.ContactMethodKind {
+	var kinds []domain.ContactMethodKind
+	if len(recipient.Emails) > 0 {
+		kinds = append(kinds, domain.ContactEmail)
+	}
+	if recipient.SlackUserID != "" {
+		kinds = append(kinds, domain.ContactSlack)
+	}
+	if recipient.DiscordUserID != "" {
+		kinds = append(kinds, domain.ContactDiscord)
+	}
+	for _, kind := range domain.RegisteredContactKinds() {
+		if len(recipient.Targets[kind.Kind]) > 0 {
+			kinds = append(kinds, kind.Kind)
+		}
+	}
+	return kinds
+}
+
+// Only narrows the step to one kind's targets, keeping who the person is.
+func (recipient NotificationRecipient) Only(kind domain.ContactMethodKind) NotificationRecipient {
+	narrowed := NotificationRecipient{
+		MembershipID: recipient.MembershipID, DisplayName: recipient.DisplayName,
+		UserID: recipient.UserID, Methods: recipient.Methods,
+	}
+	switch kind {
+	case domain.ContactEmail:
+		narrowed.Emails = recipient.Emails
+	case domain.ContactSlack:
+		narrowed.SlackUserID = recipient.SlackUserID
+		narrowed.SlackInstallationID = recipient.SlackInstallationID
+		narrowed.SlackFallbackEmail = recipient.SlackFallbackEmail
+	case domain.ContactDiscord:
+		narrowed.DiscordUserID = recipient.DiscordUserID
+	default:
+		if targets := recipient.Targets[kind]; len(targets) > 0 {
+			narrowed.Targets = map[domain.ContactMethodKind][]RecipientTarget{kind: targets}
+		}
+	}
+	return narrowed
+}
+
+// Without drops the targets of the named kinds, keeping everything else.
+func (recipient NotificationRecipient) Without(kinds ...domain.ContactMethodKind) NotificationRecipient {
+	for _, kind := range kinds {
+		switch kind {
+		case domain.ContactEmail:
+			recipient.Emails = nil
+		case domain.ContactSlack:
+			recipient.SlackUserID = ""
+			recipient.SlackInstallationID = ""
+			recipient.SlackFallbackEmail = ""
+		case domain.ContactDiscord:
+			recipient.DiscordUserID = ""
+		default:
+			if _, ok := recipient.Targets[kind]; ok {
+				targets := make(map[domain.ContactMethodKind][]RecipientTarget, len(recipient.Targets))
+				for other, list := range recipient.Targets {
+					if other != kind {
+						targets[other] = list
+					}
+				}
+				recipient.Targets = targets
+			}
+		}
+	}
+	return recipient
+}
+
 // TargetsOf lists the step's targets on one kind.
 func (recipient NotificationRecipient) TargetsOf(kind domain.ContactMethodKind) []RecipientTarget {
 	return recipient.Targets[kind]
@@ -124,6 +199,60 @@ func (input SendApprovalPromptInput) Validate() error {
 		}
 	}
 	return nil
+}
+
+// SendApprovalDigestInput tells one person, on the one kind the recipient
+// is narrowed to, that several requests are waiting: the held requests a
+// notification window handed back, newest first. A digest summarises and
+// links; it never carries a decision or the request arguments.
+type SendApprovalDigestInput struct {
+	OrganizationID domain.ID
+	Recipient      NotificationRecipient
+	Requests       []domain.ApprovalRequest
+}
+
+func (input SendApprovalDigestInput) Validate() error {
+	if err := requiredID("organization ID", input.OrganizationID); err != nil {
+		return err
+	}
+	if len(input.Requests) < 2 {
+		return invalidField("digest requests", "must name at least two requests")
+	}
+	for _, request := range input.Requests {
+		if err := validateApprovalRequest(request); err != nil {
+			return err
+		}
+		if request.OrganizationID != input.OrganizationID {
+			return invalidField("digest requests", "must belong to the digest's organization")
+		}
+	}
+	return input.Recipient.Validate()
+}
+
+// DigestAgents summarises who asked: agent names by how many of the
+// requests each made, most first, ties by name.
+func (input SendApprovalDigestInput) DigestAgents() []DigestAgent {
+	counts := map[string]int{}
+	for _, request := range input.Requests {
+		counts[request.AgentName]++
+	}
+	agents := make([]DigestAgent, 0, len(counts))
+	for name, count := range counts {
+		agents = append(agents, DigestAgent{Name: name, Count: count})
+	}
+	sort.Slice(agents, func(i, j int) bool {
+		if agents[i].Count != agents[j].Count {
+			return agents[i].Count > agents[j].Count
+		}
+		return agents[i].Name < agents[j].Name
+	})
+	return agents
+}
+
+// DigestAgent is one agent's share of a digest.
+type DigestAgent struct {
+	Name  string
+	Count int
 }
 
 // TransactionalKind names an identity message. Transactional mail shares

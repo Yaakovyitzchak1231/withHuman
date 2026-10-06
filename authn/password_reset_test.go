@@ -203,3 +203,7 @@ func TestLoginLocalWrongPasswordIsInvalidCredentials(t *testing.T) {
 		t.Fatalf("expected ErrInvalidCredentials (an ErrUnauthenticated), got %v", err)
 	}
 }
+
+func (*dispatcherStub) SendApprovalDigest(context.Context, application.SendApprovalDigestInput) error {
+	return nil
+}

@@ -184,3 +184,7 @@ func TestSlackDeliveryRevocationFallsBackOnce(t *testing.T) {
 		})
 	}
 }
+
+func (*fallbackEmailRecorder) SendApprovalDigest(context.Context, application.SendApprovalDigestInput) error {
+	return nil
+}

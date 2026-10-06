@@ -1169,7 +1169,18 @@ recorded in this file with both the reason and the replacement rule.
   logs a channel failure and answers success, and the delivery activity
   runs with a single attempt, because a retry re-sends through every
   channel that already succeeded (a refused APNs key once emailed and
-  texted the whole organization on every backoff).
+  texted the whole organization on every backoff). Underneath the ladder,
+  notification windows (`docs/design/17-notification-digests.md`,
+  `notification_windows` and `notification_holds`) throttle prompts per
+  person, organization and contact kind: the first prompt in a quiet
+  period sends at once, prompts due while a window is open are held, and
+  the workflow that held one closes the window at its instant
+  (`CloseNotificationWindow`, a no-op when another holder got there first)
+  and sends one digest (`SendApprovalDigest`) of the held requests still
+  pending and unclaimed, or the plain prompt when only one is left. Each
+  kind declares widening windows (`domain.ContactKind.DigestWindows`, core's
+  in `coreDigestWindows`); the last is the kind's cap. A window that cannot
+  be read sends at once, and transactional messages never pass through one.
 - Plan gating goes through the `application.Entitlements` port. The open
   distribution wires `entitlements.Unlimited`, so no capability is denied and
   no limit is enforced at runtime. Allocation quotas (seats, agents) are

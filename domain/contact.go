@@ -47,6 +47,13 @@ type ContactKind struct {
 	// Multiple kinds deliver to every method of the kind on one rung; for
 	// the others the last method on a rung is the one that stands.
 	Multiple bool
+	// DigestWindows are the kind's notification windows, shortest first
+	// (design doc 17): the first message in a quiet period goes out at
+	// once and opens the first window, prompts due while a window is open
+	// fold into one digest when it closes, and a burst widens the window
+	// up to the last, which is therefore the kind's cap. Required: a new
+	// channel cannot forget to be throttled.
+	DigestWindows []time.Duration
 }
 
 var contactKindPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,30}$`)
@@ -71,6 +78,9 @@ func RegisterContactKinds(kinds ...ContactKind) error {
 		}
 		if kind.Label == "" {
 			return fmt.Errorf("contact kind %q: a label is required", kind.Kind)
+		}
+		if err := validDigestWindows(kind.DigestWindows); err != nil {
+			return fmt.Errorf("contact kind %q: %w", kind.Kind, err)
 		}
 		if _, exists := contactKinds.entries[kind.Kind]; exists {
 			return fmt.Errorf("contact kind %q: already registered", kind.Kind)
@@ -98,6 +108,37 @@ func RegisteredContactKinds() []ContactKind {
 	}
 	sort.Slice(list, func(i, j int) bool { return list[i].Kind < list[j].Kind })
 	return list
+}
+
+// coreDigestWindows are core's kinds' windows. Email guards sender
+// reputation, so it waits longest; the chat kinds are cheap to send and
+// quick to read.
+var coreDigestWindows = map[ContactMethodKind][]time.Duration{
+	ContactEmail:   {5 * time.Minute, 15 * time.Minute, time.Hour},
+	ContactSlack:   {time.Minute, 5 * time.Minute, 15 * time.Minute},
+	ContactDiscord: {time.Minute, 5 * time.Minute, 15 * time.Minute},
+}
+
+// DigestWindows lists the kind's notification windows, shortest first.
+// An unknown kind has none, and its messages are never held.
+func (k ContactMethodKind) DigestWindows() []time.Duration {
+	if windows, ok := coreDigestWindows[k]; ok {
+		return windows
+	}
+	definition, _ := LookupContactKind(k)
+	return definition.DigestWindows
+}
+
+func validDigestWindows(windows []time.Duration) error {
+	if len(windows) == 0 {
+		return fmt.Errorf("digest windows are required")
+	}
+	for index, window := range windows {
+		if window <= 0 || (index > 0 && window < windows[index-1]) {
+			return fmt.Errorf("digest windows must be positive and never shrink")
+		}
+	}
+	return nil
 }
 
 func (k ContactMethodKind) core() bool {

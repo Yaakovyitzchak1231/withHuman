@@ -40,6 +40,20 @@ func (c *LogChannel) SendApprovalPrompt(ctx context.Context, input application.S
 	return nil
 }
 
+func (c *LogChannel) SendApprovalDigest(ctx context.Context, input application.SendApprovalDigestInput) error {
+	if err := input.Validate(); err != nil {
+		return err
+	}
+	requestIDs := make([]string, 0, len(input.Requests))
+	for _, request := range input.Requests {
+		requestIDs = append(requestIDs, string(request.ID))
+	}
+	c.logger.InfoContext(ctx, fmt.Sprintf("approval digest due - %d requests", len(input.Requests)), "organization_id", input.OrganizationID,
+		"membership_id", input.Recipient.MembershipID, "contact_kinds", input.Recipient.DueKinds(),
+		"approval_request_ids", requestIDs, "request_count", len(input.Requests))
+	return nil
+}
+
 // SendTransactional logs that a message was due without its credential:
 // the invite URL embeds a one-time token and a verification code is the
 // answer to a live challenge, so neither is ever written here. A phone

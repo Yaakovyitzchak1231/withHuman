@@ -160,3 +160,7 @@ func TestLogChannelOmitsTheInviteURL(t *testing.T) {
 		t.Fatalf("log channel wrote a recipient address: %s", buffer.String())
 	}
 }
+
+func (*stubChannel) SendApprovalDigest(context.Context, application.SendApprovalDigestInput) error {
+	return nil
+}

@@ -15,7 +15,7 @@ import (
 const kindPager domain.ContactMethodKind = "pager"
 
 func init() {
-	if err := domain.RegisterContactKinds(domain.ContactKind{Kind: kindPager, Label: "Pager", Challengeable: true}); err != nil && !strings.Contains(err.Error(), "already registered") {
+	if err := domain.RegisterContactKinds(domain.ContactKind{Kind: kindPager, Label: "Pager", Challengeable: true, DigestWindows: []time.Duration{time.Minute}}); err != nil && !strings.Contains(err.Error(), "already registered") {
 		panic(err)
 	}
 }
