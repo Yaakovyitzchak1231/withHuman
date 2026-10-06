@@ -1,11 +1,14 @@
 import ReactMarkdown, { type Components } from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { cn } from "@/ds/lib/cn";
 
 /*
  * Machine-authored prose: a tool's description, an agent's reasoning.
  * Rendered as Markdown with the product's own type, never the
  * author's: every heading is a bold line at the surrounding size, code
- * is mono, links open in a new tab. Raw HTML is never rendered. Sizes
+ * is mono, links open in a new tab, and a bare web address is a link
+ * too (GitHub-flavoured Markdown, so tables and strikethrough read as
+ * the author meant). Raw HTML is never rendered. Sizes
  * are relative so the block takes the type scale of where it sits
  * (text-body in a card, text-label in a list row).
  */
@@ -82,7 +85,7 @@ export interface MarkdownProps {
 export function Markdown({ children, className }: MarkdownProps) {
   return (
     <div className={cn("min-w-0 break-words", className)}>
-      <ReactMarkdown components={components} skipHtml>
+      <ReactMarkdown components={components} remarkPlugins={[remarkGfm]} skipHtml>
         {children}
       </ReactMarkdown>
     </div>

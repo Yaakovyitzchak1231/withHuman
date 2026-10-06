@@ -28,6 +28,7 @@ import { Timeline, TimelineItem } from "@/ds/components/timeline";
 import { useToast } from "@/ds/components/toast";
 import { ToggleGroup, ToggleGroupItem } from "@/ds/components/toggle-group";
 import { InfoCard } from "@/ds/components/info-card";
+import { Markdown } from "@/ds/components/markdown";
 import { Tooltip } from "@/ds/components/tooltip";
 import { Page } from "@/ds/components/page";
 import { PageHeader, PageBackButton } from "@/ds/components/page-header";
@@ -418,7 +419,7 @@ export function RequestDetail({
                   Written by the agent. withHuman has not checked it against the request.
                 </InfoCard>
               </p>
-              <p className="max-w-[560px] text-body text-ink-secondary">{request.agent_reasoning}</p>
+              <Markdown className="max-w-[560px] text-body text-ink-secondary">{request.agent_reasoning}</Markdown>
             </div>
           </div>
         ) : null}
