@@ -17,7 +17,7 @@ tags:
   - name: Agents
     description: "Agents are the AI systems that ask for approval. Each agent has instances, and each instance holds a credential it uses to call the API."
   - name: Approval pipelines
-    description: "The ordered list of blocks every approval request runs through. A block can decide the request itself, ask a service of yours, hand it to a person, or, as a branch, run blocks of its own for the requests that match its condition. The hosted edition adds a block that asks a model."
+    description: "The rules every approval request runs through, as an ordered list of blocks. A block can approve or deny a request, send it to a person, or pass it to the next block."
   - name: Escalation paths
     description: "An escalation path decides who reviews a request once the pipeline hands it to a person, and what happens when nobody answers in time."
   - name: Webhook endpoints
