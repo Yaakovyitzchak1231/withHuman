@@ -56,7 +56,7 @@ function seconds(goDuration: string, fallback: number): number {
 function fromWire(policy: OrganizationPolicy): OrganizationPolicyDraft {
   return {
     mfaMode: policy.mfa_mode,
-    reauthSeconds: seconds(policy.approval_reauth_window, 24 * 3600),
+    reauthSeconds: seconds(policy.approval_reauth_window, 30 * 24 * 3600),
     claimSeconds: seconds(policy.claim_retrigger_window, 15 * 60),
     unroutedRequests: policy.unrouted_requests,
     requestVisibility: policy.request_visibility,

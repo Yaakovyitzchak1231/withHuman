@@ -93,7 +93,10 @@ func (s *Store) ActivateOrganization(ctx context.Context, input application.Acti
 		}
 		return application.ActivationResult{}, err
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO organization_policies (organization_id) VALUES ($1)`, input.OrganizationID); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO organization_policies
+        (organization_id, session_max_age_seconds, approval_reauth_window_seconds) VALUES ($1, $2, $3)`,
+		input.OrganizationID, int64(domain.DefaultSessionMaxAge.Seconds()),
+		int64(domain.DefaultApprovalReauthWindow.Seconds())); err != nil {
 		return application.ActivationResult{}, err
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO memberships

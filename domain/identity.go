@@ -182,6 +182,14 @@ func (p RequestVisibilityPolicy) Valid() bool {
 	return p == VisibilityAllReaders || p == VisibilityRoutedOnly
 }
 
+// A new organization starts with month-long sessions and a month between
+// re-authentications, so neither signs reviewers out of the phone that
+// carries their prompts. Each organization tightens them to suit itself.
+const (
+	DefaultSessionMaxAge        = 30 * 24 * time.Hour
+	DefaultApprovalReauthWindow = 30 * 24 * time.Hour
+)
+
 type OrganizationPolicy struct {
 	OrganizationID       ID            `json:"organization_id"`
 	AdmissionMode        AdmissionMode `json:"admission_mode"`

@@ -8,6 +8,7 @@ import (
 
 	"github.com/withHumanAI/withHuman/application"
 	"github.com/withHumanAI/withHuman/domain"
+	"github.com/withHumanAI/withHuman/entitlements"
 )
 
 // The seams an edition's external login (the hosted enterprise SSO)
@@ -183,5 +184,43 @@ func TestCreateSessionForUserNeedsAnActiveMembership(t *testing.T) {
 	}
 	if _, err := service.CreateSessionForUser(ctx, "user-1", "org-1", auth, application.SessionClient{Kind: "ios"}); err != nil || identities.session.Client.Kind != "ios" {
 		t.Fatalf("native session = %#v, %v", identities.session.Client, err)
+	}
+}
+
+func TestNativeClientsGetTheNativeSessionLifetimeUnderThePolicyCap(t *testing.T) {
+	ctx := context.Background()
+	now := time.Unix(10_000, 0).UTC()
+	identities := &identityRepositoryStub{
+		membership: domain.Membership{ID: "membership-1", UserID: "user-1", OrganizationID: "org-1", Status: domain.MembershipActive},
+	}
+	service := NewService(identities, nil, &membershipRepositoryStub{}, nil, entitlements.NewUnlimited(), passwordHasherStub{}, serviceClock{now}, ServiceConfig{
+		PublicOrigin: "http://localhost:8080", SessionTTL: 7 * 24 * time.Hour, NativeSessionTTL: 30 * 24 * time.Hour,
+	})
+	auth := domain.AuthContext{Method: "sso", Assurance: "strong", AuthenticatedAt: now}
+	for _, tc := range []struct {
+		client application.SessionClient
+		cap    time.Duration
+		want   time.Duration
+	}{
+		{application.SessionClient{}, 0, 7 * 24 * time.Hour},
+		{application.SessionClient{Kind: "ios"}, 0, 30 * 24 * time.Hour},
+		{application.SessionClient{Kind: "android"}, 0, 30 * 24 * time.Hour},
+		{application.SessionClient{Kind: "ios"}, 24 * time.Hour, 24 * time.Hour},
+	} {
+		identities.policy.SessionMaxAge = tc.cap
+		result, err := service.CreateSessionForUser(ctx, "user-1", "org-1", auth, tc.client)
+		if err != nil || !result.ExpiresAt.Equal(now.Add(tc.want)) {
+			t.Fatalf("%q under cap %s expires %s, %v; want %s", tc.client.Kind, tc.cap, result.ExpiresAt, err, now.Add(tc.want))
+		}
+	}
+}
+
+func TestLoginLocalRefusesAnUnregisteredClientKind(t *testing.T) {
+	service := invitationTestService(&identityRepositoryStub{}, &membershipRepositoryStub{})
+	_, err := service.LoginLocal(context.Background(), LocalLoginInput{
+		Email: "person@example.com", Password: "secret", Client: application.SessionClient{Kind: "desktop"},
+	})
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("unregistered client = %v, want invalid", err)
 	}
 }

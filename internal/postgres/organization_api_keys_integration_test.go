@@ -288,7 +288,7 @@ func TestOrganizationAPIKeyLifecycle(t *testing.T) {
 			t.Fatal(err)
 		}
 		// Fresh authentication is required even when changing read-only access.
-		if _, err := store.pool.Exec(ctx, `UPDATE sessions SET authenticated_at=$2 WHERE id=$1`, actor.Auth.SessionID, now.Add(-24*time.Hour)); err != nil {
+		if _, err := store.pool.Exec(ctx, `UPDATE sessions SET authenticated_at=$2 WHERE id=$1`, actor.Auth.SessionID, now.Add(-domain.DefaultApprovalReauthWindow-time.Hour)); err != nil {
 			t.Fatal(err)
 		}
 		add.IdempotencyKey = "stale-session-policy"
