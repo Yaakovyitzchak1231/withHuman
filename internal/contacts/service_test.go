@@ -157,8 +157,8 @@ const (
 
 func init() {
 	if err := domain.RegisterContactKinds(
-		domain.ContactKind{Kind: kindPager, Label: "Pager", Challengeable: true, Consent: true},
-		domain.ContactKind{Kind: kindBeacon, Label: "Beacon", Immediate: true, Multiple: true},
+		domain.ContactKind{Kind: kindPager, Label: "Pager", Challengeable: true, Consent: true, DigestWindows: []time.Duration{time.Minute}},
+		domain.ContactKind{Kind: kindBeacon, Label: "Beacon", Immediate: true, Multiple: true, DigestWindows: []time.Duration{time.Minute}},
 	); err != nil && !strings.Contains(err.Error(), "already registered") {
 		panic(err)
 	}
@@ -286,4 +286,8 @@ func TestVouchedKindsAreAddedWithoutAChallenge(t *testing.T) {
 	if err := h.service.RemoveByValue(context.Background(), owner, kindBeacon, "nobody"); err != nil || len(h.contacts.deleted) != 1 {
 		t.Fatalf("removing an absent value must do nothing: %v", err)
 	}
+}
+
+func (*capturingDispatcher) SendApprovalDigest(context.Context, application.SendApprovalDigestInput) error {
+	return nil
 }

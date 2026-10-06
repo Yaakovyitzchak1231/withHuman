@@ -107,6 +107,34 @@ func (c *SlackChannel) SendApprovalPrompt(ctx context.Context, input application
 	return errors.Join(failures...)
 }
 
+// SendApprovalDigest messages the narrowed recipient one list of the
+// waiting requests. Unlike a prompt it has no email fallback: the
+// requests already reached the person once, and they are in the queue.
+func (c *SlackChannel) SendApprovalDigest(ctx context.Context, input application.SendApprovalDigestInput) error {
+	if err := input.Validate(); err != nil {
+		return err
+	}
+	recipient := input.Recipient
+	if recipient.SlackUserID == "" {
+		return nil
+	}
+	delivery, err := c.connections.GetSlackDelivery(ctx, application.GetSlackDeliveryInput{
+		OrganizationID: input.OrganizationID, UserID: recipient.UserID,
+		InstallationID: recipient.SlackInstallationID, SlackUserID: recipient.SlackUserID,
+	})
+	if errors.Is(err, domain.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	text, blocks := approvalDigestBlocks(input.Requests, c.publicOrigin+"/queue")
+	if err := c.messenger.PostDirectMessage(ctx, application.SlackDirectMessageInput{BotToken: delivery.BotToken, SlackUserID: recipient.SlackUserID, Text: text, Blocks: blocks}); err != nil {
+		return fmt.Errorf("slack digest to %s: %w", recipient.MembershipID, err)
+	}
+	return nil
+}
+
 func (c *SlackChannel) SendTransactional(context.Context, application.SendTransactionalInput) error {
 	return nil
 }
@@ -134,6 +162,33 @@ func approvalPromptBlocks(request domain.ApprovalRequest, requestURL string) (st
 		}},
 		{"type": "context", "elements": []map[string]any{
 			{"type": "mrkdwn", "text": "The request details are in the app, where your decision is recorded."},
+		}},
+	}
+	encoded, _ := json.Marshal(blocks)
+	return text, encoded
+}
+
+// approvalDigestBlocks renders a digest as one message: a line per
+// request linking to it, a count of the rest, and a button to the queue.
+func approvalDigestBlocks(requests []domain.ApprovalRequest, queueURL string) (string, json.RawMessage) {
+	text := fmt.Sprintf("%d approvals waiting", len(requests))
+	shown, more := digestShown(requests)
+	lines := make([]string, 0, len(shown)+1)
+	for _, request := range shown {
+		lines = append(lines, fmt.Sprintf("• <%s/%s|`%s`> from %s (%s)", queueURL, request.ID, request.Tool, request.AgentName, request.AgentInstanceName))
+	}
+	if more > 0 {
+		lines = append(lines, fmt.Sprintf("And %d more.", more))
+	}
+	blocks := []map[string]any{
+		{"type": "header", "text": map[string]any{"type": "plain_text", "text": text}},
+		{"type": "section", "text": map[string]any{"type": "mrkdwn", "text": strings.Join(lines, "\n")}},
+		{"type": "actions", "elements": []map[string]any{
+			{"type": "button", "text": map[string]any{"type": "plain_text", "text": "Open the queue"},
+				"url": queueURL, "style": "primary"},
+		}},
+		{"type": "context", "elements": []map[string]any{
+			{"type": "mrkdwn", "text": "The request details are in the app, where your decisions are recorded."},
 		}},
 	}
 	encoded, _ := json.Marshal(blocks)

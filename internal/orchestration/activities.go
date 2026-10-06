@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/withHumanAI/withHuman/application"
@@ -23,6 +24,7 @@ type Activities struct {
 	router        RoutingEvaluator
 	escalation    application.EscalationRepository
 	notified      application.ApprovalNotificationRecorder
+	windows       application.NotificationWindowRepository
 }
 
 // PipelineResumer runs the asynchronous segment of a suspended pipeline
@@ -58,6 +60,14 @@ func WithPipeline(pipeline PipelineResumer, router RoutingEvaluator) ActivityOpt
 func WithNotificationRecords(recorder application.ApprovalNotificationRecorder) ActivityOption {
 	return func(a *Activities) {
 		a.notified = recorder
+	}
+}
+
+// WithNotificationWindows throttles prompts per person and kind (design
+// doc 17). Without it every step sends at once.
+func WithNotificationWindows(windows application.NotificationWindowRepository) ActivityOption {
+	return func(a *Activities) {
+		a.windows = windows
 	}
 }
 
@@ -276,9 +286,22 @@ func (a *Activities) PlanNotifications(ctx context.Context, request domain.Appro
 	return plan, nil
 }
 
-// DeliverNotificationStep sends one step of the plan through every
-// channel. The step carries exactly the targets due now.
-func (a *Activities) DeliverNotificationStep(ctx context.Context, loaded domain.ApprovalRequest, step application.NotificationStep) error {
+// NotificationHold is one prompt a notification window held: the person
+// narrowed to the held kind, and the window it waits for. The workflow
+// sleeps until ClosesAt and then closes the window (design doc 17).
+type NotificationHold struct {
+	Outcome   domain.RoutingOutcome
+	Recipient application.NotificationRecipient
+	Kind      domain.ContactMethodKind
+	ClosesAt  time.Time
+}
+
+// DeliverNotificationStep sends one step of the plan. With notification
+// windows, each person's kinds pass through their window first: what is
+// admitted goes out now in one dispatch, and what is held comes back for
+// the workflow to close later. A window that cannot be read sends at
+// once: a throttle failure must never cost someone their page.
+func (a *Activities) DeliverNotificationStep(ctx context.Context, loaded domain.ApprovalRequest, step application.NotificationStep) ([]NotificationHold, error) {
 	// Temporal's JSON payload omits private fields such as AgentID. Reload
 	// the complete request before validating and sending the prompt, and
 	// skip a request that was decided while the delivery was queued.
@@ -286,15 +309,97 @@ func (a *Activities) DeliverNotificationStep(ctx context.Context, loaded domain.
 		OrganizationID: loaded.OrganizationID, RequestID: loaded.ID,
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if request.Status.Terminal() {
+		return nil, nil
+	}
+	fields := loggermdc.KeyValues(ctx, loggermdc.Fields{
+		loggermdc.KeyOrganizationID: string(request.OrganizationID), loggermdc.KeyApprovalRequestID: string(request.ID),
+	})
+	logger := activity.GetLogger(ctx)
+	recipients, holds := a.admit(ctx, request, step, func(err error) {
+		logger.Warn("notification window unavailable; sending at once", append(fields, "error", err.Error())...)
+	})
+	if len(holds) > 0 {
+		logger.Info(fmt.Sprintf("approval notification held for a digest - %d deliveries", len(holds)), append(fields, "held_count", len(holds))...)
+	}
+	if len(recipients) == 0 {
+		return holds, nil
+	}
+	logger.Info(fmt.Sprintf("sending approval notification step - %d recipients", len(recipients)), fields...)
+	return holds, a.notifications.SendApprovalPrompt(ctx, application.SendApprovalPromptInput{
+		Request: request, RoutingOutcome: step.Outcome, Recipients: recipients,
+	})
+}
+
+// admit splits a step into the recipients to send to now and the holds.
+func (a *Activities) admit(ctx context.Context, request domain.ApprovalRequest, step application.NotificationStep, unavailable func(error)) ([]application.NotificationRecipient, []NotificationHold) {
+	if a.windows == nil {
+		return step.Recipients, nil
+	}
+	now := a.clock.Now()
+	var recipients []application.NotificationRecipient
+	var holds []NotificationHold
+	for _, recipient := range step.Recipients {
+		if recipient.UserID != "" {
+			var held []domain.ContactMethodKind
+			for _, kind := range recipient.DueKinds() {
+				windows := kind.DigestWindows()
+				if len(windows) == 0 {
+					continue
+				}
+				admission, err := a.windows.AdmitNotification(ctx, application.AdmitNotificationInput{
+					OrganizationID: request.OrganizationID, UserID: recipient.UserID, Kind: kind,
+					RequestID: request.ID, Windows: windows, Now: now,
+				})
+				if err != nil {
+					unavailable(err)
+					continue
+				}
+				if admission.Held {
+					held = append(held, kind)
+					holds = append(holds, NotificationHold{Outcome: step.Outcome, Recipient: recipient.Only(kind), Kind: kind, ClosesAt: admission.ClosesAt})
+				}
+			}
+			recipient = recipient.Without(held...)
+		}
+		if len(recipient.DueKinds()) > 0 || recipient.SlackFallback {
+			recipients = append(recipients, recipient)
+		}
+	}
+	return recipients, holds
+}
+
+// CloseNotificationWindow closes the window a hold waits for and sends
+// what it hands back: nothing when another holder closed it first or
+// nothing held still needs anyone, the ordinary prompt for one request,
+// and a digest for more.
+func (a *Activities) CloseNotificationWindow(ctx context.Context, organizationID domain.ID, hold NotificationHold) error {
+	if a.windows == nil {
 		return nil
 	}
-	activity.GetLogger(ctx).Info(fmt.Sprintf("sending approval notification step - %d recipients", len(step.Recipients)), loggermdc.KeyValues(ctx, loggermdc.Fields{
-		loggermdc.KeyOrganizationID: string(request.OrganizationID), loggermdc.KeyApprovalRequestID: string(request.ID),
-	})...)
-	return a.notifications.SendApprovalPrompt(ctx, application.SendApprovalPromptInput{
-		Request: request, RoutingOutcome: step.Outcome, Recipients: step.Recipients,
+	closed, err := a.windows.CloseNotificationWindow(ctx, application.CloseNotificationWindowInput{
+		OrganizationID: organizationID, UserID: hold.Recipient.UserID, MembershipID: hold.Recipient.MembershipID,
+		Kind: hold.Kind, ClosesAt: hold.ClosesAt, Windows: hold.Kind.DigestWindows(), Now: a.clock.Now(),
 	})
+	if err != nil {
+		return err
+	}
+	fields := loggermdc.KeyValues(ctx, loggermdc.Fields{loggermdc.KeyOrganizationID: string(organizationID)})
+	switch len(closed.Requests) {
+	case 0:
+		return nil
+	case 1:
+		activity.GetLogger(ctx).Info("notification window closed - sending the one held prompt", append(fields, "contact_kind", string(hold.Kind))...)
+		return a.notifications.SendApprovalPrompt(ctx, application.SendApprovalPromptInput{
+			Request: closed.Requests[0], RoutingOutcome: hold.Outcome, Recipients: []application.NotificationRecipient{hold.Recipient},
+		})
+	default:
+		activity.GetLogger(ctx).Info(fmt.Sprintf("notification window closed - sending a digest of %d requests", len(closed.Requests)),
+			append(fields, "contact_kind", string(hold.Kind), "request_count", len(closed.Requests))...)
+		return a.notifications.SendApprovalDigest(ctx, application.SendApprovalDigestInput{
+			OrganizationID: organizationID, Recipient: hold.Recipient, Requests: closed.Requests,
+		})
+	}
 }

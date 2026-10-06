@@ -164,7 +164,7 @@ func RunWorker(ctx context.Context, options WorkerOptions) error {
 	routingEvaluation := reviewrouting.NewEvaluationService(store, clock, logger)
 	approvalWorker.RegisterActivity(orchestration.NewActivities(store, store, store, notifier, clock,
 		orchestration.WithPipeline(pipelineExecution, routingEvaluation), orchestration.WithEscalation(store),
-		orchestration.WithNotificationRecords(store)))
+		orchestration.WithNotificationRecords(store), orchestration.WithNotificationWindows(store)))
 	approvalWorker.RegisterWorkflow(orchestration.OrganizationDeletionWorkflow)
 	approvalWorker.RegisterActivity(orchestration.NewTenantActivities(store, clock))
 	if options.RegisterExtra != nil {

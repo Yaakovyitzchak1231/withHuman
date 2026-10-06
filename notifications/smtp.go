@@ -95,6 +95,24 @@ func (c *SMTPChannel) SendApprovalPrompt(ctx context.Context, input application.
 	return errors.Join(failures...)
 }
 
+// SendApprovalDigest emails the digest to every address on the narrowed
+// recipient.
+func (c *SMTPChannel) SendApprovalDigest(ctx context.Context, input application.SendApprovalDigestInput) error {
+	if err := input.Validate(); err != nil {
+		return err
+	}
+	var failures []error
+	for _, address := range input.Recipient.Emails {
+		if !validAddress(address) {
+			continue
+		}
+		if err := c.send(approvalDigestMessage(input, address, c.requestURL, c.queueURL())); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	return errors.Join(failures...)
+}
+
 func (c *SMTPChannel) SendTransactional(ctx context.Context, input application.SendTransactionalInput) error {
 	if err := input.Validate(); err != nil {
 		return err
@@ -136,5 +154,9 @@ func (c *SMTPChannel) send(message mailMessage) error {
 }
 
 func (c *SMTPChannel) requestURL(requestID domain.ID) string {
-	return strings.TrimRight(c.config.PublicOrigin, "/") + "/queue/" + string(requestID)
+	return c.queueURL() + "/" + string(requestID)
+}
+
+func (c *SMTPChannel) queueURL() string {
+	return strings.TrimRight(c.config.PublicOrigin, "/") + "/queue"
 }

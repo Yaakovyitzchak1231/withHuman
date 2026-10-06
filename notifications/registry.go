@@ -68,6 +68,19 @@ func (r *Registry) SendApprovalPrompt(ctx context.Context, input application.Sen
 	return nil
 }
 
+// SendApprovalDigest fans a digest out like a prompt: best effort per
+// channel, never retried. The recipient is narrowed to one kind, so one
+// channel delivers it and the log channel records it.
+func (r *Registry) SendApprovalDigest(ctx context.Context, input application.SendApprovalDigestInput) error {
+	if err := input.Validate(); err != nil {
+		return err
+	}
+	_ = r.dispatch(ctx, "approval digest", func(channel application.NotificationChannel) error {
+		return channel.SendApprovalDigest(ctx, input)
+	})
+	return nil
+}
+
 func (r *Registry) SendTransactional(ctx context.Context, input application.SendTransactionalInput) error {
 	if err := input.Validate(); err != nil {
 		return err

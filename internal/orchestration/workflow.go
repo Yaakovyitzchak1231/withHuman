@@ -348,9 +348,31 @@ func (r *stepRunner) spawn(steps []application.NotificationStep) {
 			// logs what failed, and a second attempt would re-send through
 			// the channels that succeeded.
 			once := workflow.WithRetryPolicy(stepContext, temporal.RetryPolicy{MaximumAttempts: 1})
-			_ = workflow.ExecuteActivity(once, (*Activities).DeliverNotificationStep, r.request, pending.step).Get(once, nil)
+			var holds []NotificationHold
+			_ = workflow.ExecuteActivity(once, (*Activities).DeliverNotificationStep, r.request, pending.step).Get(once, &holds)
+			for _, hold := range holds {
+				r.closeWindow(stepContext, hold)
+			}
 		})
 	}
+}
+
+// closeWindow waits for a held prompt's window and closes it, inside the
+// step's context, so a claim or decision stands the wait down with the
+// rest of the ladder. Retrying is safe: a close that committed answers
+// nothing the second time, because the window no longer closes then.
+func (r *stepRunner) closeWindow(ctx workflow.Context, hold NotificationHold) {
+	workflow.Go(ctx, func(holdContext workflow.Context) {
+		if wait := hold.ClosesAt.Sub(workflow.Now(holdContext)); wait > 0 {
+			if err := workflow.Sleep(holdContext, wait); err != nil {
+				return
+			}
+		}
+		bounded := workflow.WithRetryPolicy(holdContext, temporal.RetryPolicy{
+			InitialInterval: time.Second, BackoffCoefficient: 2, MaximumAttempts: 3,
+		})
+		_ = workflow.ExecuteActivity(bounded, (*Activities).CloseNotificationWindow, r.request.OrganizationID, hold).Get(bounded, nil)
+	})
 }
 
 func (r *stepRunner) cancel() {

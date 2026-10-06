@@ -31,8 +31,8 @@ const (
 
 func init() {
 	if err := domain.RegisterContactKinds(
-		domain.ContactKind{Kind: kindSMS, Label: "Text message", Challengeable: true, Consent: true},
-		domain.ContactKind{Kind: kindWhatsApp, Label: "WhatsApp", Challengeable: true, Consent: true},
+		domain.ContactKind{Kind: kindSMS, Label: "Text message", Challengeable: true, Consent: true, DigestWindows: []time.Duration{time.Minute}},
+		domain.ContactKind{Kind: kindWhatsApp, Label: "WhatsApp", Challengeable: true, Consent: true, DigestWindows: []time.Duration{time.Minute}},
 	); err != nil && !strings.Contains(err.Error(), "already registered") {
 		panic(err)
 	}

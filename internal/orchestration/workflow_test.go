@@ -173,6 +173,7 @@ type recordingNotifier struct {
 	mdc       loggermdc.Fields
 	lastInput application.SendApprovalPromptInput
 	inputs    []application.SendApprovalPromptInput
+	digests   []application.SendApprovalDigestInput
 }
 
 func (n *recordingNotifier) SendApprovalPrompt(ctx context.Context, input application.SendApprovalPromptInput) error {
@@ -192,6 +193,22 @@ func (n *recordingNotifier) allInputs() []application.SendApprovalPromptInput {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	return append([]application.SendApprovalPromptInput(nil), n.inputs...)
+}
+
+func (n *recordingNotifier) SendApprovalDigest(_ context.Context, input application.SendApprovalDigestInput) error {
+	if err := input.Validate(); err != nil {
+		return err
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.digests = append(n.digests, input)
+	return nil
+}
+
+func (n *recordingNotifier) allDigests() []application.SendApprovalDigestInput {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return append([]application.SendApprovalDigestInput(nil), n.digests...)
 }
 
 func (n *recordingNotifier) SendTransactional(context.Context, application.SendTransactionalInput) error {

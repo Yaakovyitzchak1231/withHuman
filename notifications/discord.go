@@ -74,6 +74,31 @@ func (c *DiscordChannel) SendApprovalPrompt(ctx context.Context, input applicati
 	return errors.Join(failures...)
 }
 
+// SendApprovalDigest messages the narrowed recipient one list of the
+// waiting requests.
+func (c *DiscordChannel) SendApprovalDigest(ctx context.Context, input application.SendApprovalDigestInput) error {
+	if err := input.Validate(); err != nil {
+		return err
+	}
+	if input.Recipient.DiscordUserID == "" {
+		return nil
+	}
+	_, err := c.connections.GetDiscordConnection(ctx, application.GetDiscordConnectionInput{OrganizationID: input.OrganizationID})
+	if errors.Is(err, domain.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	content, embeds, components := discordDigestMessage(input.Requests, c.publicOrigin+"/queue")
+	if err := c.messenger.SendDirectMessage(ctx, application.DiscordDirectMessageInput{
+		DiscordUserID: input.Recipient.DiscordUserID, Content: content, Embeds: embeds, Components: components,
+	}); err != nil {
+		return fmt.Errorf("discord digest to %s: %w", input.Recipient.MembershipID, err)
+	}
+	return nil
+}
+
 func (c *DiscordChannel) SendTransactional(context.Context, application.SendTransactionalInput) error {
 	return nil
 }
@@ -102,6 +127,32 @@ func discordPromptMessage(request domain.ApprovalRequest, requestURL string) (st
 		"type": 1,
 		"components": []map[string]any{
 			{"type": 2, "style": 5, "label": "Open in withHuman", "url": requestURL},
+		},
+	}}
+	return content, marshalForDiscord(embeds), marshalForDiscord(components)
+}
+
+// discordDigestMessage renders a digest as one embed listing the waiting
+// requests, each linking to itself, and a link button to the queue.
+func discordDigestMessage(requests []domain.ApprovalRequest, queueURL string) (string, json.RawMessage, json.RawMessage) {
+	content := fmt.Sprintf("%d approvals waiting", len(requests))
+	shown, more := digestShown(requests)
+	lines := make([]string, 0, len(shown)+1)
+	for _, request := range shown {
+		lines = append(lines, fmt.Sprintf("- [`%s`](%s/%s) from %s (%s)", request.Tool, queueURL, request.ID, request.AgentName, request.AgentInstanceName))
+	}
+	if more > 0 {
+		lines = append(lines, fmt.Sprintf("And %d more.", more))
+	}
+	embeds := []map[string]any{{
+		"title":       content,
+		"description": strings.Join(lines, "\n"),
+		"footer":      map[string]any{"text": "The request details are in the app, where your decisions are recorded."},
+	}}
+	components := []map[string]any{{
+		"type": 1,
+		"components": []map[string]any{
+			{"type": 2, "style": 5, "label": "Open the queue", "url": queueURL},
 		},
 	}}
 	return content, marshalForDiscord(embeds), marshalForDiscord(components)
