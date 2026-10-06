@@ -109,7 +109,7 @@ describe("block menu", () => {
 describe("branch well", () => {
   it("groups the branch's blocks under its name and skips past them", () => {
     render(
-      <PipelineBranchWell name="Refunds" depth={1} taken="skip">
+      <PipelineBranchWell name="Refunds" taken="skip">
         <PipelineBranchEndCard branchName="Refunds" reason={branch.reason} />
       </PipelineBranchWell>,
     );
@@ -122,11 +122,11 @@ describe("branch well", () => {
 
   it("stops the rail at an unreachable branch", () => {
     render(
-      <PipelineBranchWell name="Refunds" depth={2} blocked>
+      <PipelineBranchWell name="Refunds" blocked>
         <span>inside</span>
       </PipelineBranchWell>,
     );
     expect(screen.queryByText(/Otherwise/)).toBeNull();
-    expect(screen.getByRole("group", { name: "Blocks in “Refunds”" }).className).toContain("bg-canvas");
+    expect(screen.getByRole("group", { name: "Blocks in “Refunds”" }).className).toContain("border-l");
   });
 });

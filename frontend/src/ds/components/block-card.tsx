@@ -26,9 +26,9 @@ import {
  * block of the second block of branch 3. */
 export type BlockPosition = number | string;
 
-/* The round position pill. It grows sideways for a nested position, so
- * 3.2.1 fits without shrinking the type. */
-export function BlockPositionPill({
+/* The block's position as a quiet number on the name's line. Nested
+ * positions such as 3.2.1 simply run wider. */
+export function BlockPositionLabel({
   position,
   className,
 }: {
@@ -36,13 +36,7 @@ export function BlockPositionPill({
   className?: string;
 }) {
   return (
-    <span
-      className={cn(
-        "flex h-6 min-w-6 shrink-0 items-center justify-center rounded-full border-hairline border-edge px-1.5",
-        "font-mono text-[11px] text-ink-muted",
-        className,
-      )}
-    >
+    <span className={cn("shrink-0 text-ink-faint tabular-nums", className)}>
       {position}
     </span>
   );
@@ -187,9 +181,9 @@ export function BlockCardHeader({
           <GripIcon width={14} height={14} />
         </div>
       ) : null}
-      <BlockPositionPill position={position} />
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+          <BlockPositionLabel position={position} />
           <span className="font-medium text-ink">{title}</span>
           {!enabled ? <Badge>Off</Badge> : null}
         </div>

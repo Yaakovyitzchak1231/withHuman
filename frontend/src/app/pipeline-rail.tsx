@@ -591,7 +591,6 @@ function BranchContents({
   return (
     <PipelineBranchWell
       name={branch.name}
-      depth={level.depth + 1}
       taken={exit === "enter" ? "enter" : exit === "continue" ? "skip" : undefined}
       blocked={blocked}
       continueLabel={continueLabel}

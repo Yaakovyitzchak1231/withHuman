@@ -212,7 +212,7 @@ export function ReviewerRoutingSection() {
           <PipelineEntryCard />
           <PipelineConnector />
           <BranchBlockSummaryCard block={LARGE_REFUNDS_GATE} position={1} />
-          <PipelineBranchWell name={LARGE_REFUNDS_GATE.name} depth={1}>
+          <PipelineBranchWell name={LARGE_REFUNDS_GATE.name}>
             <OutcomeBlockCard
               block={large}
               position="1.1"
@@ -227,7 +227,7 @@ export function ReviewerRoutingSection() {
             <PipelineExits exits={[{ key: "match", label: "Every request", outcome: large.outcome, target: large.target }]} />
           </PipelineBranchWell>
           <BranchBlockSummaryCard block={UNKNOWN_TOOLS_GATE} position={2} />
-          <PipelineBranchWell name={UNKNOWN_TOOLS_GATE.name} depth={1} taken="enter">
+          <PipelineBranchWell name={UNKNOWN_TOOLS_GATE.name} taken="enter">
             <OutcomeBlockSummaryCard block={UNKNOWN_TOOLS} position="2.1" />
             <PipelineExits exits={[{ key: "match", label: "Every request", outcome: "human", target: UNKNOWN_TOOLS.target }]} matchedKey="match" />
           </PipelineBranchWell>

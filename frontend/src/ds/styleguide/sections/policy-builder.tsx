@@ -294,7 +294,7 @@ export function PolicyBuilderSection() {
             on pipeline branches; default reviewer chips explain the fallback. The grip drags a
             block to a new position in the execution order; Move up and Move down stay in the
             overflow menu as the keyboard path. Every kind of block shares this header
-            (BlockCard): the grip, the position pill, which widens for a nested position such as
+            (BlockCard): the grip, the position number, which runs wider for a nested position such as
             3.2.1, the name and summary, and the block menu, whose moves into and out of a branch
             appear only where they apply.
           </p>
@@ -574,7 +574,6 @@ export function PolicyBuilderSection() {
             <BranchBlockSummaryCard block={branch} position="3" />
             <PipelineBranchWell
               name={branch.name}
-              depth={1}
               taken={wellState === "idle" ? undefined : wellState}
             >
               <div className={cn("flex flex-col transition-opacity duration-200", wellState === "skip" && "opacity-40")}>
@@ -603,7 +602,7 @@ export function PolicyBuilderSection() {
       >
         <div className="flex flex-col">
           <BranchBlockSummaryCard block={SMALL_REFUNDS_GATE} position="2" />
-          <PipelineBranchWell name={SMALL_REFUNDS_GATE.name} depth={1}>
+          <PipelineBranchWell name={SMALL_REFUNDS_GATE.name}>
             <OutcomeBlockSummaryCard block={SMALL_REFUNDS} position="2.1" />
             <PipelineExits exits={[{ key: "match", label: "Every request", outcome: SMALL_REFUNDS.outcome }]} />
           </PipelineBranchWell>
@@ -641,26 +640,26 @@ export function PolicyBuilderSection() {
 
       <Demo
         label="Branch nesting"
-        hint="wells alternate surfaces and indent about 48px a level"
+        hint="guide lines, not boxes; about 36px a level"
       >
         <div className="flex flex-col">
           <BranchBlockSummaryCard
             block={{ ...DEMO_BRANCH, id: "payments", name: "Payments", when: toolIs("sg-n1", "stripe.refund"), target: null }}
             position="3"
           />
-          <PipelineBranchWell name="Payments" depth={1}>
+          <PipelineBranchWell name="Payments">
             <BranchBlockSummaryCard
               block={{ ...DEMO_BRANCH, id: "refunds-n", name: "Refunds", when: amountAtLeast("sg-n2", 100) }}
               position="3.1"
             />
-            <PipelineBranchWell name="Refunds" depth={2} continueLabel="Otherwise">
+            <PipelineBranchWell name="Refunds" continueLabel="Otherwise">
               <WebhookBlockSummaryCard block={webhook} endpoints={DEMO_ENDPOINTS} position="3.1.1" />
               <PipelineExits {...webhookExits(webhook)} />
               <BranchBlockSummaryCard
                 block={{ ...DEMO_BRANCH, id: "large", name: "Large refunds", when: amountAtLeast("sg-n4", 10000), target: null }}
                 position="3.1.2"
               />
-              <PipelineBranchWell name="Large refunds" depth={3} continueLabel="Otherwise">
+              <PipelineBranchWell name="Large refunds" continueLabel="Otherwise">
                 <OutcomeBlockSummaryCard
                   block={{ ...SMALL_REFUNDS, id: "finance", name: "Ask finance", outcome: "human", reason: "Large refunds need finance." }}
                   position="3.1.2.1"
@@ -675,9 +674,10 @@ export function PolicyBuilderSection() {
         </div>
         <p className="mt-3 text-micro text-ink-muted">
           Branches nest without limit. Positions follow the tree, so 3.1.2.1 is the first block of
-          the second block of the first block of branch 3, and the position pill widens to fit.
-          Wells alternate the surface and the canvas by depth, the same rule the escalation
-          tree's wells follow, and each level indents about 48px (less on a phone).
+          the second block of the first block of branch 3, and the position number runs wider to fit.
+          A well is no box: the elbow runs on down as a guide line beside the branch's blocks,
+          every card keeps the same corners and right edge, and each level indents about 36px
+          (less on a phone).
         </p>
       </Demo>
 
@@ -694,9 +694,9 @@ export function PolicyBuilderSection() {
           </div>
           <PipelineConnector label="Otherwise, check the next block" />
           <BranchBlockSummaryCard block={DEMO_BRANCH} position="3" />
-          <PipelineBranchWell name={DEMO_BRANCH.name} depth={1} continueLabel="Otherwise">
+          <PipelineBranchWell name={DEMO_BRANCH.name} continueLabel="Otherwise">
             <BranchBlockSummaryCard block={SMALL_REFUNDS_GATE} position="3.1" />
-            <PipelineBranchWell name={SMALL_REFUNDS_GATE.name} depth={2} continueLabel="Otherwise">
+            <PipelineBranchWell name={SMALL_REFUNDS_GATE.name} continueLabel="Otherwise">
               <OutcomeBlockSummaryCard block={SMALL_REFUNDS} position="3.1.1" />
               <PipelineExits exits={[{ key: "match", label: "Every request", outcome: "approve" }]} />
             </PipelineBranchWell>
