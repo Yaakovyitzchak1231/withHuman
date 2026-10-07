@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"strings"
@@ -94,7 +95,7 @@ func TestExternalSourceRefreshCacheAndRetries(t *testing.T) {
 	refresh(false, 5, false)
 	source.fail = true
 	refresh(true, 6, true)
-	if saved := repo.reports[len(repo.reports)-1]; saved.Report.Sources[0].Complete || saved.Report.Sources[0].Error == "" || saved.SourceVersion != "revision-two;credential-2" {
+	if saved := repo.reports[len(repo.reports)-1]; saved.Report.Sources[0].Complete || saved.Report.Sources[0].Error == "" || saved.SourceVersion != versionDigest("revision-two;credential-2") {
 		t.Fatalf("failed source must be recorded as incomplete at the owner's version: %+v", saved)
 	}
 	refresh(false, 6, false)
@@ -130,6 +131,33 @@ func TestListCarriesTheSourcesVisibilityIntoTheRead(t *testing.T) {
 	err := service.Report(context.Background(), instance, domain.ToolCatalogReport{Runtime: "codex", DiscoveryContext: "project", Complete: true, Sources: []domain.ToolCatalogSourceReport{{Source: "gateway", Server: "payments", Complete: true}}})
 	if !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("an instance may not report an edition's source, got %v", err)
+	}
+}
+
+// An edition's version grows with its owner (the gateway adds one part
+// per credential), so the catalogue stores and compares a digest that
+// fits the store whatever the length.
+func TestLongExternalVersionsReadAndSaveAsDigests(t *testing.T) {
+	version := "scopes-2;3f0c2a4e-8d1b-4c55-9a7e-6b2d1e0f9c31"
+	for scope := range 20 {
+		version += fmt.Sprintf(";organization-scope-%d=2026-10-07T09:41:12.123456789Z", scope)
+	}
+	repo := &catalogRepo{}
+	source := &scriptedSource{version: version, visibility: []application.ToolSourceVisibility{{SourceRef: "server-1", AgentSlug: "billing", Version: version, Available: true}}}
+	service := NewService(repo, source, &catalogClock{now: time.Now()}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	principal := domain.Principal{ActorType: domain.ActorHuman, ActorID: "user-1", OrganizationID: "org", MembershipID: "membership-1"}.WithGrants(domain.OrganizationGrants([]domain.Permission{domain.PermissionAgentRead}))
+	if _, err := service.List(context.Background(), principal, Query{AgentSlug: "billing"}); err != nil {
+		t.Fatalf("a long version must not fail the read: %v", err)
+	}
+	if len(repo.reports) != 1 {
+		t.Fatalf("the snapshot must be saved: %+v", repo.reports)
+	}
+	saved, read := repo.reports[0].SourceVersion, repo.reads[0].External[0].Version
+	if saved != read || len(saved) > 256 || saved == version {
+		t.Fatalf("saved %q and read %q must be the same digest", saved, read)
+	}
+	if versionDigest("") != "" {
+		t.Fatal("an owner without a version must stay without one")
 	}
 }
 

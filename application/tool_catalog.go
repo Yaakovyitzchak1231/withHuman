@@ -25,7 +25,9 @@ type SaveToolCatalogInput struct {
 	SourceRef string
 	// SourceVersion is the owner's version the snapshot was taken at (a
 	// configuration revision and its credential, say); the read shows the
-	// snapshot as available only while the owner still reports it.
+	// snapshot as available only while the owner still reports it. A
+	// source may report a version of any length: the catalogue service
+	// stores its digest.
 	SourceVersion string
 	Report        domain.ToolCatalogReport
 	Now           time.Time
@@ -125,7 +127,8 @@ func (v ToolSourceVisibility) Validate() error {
 // keeps the snapshots and never decides access from them.
 type ToolSource interface {
 	Targets(ctx context.Context, scope ToolSourceScope) ([]ToolSourceTarget, error)
-	// State reports the owner's current version.
+	// State reports the owner's current version: opaque, of any length,
+	// and only ever compared.
 	State(ctx context.Context, target ToolSourceTarget) (string, error)
 	// Discover lists the owner's tools as a report to save; a failed
 	// listing still returns a report marking the source incomplete, with
