@@ -4,6 +4,8 @@ package toolcatalog
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"regexp"
@@ -196,6 +198,9 @@ func (s *Service) read(ctx context.Context, p domain.Principal, agentSlug domain
 		if in.External, err = s.source.Visibility(ctx, sourceScope); err != nil {
 			return domain.ToolCatalogPage{}, err
 		}
+		for index := range in.External {
+			in.External[index].Version = versionDigest(in.External[index].Version)
+		}
 	}
 	return s.repo.ReadToolCatalog(ctx, in)
 }
@@ -227,10 +232,24 @@ func (s *Service) refresh(ctx context.Context, target application.ToolSourceTarg
 	if snapshot.OrganizationID == "" {
 		return discoveryErr
 	}
+	snapshot.SourceVersion = versionDigest(snapshot.SourceVersion)
 	if err := s.repo.SaveToolCatalog(ctx, snapshot); err != nil {
 		return err
 	}
 	state.version = version
 	state.at = s.clock.Now()
 	return discoveryErr
+}
+
+// versionDigest is what the catalogue keeps of an external owner's
+// version. The version is opaque and only ever compared, and an edition
+// may build it from as many parts as the owner has (the gateway adds one
+// per credential), so the store holds a fixed-length digest instead.
+// An owner without a version stays without one.
+func versionDigest(version string) string {
+	if version == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(version))
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
