@@ -105,11 +105,6 @@ session=$(curl --silent --fail --cookie "$cookie_jar" "$app_api/onboarding/sessi
 agent_slug=$(printf '%s' "$session" | jq -r '.enrollments[0].agent_slug')
 test "$agent_slug" = "claude-code"
 printf '%s' "$session" | jq -e '.install_results[0].ok == true and (.test_commands["claude-code"].command | startswith("claude -p"))' >/dev/null
-# Without a model the assistant is absent and the page says so; the
-# rules step is left as it is.
-assistant_status=$(curl --silent --output /dev/null --write-out '%{http_code}' --cookie "$cookie_jar" --header 'Content-Type: application/json' --header "Origin: $origin" \
-  --data '{"message":"gate kubectl"}' "$app_api/onboarding/session/assistant")
-test "$assistant_status" = "501" || test "$assistant_status" = "200"
 curl --silent --fail --cookie "$cookie_jar" --request POST --header "Origin: $origin" "$app_api/onboarding/session/rules" \
   | jq -e '.status == "installed" and .rules_set_at != null' >/dev/null
 jq -e '[.hooks.PreToolUse[]?.hooks[]?.command | select(contains("hook claude-code"))] | length == 1' "$runtime_home/.claude/settings.json" >/dev/null

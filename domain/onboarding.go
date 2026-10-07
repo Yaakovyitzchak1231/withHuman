@@ -11,7 +11,7 @@ import (
 // enroll, install) and the person advances the even ones (choose agents,
 // provision, decide the test request, finish). The person's own steps
 // that never gate the CLI (choosing how withHuman reaches them, writing
-// the rules with the assistant) are stamps on the session rather than
+// the approval rules) are stamps on the session rather than
 // statuses: channels_set_at must be set before provisioning and
 // rules_set_at before the test. After installed the CLI is done; tested
 // records the request the person decided, and finishing follows.
@@ -214,48 +214,6 @@ type OnboardingError struct {
 	Message string `json:"message"`
 }
 
-// OnboardingAssistantRole is who wrote one message of the setup
-// assistant's conversation.
-type OnboardingAssistantRole string
-
-const (
-	OnboardingAssistantUser      OnboardingAssistantRole = "user"
-	OnboardingAssistantAssistant OnboardingAssistantRole = "assistant"
-)
-
-// OnboardingAssistantMessageStatus is where an assistant message is:
-// running while the model still works, done once it answered, failed
-// when the turn ended in an error the page shows in its place.
-type OnboardingAssistantMessageStatus string
-
-const (
-	OnboardingAssistantRunning OnboardingAssistantMessageStatus = "running"
-	OnboardingAssistantDone    OnboardingAssistantMessageStatus = "done"
-	OnboardingAssistantFailed  OnboardingAssistantMessageStatus = "failed"
-)
-
-// OnboardingAssistantAction is one tool call the assistant made during
-// a turn, as the page shows it: which tool, a one-line summary, and
-// whether it succeeded. Inputs and results stay in the model context.
-type OnboardingAssistantAction struct {
-	Tool    string `json:"tool"`
-	Summary string `json:"summary"`
-	OK      bool   `json:"ok"`
-}
-
-// OnboardingAssistantMessage is one message of the setup assistant's
-// conversation as the page shows it. The person's messages carry text
-// alone; the assistant's carry the actions it took, its answer, and a
-// status, so a reload during a turn shows the work in progress.
-type OnboardingAssistantMessage struct {
-	Role    OnboardingAssistantRole          `json:"role"`
-	Text    string                           `json:"text"`
-	Actions []OnboardingAssistantAction      `json:"actions"`
-	Status  OnboardingAssistantMessageStatus `json:"status"`
-	Error   string                           `json:"error,omitempty"`
-	At      time.Time                        `json:"at"`
-}
-
 // OnboardingSession is the shared record both sides read and write. It
 // never carries the setup code, the CLI's bearer secret, or any agent
 // credential; those exist only as hashes or in the one response that
@@ -280,21 +238,15 @@ type OnboardingSession struct {
 	// notification steps (provisioning needs it), RulesSetAt when they
 	// left the rules step for the test (the test counts requests that
 	// arrived after it).
-	TestRequestID *ID        `json:"test_request_id"`
-	TestedAt      *time.Time `json:"tested_at"`
-	ChannelsSetAt *time.Time `json:"channels_set_at"`
-	RulesSetAt    *time.Time `json:"rules_set_at"`
-	// Assistant is the setup assistant's conversation as the page shows
-	// it. AssistantContext is the model's own transcript of the same
-	// conversation (tool calls and results included), kept out of the
-	// wire representation because it is bulky and the model's alone.
-	Assistant        []OnboardingAssistantMessage `json:"assistant"`
-	AssistantContext json.RawMessage              `json:"-"`
-	LastError        *OnboardingError             `json:"last_error"`
-	CreatedAt        time.Time                    `json:"created_at"`
-	UpdatedAt        time.Time                    `json:"updated_at"`
-	ExpiresAt        time.Time                    `json:"expires_at"`
-	CompletedAt      *time.Time                   `json:"completed_at"`
+	TestRequestID *ID              `json:"test_request_id"`
+	TestedAt      *time.Time       `json:"tested_at"`
+	ChannelsSetAt *time.Time       `json:"channels_set_at"`
+	RulesSetAt    *time.Time       `json:"rules_set_at"`
+	LastError     *OnboardingError `json:"last_error"`
+	CreatedAt     time.Time        `json:"created_at"`
+	UpdatedAt     time.Time        `json:"updated_at"`
+	ExpiresAt     time.Time        `json:"expires_at"`
+	CompletedAt   *time.Time       `json:"completed_at"`
 }
 
 // Expired reports whether the session can no longer be written.
@@ -379,8 +331,6 @@ type OnboardingSessionPatch struct {
 	TestedAt         *time.Time
 	ChannelsSetAt    *time.Time
 	RulesSetAt       *time.Time
-	Assistant        *[]OnboardingAssistantMessage
-	AssistantContext *json.RawMessage
 	LastError        *OnboardingError
 	ClearLastError   bool
 }
@@ -401,9 +351,6 @@ func (s OnboardingSession) MarshalJSON() ([]byte, error) {
 	}
 	if copy.DiscoveryErrors == nil {
 		copy.DiscoveryErrors = map[string][]OnboardingDiscoveryError{}
-	}
-	if copy.Assistant == nil {
-		copy.Assistant = []OnboardingAssistantMessage{}
 	}
 	if copy.Generated.Pipelines == nil {
 		copy.Generated.Pipelines = map[string]OnboardingGeneratedPipeline{}

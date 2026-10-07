@@ -50,14 +50,20 @@ type AgentMinter interface {
 	CreateAgentInstanceCredential(ctx context.Context, principal domain.Principal, agentID domain.ID, name string, metadata json.RawMessage) (domain.AgentInstanceCredential, error)
 }
 
-// PipelineManager is the slice of the pipeline management service
-// provisioning and the assistant need, keyed by pipeline: the setup
-// writes the entry pipeline alone.
+// PipelineManager is the slice of the pipeline management service the
+// setup needs, keyed by pipeline: the setup writes the entry pipeline
+// alone.
 type PipelineManager interface {
 	GetActive(ctx context.Context, principal domain.Principal, pipelineKey string) (approvalpipeline.PipelineRevision, error)
 	CreateRevision(ctx context.Context, principal domain.Principal, pipelineKey, name string, definitions []approvalblock.Definition, defaultRoute approvalpipeline.Route) (approvalpipeline.PipelineRevision, error)
 	Activate(ctx context.Context, principal domain.Principal, pipelineKey string, revision int64, expectedActiveRevision int64) (approvalpipeline.PipelineRevision, error)
-	Preview(ctx context.Context, principal domain.Principal, pipelineKey string, definitions []approvalblock.Definition, defaultRoute approvalpipeline.Route, sample approvalpipeline.PreviewSample) (approvalpipeline.PreviewResult, error)
+}
+
+// agentStatuses are the statuses in which the agents exist, so their
+// rules can be written.
+var agentStatuses = map[domain.OnboardingStatus]bool{
+	domain.OnboardingProvisioning: true, domain.OnboardingEnrolled: true,
+	domain.OnboardingInstalled: true, domain.OnboardingTested: true,
 }
 
 // ErrEntryPipelineChanged means the entry pipeline changed between the
@@ -91,11 +97,6 @@ type Service struct {
 	clock      application.Clock
 	logger     *slog.Logger
 	config     Config
-	// The setup assistant's two halves, registered after construction:
-	// the deployment's model by the composition root and the management
-	// tool catalog by the HTTP layer that owns it.
-	assistantModel   application.ToolUseModel
-	assistantGrammar AssistantGrammar
 }
 
 func NewService(sessions application.OnboardingRepository, identities application.IdentityRepository, agents application.AgentRepository, roles application.RoleRepository,
@@ -386,7 +387,7 @@ func (s *Service) provision(ctx context.Context, principal domain.Principal, ses
 	branches := make([]approvalblock.Definition, 0, len(session.SelectedRuntimes))
 	for _, runtime := range session.SelectedRuntimes {
 		if existing, ok := RuntimeBranchOf(current.blocks, runtime); ok && !StartingShape(runtime, existing) {
-			// The person or the assistant already wrote this runtime's
+			// The person or their coding agent already wrote this runtime's
 			// rules; a later setup on another machine leaves them alone.
 			continue
 		}
@@ -603,8 +604,9 @@ func (s *Service) ConfirmChannels(ctx context.Context, principal domain.Principa
 
 // SetGatedTools replaces one runtime's branch of the entry pipeline with
 // the starting shape over the tools the person picked by hand: the named
-// tools wait for them and everything else runs. It is the manual
-// alternative to the assistant, so it needs the agents to exist; an
+// tools wait for them and everything else runs. It is the quick-try
+// alternative to writing the rules with a coding agent, so it needs the
+// agents to exist; an
 // empty list makes every call run. The test command follows the choice.
 func (s *Service) SetGatedTools(ctx context.Context, principal domain.Principal, runtime string, tools []string) (domain.OnboardingSession, error) {
 	if err := authorize(principal); err != nil {
@@ -614,7 +616,7 @@ func (s *Service) SetGatedTools(ctx context.Context, principal domain.Principal,
 	if err != nil {
 		return domain.OnboardingSession{}, err
 	}
-	if !assistantStatuses[session.Status] {
+	if !agentStatuses[session.Status] {
 		return domain.OnboardingSession{}, fmt.Errorf("%w: connect the agents first", domain.ErrOnboardingState)
 	}
 	if !session.Selected(runtime) {

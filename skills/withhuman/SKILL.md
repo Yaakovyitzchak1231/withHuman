@@ -89,7 +89,7 @@ User guide: <https://withhuman.ai/docs/concepts/how-withhuman-works.md>.
 
 The hosted edition adds features the open edition does not have, among
 them: the MCP Gateway (central MCP servers and credentials with per-agent
-tool access), AI judge blocks and the setup assistant, the audit log and
+tool access), AI judge blocks, the audit log and
 request timeline, text message, WhatsApp and phone app notifications,
 enterprise SSO and directory sync, and organization API keys. When a
 feature is missing, check which edition the person uses before assuming

@@ -200,11 +200,6 @@ func newAPI(dependencies Dependencies) *API {
 func (a *API) router() *gin.Engine {
 	router := gin.New()
 	a.engine = router
-	// The setup assistant runs the management tools in process; the
-	// catalog is this layer's, so it is handed over here.
-	if a.onboarding != nil {
-		a.onboarding.RegisterAssistantGrammar(mcpAssistantGrammar{api: a})
-	}
 	router.Use(a.observability(), a.recovery())
 	root := &router.RouterGroup
 	a.handle(root, http.MethodGet, "/livez", AccessPublic, func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "live"}) })
@@ -449,9 +444,6 @@ func (a *API) runtimeConfig(c *gin.Context) {
 		// Predefined roles are always offered; custom permission
 		// policies only where the edition switched them on.
 		"custom_permissions_enabled": a.config.CustomPermissions,
-		// The guided setup's assistant needs the edition's model and the
-		// management tool catalog this layer owns.
-		"setup_assistant_enabled": a.onboarding != nil && a.onboarding.AssistantEnabled(),
 		"webhook_enabled":         a.webhooks != nil && a.webhooks.Configured(),
 		"slack_enabled":           a.slack != nil && a.slack.Configured(),
 		"discord_enabled":         a.discord != nil && a.discord.Configured(),
@@ -470,7 +462,7 @@ func (a *API) runtimeConfig(c *gin.Context) {
 var runtimeConfigKeys = map[string]bool{
 	"public_origin": true, "version": true, "bootstrap_enabled": true,
 	"custom_permissions_enabled": true,
-	"setup_assistant_enabled": true, "webhook_enabled": true,
+	"webhook_enabled": true,
 	"slack_enabled": true, "discord_enabled": true,
 	"social_providers": true,
 	"cli_download_url": true, "agent_mcp_servers": true,
@@ -1334,7 +1326,7 @@ func principalAuth(auth *authn.Service, logger *slog.Logger, allowOrganizationKe
 			WriteError(c, logger, err)
 			return
 		}
-		if _, loopback := loopbackPrincipal(c.Request.Context()); !loopback && c.GetHeader("Authorization") != "" {
+		if c.GetHeader("Authorization") != "" {
 			if principal.ActorType == domain.ActorAPIKey && !allowOrganizationKeys {
 				WriteError(c, logger, domain.ErrAPIKeyNotAllowed)
 				return
@@ -1353,16 +1345,10 @@ func principalAuth(auth *authn.Service, logger *slog.Logger, allowOrganizationKe
 	}
 }
 
-// resolvePrincipal resolves the credential a request carries: the setup
-// assistant's in-process principal, an API key bearer, or the session
-// cookie. Event streams call it again on every tick, so a stream ends
+// resolvePrincipal resolves the credential a request carries: an API
+// key bearer or the session cookie. Event streams call it again on every tick, so a stream ends
 // once its session expires or is revoked and reads with live grants.
 func resolvePrincipal(c *gin.Context, auth *authn.Service) (domain.Principal, error) {
-	// The setup assistant's in-process calls arrive with the person's
-	// principal already resolved from their browser session.
-	if principal, ok := loopbackPrincipal(c.Request.Context()); ok {
-		return principal, nil
-	}
 	if bearer := c.GetHeader("Authorization"); bearer != "" {
 		token := strings.TrimSpace(strings.TrimPrefix(bearer, "Bearer "))
 		if !strings.HasPrefix(bearer, "Bearer ") || !authn.IsAPIKeyToken(token) {

@@ -23,18 +23,18 @@ import (
 const onboardingColumns = `id::text, organization_id::text, membership_id::text, status, version,
 	machine, detections, selected_runtimes, discovered_tools, discovery_errors,
 	generated, enrollments, install_results, test_commands, test_request_id::text, tested_at, channels_set_at, rules_set_at,
-	assistant_messages, assistant_context, last_error,
+	last_error,
 	created_at, updated_at, expires_at, completed_at`
 
 func scanOnboardingSession(row rowScanner) (domain.OnboardingSession, error) {
 	var session domain.OnboardingSession
 	var id, organizationID, membershipID, status string
 	var testRequestID *string
-	var machine, detections, tools, discoveryErrors, generated, enrollments, installResults, testCommands, assistant, assistantContext, lastError []byte
+	var machine, detections, tools, discoveryErrors, generated, enrollments, installResults, testCommands, lastError []byte
 	err := row.Scan(&id, &organizationID, &membershipID, &status, &session.Version,
 		&machine, &detections, &session.SelectedRuntimes, &tools, &discoveryErrors,
 		&generated, &enrollments, &installResults, &testCommands, &testRequestID, &session.TestedAt, &session.ChannelsSetAt, &session.RulesSetAt,
-		&assistant, &assistantContext, &lastError,
+		&lastError,
 		&session.CreatedAt, &session.UpdatedAt, &session.ExpiresAt, &session.CompletedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.OnboardingSession{}, domain.ErrNotFound
@@ -56,7 +56,6 @@ func scanOnboardingSession(row rowScanner) (domain.OnboardingSession, error) {
 		{discoveryErrors, &session.DiscoveryErrors},
 		{generated, &session.Generated}, {enrollments, &session.Enrollments},
 		{installResults, &session.InstallResults}, {testCommands, &session.TestCommands},
-		{assistant, &session.Assistant},
 	} {
 		if len(pair.raw) == 0 {
 			continue
@@ -64,9 +63,6 @@ func scanOnboardingSession(row rowScanner) (domain.OnboardingSession, error) {
 		if err := json.Unmarshal(pair.raw, pair.target); err != nil {
 			return domain.OnboardingSession{}, fmt.Errorf("decode onboarding session %s: %w", id, err)
 		}
-	}
-	if len(assistantContext) > 0 && string(assistantContext) != "null" {
-		session.AssistantContext = json.RawMessage(append([]byte(nil), assistantContext...))
 	}
 	if len(lastError) > 0 && string(lastError) != "null" {
 		var decoded domain.OnboardingError
@@ -249,16 +245,6 @@ func (s *Store) UpdateOnboardingSession(ctx context.Context, input application.U
 	}
 	if patch.RulesSetAt != nil {
 		sets = append(sets, "rules_set_at = "+bind(*patch.RulesSetAt))
-	}
-	if patch.Assistant != nil {
-		sets = append(sets, "assistant_messages = "+bind(mustJSON(*patch.Assistant, "[]")))
-	}
-	if patch.AssistantContext != nil {
-		context := []byte(*patch.AssistantContext)
-		if len(context) == 0 {
-			context = []byte("[]")
-		}
-		sets = append(sets, "assistant_context = "+bind(context))
 	}
 	switch {
 	case patch.LastError != nil:

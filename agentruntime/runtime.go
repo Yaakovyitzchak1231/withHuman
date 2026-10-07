@@ -301,23 +301,13 @@ func mcpPrompt(tool SelectedTool) string {
 // TestCommand phrases the command onboarding shows for a runtime and a
 // gated tool, with the stock prompt for the tool's kind. It reports false
 // for a runtime it does not know.
-func TestCommand(key Key, tool SelectedTool) (Command, bool) {
-	return TestCommandWithPrompt(key, tool, promptFor(tool))
-}
-
-// TestCommandWithPrompt phrases the command with a prompt of the
-// caller's own: what the setup assistant asks the agent to do so that
-// the rules it wrote send the call to a person.
 //
 // Claude Code print mode auto-denies tools that need local permission, and
 // an approved withHuman request is passthrough rather than an allow, so
 // the tool is allowlisted on the command line: the person still sees the
 // org approval first and the local permission model stays intact.
-func TestCommandWithPrompt(key Key, tool SelectedTool, prompt string) (Command, bool) {
-	prompt = strings.TrimSpace(prompt)
-	if prompt == "" {
-		prompt = promptFor(tool)
-	}
+func TestCommand(key Key, tool SelectedTool) (Command, bool) {
+	prompt := promptFor(tool)
 	switch key {
 	case ClaudeCode:
 		return Command{

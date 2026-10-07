@@ -126,9 +126,6 @@ type ServerOptions struct {
 	// through approvalblock.RegisterKind. The worker composes with the
 	// same list so both compile every revision the same way.
 	ApprovalBlocks []blockruntime.Runtime
-	// AssistantModel drives the guided setup's assistant; nil leaves the
-	// rules step with its starting rules and the by-hand table.
-	AssistantModel application.ToolUseModel
 	// AgentMCPServers are the MCP servers the edition offers every enrolled
 	// agent (the hosted gateway), reported by /api/runtime-config as
 	// agent_mcp_servers so the withhuman CLI registers them with each
@@ -369,11 +366,6 @@ func NewServer(ctx context.Context, options ServerOptions) (*Server, error) {
 		PublicOrigin: cfg.PublicOrigin, CLIDownloadURL: cfg.CLIDownloadURL,
 		SessionTTL: cfg.OnboardingSessionTTL, SetupCodeTTL: cfg.EnrollmentCodeTTL,
 	})
-	// The guided setup's assistant writes rules on the edition's model;
-	// without one the page offers the starting rules alone.
-	if options.AssistantModel != nil {
-		onboardingService.RegisterAssistantModel(options.AssistantModel)
-	}
 	mcpOAuthService := mcpoauth.NewService(store, authService, store, clock, mcpoauth.Config{
 		PublicOrigin: cfg.PublicOrigin, MCPPath: httpapi.MCPPath, AuthorizePath: httpapi.MCPAuthorizePath,
 	})

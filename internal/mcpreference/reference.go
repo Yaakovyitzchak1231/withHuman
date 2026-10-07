@@ -1,9 +1,7 @@
 // Package mcpreference holds the grammar an agent needs before it writes
 // a pipeline or path document: the block envelope and each type's
 // config, the condition tree, and the escalation path document. The
-// management MCP server serves it through read_reference, and the setup
-// assistant carries the pipeline topics in its prompt, so both read one
-// copy.
+// management MCP server serves it through read_reference.
 package mcpreference
 
 import (
@@ -27,14 +25,4 @@ func Read(topic string) (string, error) {
 		return "", fmt.Errorf("unknown topic %q: choose %s", topic, strings.Join(Topics, ", "))
 	}
 	return string(text), nil
-}
-
-// MustRead returns a topic that ships with the binary; a missing one is
-// a build error, not a runtime condition.
-func MustRead(topic string) string {
-	text, err := Read(topic)
-	if err != nil {
-		panic(err)
-	}
-	return text
 }

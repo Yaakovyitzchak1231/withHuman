@@ -4507,53 +4507,6 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
         "502": { $ref: "#/components/responses/Error" }
-  /api/v1/onboarding/session/assistant:
-    post:
-      summary: Ask the setup assistant to write the rules
-      operationId: askOnboardingAssistant
-      x-withhuman-permission: agent.write
-      x-withhuman-credential-kinds: [session, personal_api_key]
-      security: [{ cookieAuth: [] }, { apiKeyAuth: [] }]
-      description: Allowed from provisioning until the session ends, once the agents exist. Runs one turn of the setup assistant on the caller's message. The assistant reads, writes, and previews the connected agents' rules, each a branch of the entry pipeline, through the setup's own tools, in process and as the caller, and records the test prompt for the last step; it cannot touch other agents' branches, the rest of the entry pipeline, other pipelines, paths, teams, or endpoints. The conversation is recorded on the session (`assistant`), one action per tool call as it happens, so the events stream shows progress; the answer arrives when the turn is done. A failed turn is recorded as a failed message and answered 502 onboarding_assistant_failed. 501 setup_assistant_unconfigured without a model (runtime-config's setup_assistant_enabled); 409 onboarding_assistant_busy while the previous message still runs.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [message]
-              properties:
-                message: { type: string, maxLength: 4000, description: "What should wait for the caller, in their own words." }
-      responses:
-        "200":
-          description: The session with the assistant's answer appended
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/OnboardingSession" }
-        "400": { $ref: "#/components/responses/Error" }
-        "401": { $ref: "#/components/responses/Error" }
-        "403": { $ref: "#/components/responses/Error" }
-        "409": { $ref: "#/components/responses/Error" }
-        "410": { $ref: "#/components/responses/Error" }
-        "501": { $ref: "#/components/responses/Error" }
-        "502": { $ref: "#/components/responses/Error" }
-    delete:
-      summary: Forget the setup assistant's conversation
-      operationId: clearOnboardingAssistant
-      x-withhuman-permission: agent.write
-      x-withhuman-credential-kinds: [session, personal_api_key]
-      security: [{ cookieAuth: [] }, { apiKeyAuth: [] }]
-      description: Empties `assistant` and the model's context so the next message starts over. The agents' rules stay as they are. 409 onboarding_assistant_busy while a turn still runs.
-      responses:
-        "200":
-          description: The session with an empty conversation
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/OnboardingSession" }
-        "401": { $ref: "#/components/responses/Error" }
-        "403": { $ref: "#/components/responses/Error" }
-        "409": { $ref: "#/components/responses/Error" }
-        "410": { $ref: "#/components/responses/Error" }
   /api/v1/onboarding/session/gated-tools:
     put:
       summary: Pick one agent's gated tools by hand
@@ -4561,7 +4514,7 @@ paths:
       x-withhuman-permission: agent.write
       x-withhuman-credential-kinds: [session, personal_api_key]
       security: [{ cookieAuth: [] }, { apiKeyAuth: [] }]
-      description: Allowed from provisioning until the session ends, once the agents exist. The by-hand alternative to the assistant. Rewrites the runtime's branch of the entry pipeline with the starting shape, the named tools to a human and every other call approved, and picks the test command from them; an empty list makes every call run. 409 entry_pipeline_changed when the entry pipeline moved under the write. Every name must have been discovered for the runtime (400 tool_not_discovered); the runtime must be one the session selected (400 runtime_not_selected).
+      description: Allowed from provisioning until the session ends, once the agents exist. The quick-try alternative to writing the rules with a coding agent. Rewrites the runtime's branch of the entry pipeline with the starting shape, the named tools to a human and every other call approved, and picks the test command from them; an empty list makes every call run. 409 entry_pipeline_changed when the entry pipeline moved under the write. Every name must have been discovered for the runtime (400 tool_not_discovered); the runtime must be one the session selected (400 runtime_not_selected).
       requestBody:
         required: true
         content:
@@ -6076,25 +6029,6 @@ components:
         tool: { type: string }
         command: { type: string }
         note: { type: string }
-    OnboardingAssistantMessage:
-      type: object
-      description: One message of the setup assistant's conversation. The caller's messages carry text alone; the assistant's carry the actions it took (one per tool call, appended as they happen), its answer once done, and an error in place of an answer when the turn failed.
-      required: [role, text, actions, status, at]
-      properties:
-        role: { type: string, enum: [user, assistant] }
-        text: { type: string }
-        actions:
-          type: array
-          items:
-            type: object
-            required: [tool, summary, ok]
-            properties:
-              tool: { type: string, description: "The management tool called, or set_test_prompt." }
-              summary: { type: string, description: "One line, in plain language, such as: Wrote Codex's rules (revision 3)." }
-              ok: { type: boolean }
-        status: { type: string, enum: [running, done, failed] }
-        error: { type: string }
-        at: { type: string, format: date-time }
     OnboardingError:
       type: object
       required: [source, code, message]
@@ -6105,7 +6039,7 @@ components:
     OnboardingSession:
       type: object
       description: The shared setup session (design_doc/09-onboarding.md). Never carries the setup code, the CLI bearer, or an agent credential.
-      required: [id, organization_id, membership_id, status, version, machine, detections, selected_runtimes, tools, discovery_errors, generated, enrollments, install_results, test_commands, test_request_id, tested_at, channels_set_at, rules_set_at, assistant, last_error, created_at, updated_at, expires_at, completed_at]
+      required: [id, organization_id, membership_id, status, version, machine, detections, selected_runtimes, tools, discovery_errors, generated, enrollments, install_results, test_commands, test_request_id, tested_at, channels_set_at, rules_set_at, last_error, created_at, updated_at, expires_at, completed_at]
       properties:
         id: { type: string, format: uuid }
         organization_id: { type: string, format: uuid }
@@ -6148,10 +6082,6 @@ components:
         tested_at: { type: [string, "null"], format: date-time }
         channels_set_at: { type: [string, "null"], format: date-time, description: "When the caller passed the notification steps; provisioning requires it." }
         rules_set_at: { type: [string, "null"], format: date-time, description: "When the caller left the rules step for the test." }
-        assistant:
-          type: array
-          description: The setup assistant's conversation, in order. The model's own context is not part of the session.
-          items: { $ref: "#/components/schemas/OnboardingAssistantMessage" }
         last_error:
           oneOf:
             - $ref: "#/components/schemas/OnboardingError"
@@ -7976,13 +7906,12 @@ components:
       type: object
       description: "What the frontend needs to know about this deployment before anyone signs in. An edition adds entries of its own (the hosted edition's signup_enabled, billing_enabled, and the phone and push channel flags); it never changes the ones listed here."
       additionalProperties: true
-      required: [public_origin, version, bootstrap_enabled, custom_permissions_enabled, social_providers, setup_assistant_enabled, webhook_enabled, slack_enabled, discord_enabled, agent_mcp_servers]
+      required: [public_origin, version, bootstrap_enabled, custom_permissions_enabled, social_providers, webhook_enabled, slack_enabled, discord_enabled, agent_mcp_servers]
       properties:
         public_origin: { type: string, format: uri }
         version: { type: string }
         bootstrap_enabled: { type: boolean, description: The first-owner ceremony accepts requests }
         custom_permissions_enabled: { type: boolean, description: "The edition offers custom permission policies beside the predefined roles: a member's or team's own policies, and invitations that carry them. The open edition offers predefined roles alone and reports false." }
-        setup_assistant_enabled: { type: boolean, description: "The edition wired a model for the guided setup's assistant, so the rules step can take the caller's own words" }
         webhook_enabled: { type: boolean, description: "The deployment configured a secrets key, so webhook endpoints can be stored and webhook blocks can run" }
         discord_enabled: { type: boolean, description: "The deployment configured a Discord app, so an organization can connect a server and members can link their accounts" }
         slack_enabled: { type: boolean, description: "The deployment configured a Slack app, so an organization can connect a workspace and members can link their accounts" }
