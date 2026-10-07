@@ -291,6 +291,19 @@ type pipelinesStub struct {
 	// pending is the revision the last create produced, activated next.
 	pending     *approvalpipeline.PipelineRevision
 	activateErr error
+	// previews records every sample previewed; outcome answers each one,
+	// human for every call when unset.
+	previews []approvalpipeline.PreviewSample
+	outcome  func(approvalpipeline.PreviewSample) approvalpipeline.BlockOutcome
+}
+
+func (p *pipelinesStub) Preview(_ context.Context, _ domain.Principal, _ string, _ []approvalblock.Definition, _ approvalpipeline.Route, sample approvalpipeline.PreviewSample) (approvalpipeline.PreviewResult, error) {
+	p.previews = append(p.previews, sample)
+	outcome := approvalpipeline.BlockHuman
+	if p.outcome != nil {
+		outcome = p.outcome(sample)
+	}
+	return approvalpipeline.PreviewResult{Outcome: outcome, TerminalBlockKey: "stub"}, nil
 }
 
 // GetActive answers like the real service: a pipeline nobody has edited
@@ -670,15 +683,12 @@ func TestGuidedSetupHappyPath(t *testing.T) {
 		t.Fatalf("ReportInstall: %v", err)
 	}
 	mustStatus(t, session, domain.OnboardingInstalled)
-	if command := session.TestCommands["claude-code"]; command.Tool != "Bash" || !strings.Contains(command.Command, "claude -p") {
-		t.Fatalf("claude-code test command: %+v", command)
-	}
-	if command := session.TestCommands["codex"]; command.Tool != "Bash" || !strings.HasPrefix(command.Command, "codex exec --skip-git-repo-check ") {
-		t.Fatalf("codex test command: %+v", command)
+	if len(session.TestCommands) != 0 {
+		t.Fatalf("the test commands wait for the rules: %+v", session.TestCommands)
 	}
 
 	// Leaving the rules step is stamped once the hooks are in; the test
-	// counts what arrives after it.
+	// counts what arrives after it, and its commands fit the rules.
 	session, err = h.service.RecordRules(ctx, h.principal)
 	if err != nil {
 		t.Fatalf("RecordRules: %v", err)
@@ -686,6 +696,12 @@ func TestGuidedSetupHappyPath(t *testing.T) {
 	mustStatus(t, session, domain.OnboardingInstalled)
 	if session.RulesSetAt == nil {
 		t.Fatalf("rules step should be stamped: %+v", session)
+	}
+	if command := session.TestCommands["claude-code"]; command.Tool != "Bash" || !strings.Contains(command.Command, "claude -p") {
+		t.Fatalf("claude-code test command: %+v", command)
+	}
+	if command := session.TestCommands["codex"]; command.Tool != "Bash" || !strings.HasPrefix(command.Command, "codex exec --skip-git-repo-check ") {
+		t.Fatalf("codex test command: %+v", command)
 	}
 
 	// The test: only a decided request from an enrolled agent counts.
@@ -981,10 +997,6 @@ func TestGenerators(t *testing.T) {
 			"claude-code": {{Name: "Edit", Source: "builtin", Kind: "edit", Suggested: true}, {Name: "create_refund", Source: "mcp", Server: "stripe", Suggested: true}, {Name: "Bash", Source: "builtin", Kind: "shell", Suggested: true}, {Name: "Read", Source: "builtin", Kind: "read"}},
 			"pi":          {{Name: "write", Source: "builtin", Kind: "edit", Suggested: true}},
 		},
-	}
-	commands := TestCommands(session)
-	if commands["claude-code"].Tool != "Bash" || commands["pi"].Tool != "write" {
-		t.Fatalf("TestCommands should prefer shell, then edit: %+v", commands)
 	}
 	plans := PlanHooks(session)
 	if plans["claude-code"].Matcher != ".*" || plans["pi"].Matcher != "" || strings.Join(plans["pi"].Tools, ",") != "write" || strings.Join(plans["claude-code"].Tools, ",") != "Bash,Edit,create_refund" {

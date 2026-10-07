@@ -416,18 +416,6 @@ func (p *Provider) putInstallResults(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.session.InstallResults = body.Results
-	p.session.TestCommands = map[string]domain.OnboardingTestCommand{}
-	for _, runtime := range p.session.SelectedRuntimes {
-		suggested := p.session.SuggestedTools(runtime)
-		if len(suggested) == 0 {
-			continue
-		}
-		tool := suggested[0]
-		chosen := agentruntime.SelectedTool{Name: tool.Name, Source: agentruntime.Source(tool.Source), Server: tool.Server, Kind: agentruntime.ToolKind(tool.Kind)}
-		if command, ok := agentruntime.TestCommand(agentruntime.Key(runtime), chosen); ok {
-			p.session.TestCommands[runtime] = domain.OnboardingTestCommand{Tool: chosen.Name, Command: command.Shell, Note: command.Note}
-		}
-	}
 	p.bump()
 	writeJSON(w, http.StatusOK, p.session)
 }

@@ -190,7 +190,7 @@ func TestSetupEndToEnd(t *testing.T) {
 		t.Fatal("credential written into .claude.json")
 	}
 
-	// Install results and test commands on the session.
+	// Install results on the session; the test commands wait for the rules.
 	if len(session.InstallResults) != 2 {
 		t.Fatalf("install results = %+v", session.InstallResults)
 	}
@@ -200,9 +200,6 @@ func TestSetupEndToEnd(t *testing.T) {
 		if !result.OK || result.Manual || len(result.Changes) != 2 {
 			t.Fatalf("install result = %+v", result)
 		}
-	}
-	if command := session.TestCommands["claude-code"]; !strings.HasPrefix(command.Command, `claude -p "`) || !strings.HasSuffix(command.Command, `--allowedTools "Bash"`) {
-		t.Fatalf("claude-code test command = %+v", command)
 	}
 	manager, err := f.env.Manager()
 	if err != nil {

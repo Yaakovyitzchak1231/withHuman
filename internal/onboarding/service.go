@@ -57,6 +57,7 @@ type PipelineManager interface {
 	GetActive(ctx context.Context, principal domain.Principal, pipelineKey string) (approvalpipeline.PipelineRevision, error)
 	CreateRevision(ctx context.Context, principal domain.Principal, pipelineKey, name string, definitions []approvalblock.Definition, defaultRoute approvalpipeline.Route) (approvalpipeline.PipelineRevision, error)
 	Activate(ctx context.Context, principal domain.Principal, pipelineKey string, revision int64, expectedActiveRevision int64) (approvalpipeline.PipelineRevision, error)
+	Preview(ctx context.Context, principal domain.Principal, pipelineKey string, definitions []approvalblock.Definition, defaultRoute approvalpipeline.Route, sample approvalpipeline.PreviewSample) (approvalpipeline.PreviewResult, error)
 }
 
 // agentStatuses are the statuses in which the agents exist, so their
@@ -606,8 +607,7 @@ func (s *Service) ConfirmChannels(ctx context.Context, principal domain.Principa
 // the starting shape over the tools the person picked by hand: the named
 // tools wait for them and everything else runs. It is the quick-try
 // alternative to writing the rules with a coding agent, so it needs the
-// agents to exist; an
-// empty list makes every call run. The test command follows the choice.
+// agents to exist; an empty list makes every call run.
 func (s *Service) SetGatedTools(ctx context.Context, principal domain.Principal, runtime string, tools []string) (domain.OnboardingSession, error) {
 	if err := authorize(principal); err != nil {
 		return domain.OnboardingSession{}, err
@@ -651,25 +651,20 @@ func (s *Service) SetGatedTools(ctx context.Context, principal domain.Principal,
 	if _, err := s.writeEntry(ctx, principal, current, EntryBlocks(current.blocks, branch)); err != nil {
 		return domain.OnboardingSession{}, err
 	}
-	commands := map[string]domain.OnboardingTestCommand{}
-	for key, command := range session.TestCommands {
-		commands[key] = command
-	}
-	if command, ok := testCommand(runtime, gated); ok {
-		commands[runtime] = command
-	} else {
-		delete(commands, runtime)
-	}
 	return s.sessions.UpdateOnboardingSession(ctx, application.UpdateOnboardingSessionInput{
 		OrganizationID: session.OrganizationID, SessionID: session.ID,
-		Patch: domain.OnboardingSessionPatch{TestCommands: &commands, ClearLastError: true},
+		Patch: domain.OnboardingSessionPatch{ClearLastError: true},
 		Now:   s.clock.Now(),
 	})
 }
 
 // RecordRules records that the person left the rules step for the test,
-// once the CLI has installed the hooks. The test counts the requests
-// that arrive after it.
+// once the CLI has installed the hooks, and chooses the test commands
+// against the rules as they now stand, since whoever wrote them (a coding
+// agent, the person) may have let the starting test call through. The
+// first time stamps rules_set_at, and the test counts the requests that
+// arrive after it; coming back to change the rules keeps that stamp, so a
+// request already decided still counts.
 func (s *Service) RecordRules(ctx context.Context, principal domain.Principal) (domain.OnboardingSession, error) {
 	if err := authorize(principal); err != nil {
 		return domain.OnboardingSession{}, err
@@ -681,11 +676,19 @@ func (s *Service) RecordRules(ctx context.Context, principal domain.Principal) (
 	if session.Status != domain.OnboardingInstalled && session.Status != domain.OnboardingTested {
 		return domain.OnboardingSession{}, domain.ErrOnboardingState
 	}
+	commands, err := s.chooseTestCommands(ctx, principal, session)
+	if err != nil {
+		return domain.OnboardingSession{}, err
+	}
 	now := s.clock.Now()
+	patch := domain.OnboardingSessionPatch{TestCommands: &commands, ClearLastError: true}
+	if session.RulesSetAt == nil {
+		patch.RulesSetAt = &now
+	}
 	return s.sessions.UpdateOnboardingSession(ctx, application.UpdateOnboardingSessionInput{
 		OrganizationID: session.OrganizationID, SessionID: session.ID,
 		ExpectedStatuses: []domain.OnboardingStatus{domain.OnboardingInstalled, domain.OnboardingTested},
-		Patch:            domain.OnboardingSessionPatch{RulesSetAt: &now, ClearLastError: true},
+		Patch:            patch,
 		Now:              now,
 	})
 }
@@ -997,8 +1000,8 @@ func (s *Service) delegatedPrincipal(ctx context.Context, session domain.Onboard
 	return principal, nil
 }
 
-// ReportInstall records the CLI's hook installation and phrases the test
-// commands for the last step.
+// ReportInstall records the CLI's hook installation. The test commands
+// wait for the rules: RecordRules chooses them.
 func (s *Service) ReportInstall(ctx context.Context, session domain.OnboardingSession, results []domain.OnboardingInstallResult) (domain.OnboardingSession, error) {
 	seen := map[string]bool{}
 	for _, result := range results {
@@ -1012,11 +1015,10 @@ func (s *Service) ReportInstall(ctx context.Context, session domain.OnboardingSe
 			return domain.OnboardingSession{}, fmt.Errorf("no install result for %s: %w", runtime, domain.ErrInvalid)
 		}
 	}
-	commands := TestCommands(session)
 	return s.sessions.UpdateOnboardingSession(ctx, application.UpdateOnboardingSessionInput{
 		OrganizationID: session.OrganizationID, SessionID: session.ID,
 		ExpectedStatuses: []domain.OnboardingStatus{domain.OnboardingEnrolled},
-		Patch:            domain.OnboardingSessionPatch{InstallResults: &results, TestCommands: &commands, ClearLastError: true},
+		Patch:            domain.OnboardingSessionPatch{InstallResults: &results, ClearLastError: true},
 		NextStatus:       domain.OnboardingInstalled,
 		Now:              s.clock.Now(),
 	})
