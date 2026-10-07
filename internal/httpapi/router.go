@@ -444,12 +444,12 @@ func (a *API) runtimeConfig(c *gin.Context) {
 		// Predefined roles are always offered; custom permission
 		// policies only where the edition switched them on.
 		"custom_permissions_enabled": a.config.CustomPermissions,
-		"webhook_enabled":         a.webhooks != nil && a.webhooks.Configured(),
-		"slack_enabled":           a.slack != nil && a.slack.Configured(),
-		"discord_enabled":         a.discord != nil && a.discord.Configured(),
-		"social_providers":        providers,
-		"cli_download_url":        a.config.CLIDownloadURL,
-		"agent_mcp_servers":       agentMCPServers,
+		"webhook_enabled":            a.webhooks != nil && a.webhooks.Configured(),
+		"slack_enabled":              a.slack != nil && a.slack.Configured(),
+		"discord_enabled":            a.discord != nil && a.discord.Configured(),
+		"social_providers":           providers,
+		"cli_download_url":           a.config.CLIDownloadURL,
+		"agent_mcp_servers":          agentMCPServers,
 	}
 	for key, value := range a.config.Extras {
 		payload[key] = value
@@ -461,8 +461,7 @@ func (a *API) runtimeConfig(c *gin.Context) {
 // edition's extras may not shadow them. The test keeps the two in step.
 var runtimeConfigKeys = map[string]bool{
 	"public_origin": true, "version": true, "bootstrap_enabled": true,
-	"custom_permissions_enabled": true,
-	"webhook_enabled": true,
+	"custom_permissions_enabled": true, "webhook_enabled": true,
 	"slack_enabled": true, "discord_enabled": true,
 	"social_providers": true,
 	"cli_download_url": true, "agent_mcp_servers": true,
