@@ -343,11 +343,6 @@ export function AgentScreen({ page }: { page: AgentPage }) {
       cell: (instance) => (
         <p className="truncate text-body font-medium text-ink">
           {instance.name}
-          {instance.status === "disabled" ? (
-            <span className="ml-2 text-label font-normal text-ink-faint">
-              disabled
-            </span>
-          ) : null}
         </p>
       ),
     },
@@ -386,12 +381,13 @@ export function AgentScreen({ page }: { page: AgentPage }) {
       ),
     },
     {
-      id: "credential",
-      label: "Credential",
-      info: "Whether the instance's newest credential still works.",
+      id: "status",
+      label: "Status",
+      info: "Whether the instance can make requests.",
       docsLinks: [{ href: "https://withhuman.ai/docs/web-app/agents#credential-revocation", label: "Managing instance credentials" }],
       width: 130,
-      cell: (instance) => <CredentialState instance={instance} />,
+      status: true,
+      cell: (instance) => <InstanceStatus instance={instance} />,
     },
     {
       id: "requests",
@@ -868,6 +864,7 @@ export function AgentScreen({ page }: { page: AgentPage }) {
                     columns={instanceColumns}
                     rowLabel={(instance) => instance.name}
                     rowActions={instanceActions}
+                    rowMuted={(instance) => instance.status === "disabled"}
                     className="min-w-[720px]"
                   />
                 )}
@@ -1064,14 +1061,21 @@ export function AgentScreen({ page }: { page: AgentPage }) {
   );
 }
 
-/* The credential state as a word, with the dates behind it on hover:
- * when it expires or expired, when it was issued, last used, and
- * revoked. An instance that never held a credential has nothing to
- * explain, so its badge stands alone. */
-function CredentialState({ instance }: { instance: AgentInstanceDetail }) {
+/* Whether the instance can make requests, as a word: Disabled while
+ * the switch is off, else the newest credential's state. The hover card
+ * holds the credential's dates: when it expires or expired, when it was
+ * issued, last used, and revoked. An instance that never held a
+ * credential has nothing to explain, so its badge stands alone. */
+function InstanceStatus({ instance }: { instance: AgentInstanceDetail }) {
   const summary = credentialSummary(instance);
   const credential: AgentCredentialState | undefined = instance.credentials[0];
-  const badge = <Badge tone={summary.tone}>{summary.label}</Badge>;
+  const disabled = instance.status === "disabled";
+  const credentialBadge = <Badge tone={summary.tone}>{summary.label}</Badge>;
+  const badge = disabled ? (
+    <Badge tone="neutral">Disabled</Badge>
+  ) : (
+    credentialBadge
+  );
   if (!credential) return badge;
   const live = credentialLive(credential);
   const expired = !credential.revoked_at && !live;
@@ -1081,13 +1085,13 @@ function CredentialState({ instance }: { instance: AgentInstanceDetail }) {
         <>
           <HoverCardTitle>
             <span>Newest credential</span>
-            {badge}
+            {credentialBadge}
           </HoverCardTitle>
           <HoverCardMeta>
-            {credential.revoked_at
+            {credential.revoked_at || expired
               ? "The instance has to enroll again."
-              : expired
-                ? "The instance has to enroll again."
+              : disabled
+                ? "Requests are refused until you enable the instance."
                 : `Valid for another ${formatUntil(credential.expires_at)}.`}
           </HoverCardMeta>
           <HoverCardBody>

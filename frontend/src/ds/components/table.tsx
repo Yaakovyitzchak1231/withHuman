@@ -40,6 +40,9 @@ export interface TableColumn<Item> {
   grow?: boolean;
   align?: "left" | "right";
   sortable?: boolean;
+  /* The column that says the row's status. It keeps full contrast in a
+   * muted row, so the badge still explains why the row is faded. */
+  status?: boolean;
   cell: (item: Item) => ReactNode;
 }
 
@@ -63,10 +66,14 @@ export interface TableProps<Item>
   openLabel?: string;
   /* A row with work in flight shows a spinner in place of the dots. */
   rowBusy?: (item: Item) => boolean;
+  /* A row that is switched off (a disabled instance) fades every cell
+   * except the status column and the row menu. */
+  rowMuted?: (item: Item) => boolean;
 }
 
 /* One icon button; the menu itself opens in a portal. */
 const ACTIONS_WIDTH = 44;
+const ACTIONS_COLUMN = "row-actions";
 
 export function Table<Item>({
   columns: ownColumns,
@@ -76,6 +83,7 @@ export function Table<Item>({
   rowLabel,
   openLabel = "View",
   rowBusy,
+  rowMuted,
   className,
   ...listProps
 }: TableProps<Item>) {
@@ -87,7 +95,7 @@ export function Table<Item>({
       ? [
           ...ownColumns,
           {
-            id: "row-actions",
+            id: ACTIONS_COLUMN,
             width: ACTIONS_WIDTH,
             align: "right",
             cell: (item) => (
@@ -121,22 +129,29 @@ export function Table<Item>({
         </div>
       </div>
       <List {...listProps} openButton={false}>
-        {(item) => (
-          <div className="flex min-w-0 flex-1 items-center gap-3 py-1.5">
-            {columns.map((column) => (
-              <div
-                key={column.id}
-                style={column.width ? { width: column.width } : undefined}
-                className={cn(
-                  column.grow ? "min-w-0 flex-1" : "shrink-0",
-                  column.align === "right" && "text-right",
-                )}
-              >
-                {column.cell(item)}
-              </div>
-            ))}
-          </div>
-        )}
+        {(item) => {
+          const muted = rowMuted?.(item) ?? false;
+          return (
+            <div className="flex min-w-0 flex-1 items-center gap-3 py-1.5">
+              {columns.map((column) => (
+                <div
+                  key={column.id}
+                  style={column.width ? { width: column.width } : undefined}
+                  className={cn(
+                    column.grow ? "min-w-0 flex-1" : "shrink-0",
+                    column.align === "right" && "text-right",
+                    muted &&
+                      !column.status &&
+                      column.id !== ACTIONS_COLUMN &&
+                      "opacity-60",
+                  )}
+                >
+                  {column.cell(item)}
+                </div>
+              ))}
+            </div>
+          );
+        }}
       </List>
     </div>
   );
