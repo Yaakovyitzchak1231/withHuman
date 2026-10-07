@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { Avatar } from "@/ds/components/avatar";
+import { Badge } from "@/ds/components/badge";
 import { ConfirmDialog } from "@/ds/components/confirm-dialog";
 import type { MenuAction } from "@/ds/components/menu";
 import { Pagination } from "@/ds/components/pagination";
@@ -103,6 +104,24 @@ export function TablesSection() {
     },
   ];
 
+  /* A suspended member is switched off, not gone: the row fades and the
+   * status column says why at full contrast. */
+  const suspendedColumns: TableColumn<Member>[] = [
+    ...columns.slice(0, 2),
+    {
+      id: "status",
+      label: "Status",
+      width: 120,
+      status: true,
+      cell: (member) =>
+        member.id === "m4" ? (
+          <Badge tone="neutral">Suspended</Badge>
+        ) : (
+          <Badge tone="approve">Active</Badge>
+        ),
+    },
+  ];
+
   /* The row menu is the table's own: View comes first whenever a row
    * opens, then these. Entries the reader cannot take stay faded. */
   const rowActions = (member: Member): MenuAction[] => [
@@ -183,6 +202,25 @@ export function TablesSection() {
               </div>
             )}
             aria-label="Members with expansion"
+          />
+        </div>
+      </Demo>
+      <Demo
+        label="Muted rows"
+        hint="rowMuted fades a row that is switched off; the column marked status and the row menu keep full contrast, so the badge explains the fade"
+      >
+        <div className="overflow-hidden rounded-lg border-hairline border-edge bg-surface shadow-sm">
+          <Table
+            items={MEMBERS.slice(1)}
+            columns={suspendedColumns}
+            getId={(member) => member.id}
+            selected={new Set()}
+            onSelectedChange={() => undefined}
+            selectable={false}
+            rowLabel={(member) => member.name}
+            rowActions={rowActions}
+            rowMuted={(member) => member.id === "m4"}
+            aria-label="Members with a suspended row"
           />
         </div>
       </Demo>
