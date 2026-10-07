@@ -15,7 +15,7 @@ import { IconButton } from "@/ds/components/icon-button";
 import { Switch } from "@/ds/components/switch";
 import { TextField } from "@/ds/components/text-field";
 import { useToast } from "@/ds/components/toast";
-import { AgentIcon, ArrowLeftIcon, CheckIcon, MailIcon, MessageIcon, ToolIcon, PlusIcon, TrashIcon } from "@/ds/icons";
+import { AgentIcon, ArrowLeftIcon, CheckIcon, MailIcon, ToolIcon, PlusIcon, TrashIcon } from "@/ds/icons";
 import { SlackIcon } from "@/ds/icons/brands";
 import { Section, Demo } from "../section";
 
@@ -187,25 +187,19 @@ function WayDemo() {
       aria-label="How to write the rules"
       value={way}
       onValueChange={(next) => setWay(next as string)}
-      className="grid grid-cols-1 gap-3 sm:grid-cols-3"
+      className="grid grid-cols-1 gap-3 sm:grid-cols-2"
     >
       <RadioCard
         value="agent"
         icon={<AgentIcon width={16} height={16} />}
-        label="With my coding agent"
-        description="Paste a prompt into your coding agent to write the rules."
-      />
-      <RadioCard
-        value="describe"
-        icon={<MessageIcon width={16} height={16} />}
-        label="Describe it in words"
-        description="Say what should wait for you."
+        label="Use your coding agent"
+        description="Add the withHuman skills to your coding agent and write the rules together."
       />
       <RadioCard
         value="manual"
         icon={<ToolIcon width={16} height={16} />}
-        label="Pick tools myself"
-        description="Tick the tools that need your approval."
+        label="Pick tools manually"
+        description="Tick the tools that should wait for your approval."
       />
     </RadioGroup>
   );

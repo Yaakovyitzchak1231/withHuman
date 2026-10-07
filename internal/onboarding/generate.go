@@ -106,12 +106,11 @@ func conditionID(runtime, purpose string) string {
 
 // StartingBlocks builds the two-block starting body for one runtime: a
 // branch whose outcome block sends the suggested tools to a human through
-// the path, and an outcome block that approves everything else. The setup assistant replaces it with the
-// person's own rules; without an assistant it is what the setup leaves
-// behind. The explicit approve block matters because running out of a
-// branch is an implicit human outcome, and the adapter policy is shared
-// across runtimes, so a tool gated for one runtime can reach another's
-// branch. An empty tool list leaves the gate out: every call runs.
+// the path, and an outcome block that approves everything else, until
+// the person or their coding agent writes their own rules. The explicit
+// approve block matters because running out of a branch is an implicit
+// human outcome, and the adapter policy is shared across runtimes, so a
+// tool gated for one runtime can reach another's branch. An empty tool list leaves the gate out: every call runs.
 //
 // Block ids carry the runtime, because keys are unique across the whole
 // entry pipeline and two runtimes each get a branch. Block names are
@@ -211,7 +210,7 @@ func RuntimeBranchOf(entry []approvalblock.Definition, runtime string) (approval
 
 // StartingShape reports whether the branch body is still what the setup
 // wrote: the gate followed by the approve block, or the approve block
-// alone. A body the person or the assistant rewrote is left alone by a
+// alone. A body the person or their coding agent rewrote is left alone by a
 // later run.
 func StartingShape(runtime string, branch approvalblock.Definition) bool {
 	if branch.Branch == nil {
@@ -315,8 +314,7 @@ func SuggestedToolNames(session domain.OnboardingSession, runtime string) []stri
 // TestCommands picks, per runtime, the most demonstrable suggested tool
 // (a shell built-in, then an edit built-in, then the first MCP tool, then
 // anything) and phrases the command that makes the runtime call it. It
-// fits the starting pipeline; the setup assistant replaces a runtime's
-// command with one that fits the rules it wrote.
+// fits the starting pipeline.
 func TestCommands(session domain.OnboardingSession) map[string]domain.OnboardingTestCommand {
 	commands := map[string]domain.OnboardingTestCommand{}
 	for _, runtime := range session.SelectedRuntimes {

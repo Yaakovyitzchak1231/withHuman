@@ -84,6 +84,16 @@ strict and differs between deployments, so never write blocks from memory.
    reviews and how fast, and whether everything else runs automatically.
    Ask as many clarifying questions as needed until the flow is clear and
    unambiguous. Don't guess thresholds or reviewers.
+   When the person is not sure what should wait, read the agents' tools
+   (`list_tool_catalog` with `agent_slug`, or `list_tool_definitions`) and
+   suggest the consequential calls, each with a short reason: calls that
+   delete or overwrite data, change things outside the machine (git
+   pushes, deploys, cloud resources), send messages, or spend money. For
+   a tool that can do both safe and risky things, such as the shell,
+   suggest conditions on its arguments (for example `git push` or
+   `rm -rf`) rather than gating the whole tool. Reading, searching and
+   running tests usually run without a person. Let the person confirm or
+   change the list before you write anything.
 2. **Read what exists.** `list_agents` for slugs, `list_pipelines` and
    `get_pipeline` for `entry` (and any delegated pipeline you will change),
    `list_escalation_paths`, `list_members` and `list_teams` for reviewers,

@@ -19,7 +19,7 @@ export interface CodeBlockProps extends ComponentProps<"div"> {
   raised?: boolean;
 }
 
-/* The payload block: machine content with a hover-revealed copy
+/* The code block: machine content with a hover-revealed copy
  * affordance. The hairline is a border, not a ring, so a clipping
  * ancestor can never shave it off. */
 export function CodeBlock({
@@ -46,7 +46,7 @@ export function CodeBlock({
         <div className="flex h-8 items-center justify-between border-b-hairline border-edge pr-1.5 pl-3">
           <span className="font-mono text-[11px] text-ink-muted">{label}</span>
           {copyable ? (
-            <CopyButton value={copyBody} aria-label="Copy payload" />
+            <CopyButton value={copyBody} aria-label="Copy" />
           ) : null}
         </div>
       ) : null}
@@ -66,7 +66,7 @@ export function CodeBlock({
             "has-[[data-copied]]:opacity-100",
           )}
         >
-          <CopyButton value={copyBody} aria-label="Copy payload" />
+          <CopyButton value={copyBody} aria-label="Copy" />
         </span>
       ) : null}
     </div>

@@ -4,7 +4,7 @@ import { Section, Demo } from "../section";
 const SETUP: Step[] = [
   { title: "Install the CLI", description: "One command on the machine the agent runs on.", status: "done" },
   { title: "Choose agents", description: "Pick the runtimes the CLI found.", status: "done" },
-  { title: "Choose tools", description: "Decide which calls wait for a human.", status: "current" },
+  { title: "Approval rules", description: "Decide which tool calls wait for you.", status: "current" },
   { title: "Test it", description: "Trigger a gated call and decide it here.", status: "upcoming" },
 ];
 

@@ -8,7 +8,6 @@ package httpapi
 // exactly once, in the enroll response, and are never stored raw.
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,10 +22,6 @@ import (
 
 const onboardingSessionKey = "withhuman.onboarding_session"
 
-// assistantTurnTimeout bounds one setup assistant message: the model
-// may read, write, and preview a few pipelines, each a round trip.
-const assistantTurnTimeout = 4 * time.Minute
-
 func (a *API) installOnboardingRoutes(appAPI *gin.RouterGroup, router *gin.Engine) {
 	// The service requires every domain.OnboardingPermissions key; the
 	// routes carry the first of them and the service enforces the set.
@@ -37,8 +32,6 @@ func (a *API) installOnboardingRoutes(appAPI *gin.RouterGroup, router *gin.Engin
 	a.handle(appAPI, http.MethodPut, "/onboarding/session/agents", setup, a.selectOnboardingAgents)
 	a.handle(appAPI, http.MethodPost, "/onboarding/session/channels", setup, a.confirmOnboardingChannels)
 	a.handle(appAPI, http.MethodPost, "/onboarding/session/provision", setup, a.provisionOnboarding)
-	a.handle(appAPI, http.MethodPost, "/onboarding/session/assistant", setup, a.askOnboardingAssistant)
-	a.handle(appAPI, http.MethodDelete, "/onboarding/session/assistant", setup, a.clearOnboardingAssistant)
 	a.handle(appAPI, http.MethodPut, "/onboarding/session/gated-tools", setup, a.setOnboardingGatedTools)
 	a.handle(appAPI, http.MethodPost, "/onboarding/session/rules", setup, a.recordOnboardingRules)
 	a.handle(appAPI, http.MethodPost, "/onboarding/session/test", setup, a.recordOnboardingTest)
@@ -94,12 +87,6 @@ func (a *API) writeOnboardingError(c *gin.Context, err error) {
 		writeAPIError(c, http.StatusBadRequest, "invalid_request", step.Code, err.Error(), map[string]any{"param": step.Param})
 	case errors.Is(err, onboarding.ErrProvisionFailed):
 		writeAPIError(c, http.StatusBadGateway, "dependency", "onboarding_provision_failed", err.Error(), nil)
-	case errors.Is(err, onboarding.ErrAssistantUnavailable):
-		writeAPIError(c, http.StatusNotImplemented, "dependency", "setup_assistant_unconfigured", "The setup assistant needs a model: set WITHHUMAN_LLM_MODELS on this deployment.", nil)
-	case errors.Is(err, onboarding.ErrAssistantBusy):
-		writeAPIError(c, http.StatusConflict, "conflict", "onboarding_assistant_busy", err.Error(), nil)
-	case errors.Is(err, onboarding.ErrAssistantFailed):
-		writeAPIError(c, http.StatusBadGateway, "dependency", "onboarding_assistant_failed", err.Error(), nil)
 	case errors.Is(err, onboarding.ErrEntryPipelineChanged):
 		writeAPIError(c, http.StatusConflict, "conflict", "entry_pipeline_changed", "The entry pipeline changed while the rules were being written. Try again.", nil)
 	default:
@@ -196,38 +183,8 @@ func (a *API) selectOnboardingAgents(c *gin.Context) {
 	c.JSON(http.StatusOK, session)
 }
 
-// askOnboardingAssistant runs one assistant turn and answers with the
-// session once it is done; the page follows the work in between over
-// the events stream. A failed turn is recorded on the session too, so
-// the error answer and the transcript agree.
-func (a *API) askOnboardingAssistant(c *gin.Context) {
-	var request struct {
-		Message string `json:"message" binding:"required"`
-	}
-	if !bind(c, &request) {
-		return
-	}
-	ctx, cancel := context.WithTimeout(c.Request.Context(), assistantTurnTimeout)
-	defer cancel()
-	session, err := a.onboarding.Ask(ctx, currentPrincipal(c), request.Message)
-	if err != nil {
-		a.writeOnboardingError(c, err)
-		return
-	}
-	c.JSON(http.StatusOK, session)
-}
-
-func (a *API) clearOnboardingAssistant(c *gin.Context) {
-	session, err := a.onboarding.ClearAssistant(c.Request.Context(), currentPrincipal(c))
-	if err != nil {
-		a.writeOnboardingError(c, err)
-		return
-	}
-	c.JSON(http.StatusOK, session)
-}
-
-// setOnboardingGatedTools is the by-hand alternative to the assistant:
-// one runtime's rules become "these tools wait, the rest runs".
+// setOnboardingGatedTools is the quick-try alternative to a coding
+// agent: one runtime's rules become "these tools wait, the rest runs".
 func (a *API) setOnboardingGatedTools(c *gin.Context) {
 	var request struct {
 		Runtime string   `json:"runtime" binding:"required"`

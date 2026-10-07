@@ -156,9 +156,6 @@ export const api = {
       /* Whether the edition offers custom permission policies beside
        * the predefined roles; the open edition offers roles alone. */
       custom_permissions_enabled: boolean;
-      /* Whether the guided setup can write rules from a description:
-       * the deployment configured a model for the assistant. */
-      setup_assistant_enabled: boolean;
       webhook_enabled: boolean;
       slack_enabled: boolean;
       discord_enabled: boolean;
@@ -702,22 +699,7 @@ export const api = {
       method: "POST",
       body: "{}",
     }),
-  /* One turn of the setup assistant. The answer arrives when the turn
-   * is done; the session events stream shows the actions in between.
-   * 501 setup_assistant_unconfigured without a model, 409
-   * onboarding_assistant_busy while the previous turn runs, 502
-   * onboarding_assistant_failed for a turn recorded as failed. */
-  onboardingAsk: (message: string) =>
-    request<OnboardingSession>(`${APP_API_BASE}/onboarding/session/assistant`, {
-      method: "POST",
-      body: JSON.stringify({ message }),
-    }),
-  /* Forgets the conversation; the rules stay. */
-  onboardingClearAssistant: () =>
-    request<OnboardingSession>(`${APP_API_BASE}/onboarding/session/assistant`, {
-      method: "DELETE",
-    }),
-  /* The by-hand alternative: the named tools wait, the rest runs.
+  /* The quick-try way: the named tools wait, the rest runs.
    * 400 tool_not_discovered for a name the CLI did not report. */
   onboardingSetGatedTools: (runtime: string, tools: string[]) =>
     request<OnboardingSession>(`${APP_API_BASE}/onboarding/session/gated-tools`, {

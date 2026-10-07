@@ -101,7 +101,7 @@ export function OnboardingContactStep({
         <div>
           <CardTitle>Get notified</CardTitle>
           <CardDescription>
-            Add channels to get notified about requests.
+            Add the channels where you want to hear about calls waiting for your approval.
           </CardDescription>
         </div>
       </CardHeader>
@@ -221,7 +221,8 @@ export function OnboardingRulesStep({
         <div>
           <CardTitle>Decide how each request reaches you</CardTitle>
           <CardDescription>
-            Choose which channels notify you, and when, for urgent and standard requests.
+            Choose which channels notify you, and when. Urgent and standard requests each have
+            their own order.
           </CardDescription>
         </div>
       </CardHeader>

@@ -28,8 +28,8 @@ export function LoadingEmptySection() {
         <DemoRow className="gap-6">
           <LoadingDots />
           <span className="inline-flex items-center gap-2 text-body text-ink-muted">
-            <LoadingDots aria-label="The assistant is working" />
-            The assistant is working
+            <LoadingDots aria-label="Waiting for new rules" />
+            Waiting for new rules
           </span>
         </DemoRow>
       </Demo>

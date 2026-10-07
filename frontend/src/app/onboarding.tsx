@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useNavigate, useRouter } from "@tanstack/react-router";
 import { Badge } from "@/ds/components/badge";
 import { Button } from "@/ds/components/button";
@@ -14,22 +14,14 @@ import {
 import { Checkbox } from "@/ds/components/checkbox";
 import { useCopyToClipboard } from "@/ds/components/copy-button";
 import { CodeBlock } from "@/ds/components/code-block";
-import {
-  CONDITION_OPERATORS,
-  describeField,
-  summarizeCondition,
-  type ConditionNode,
-} from "@/ds/components/condition-builder";
 import { ConfirmDialog } from "@/ds/components/confirm-dialog";
 import { EmptyState } from "@/ds/components/empty-state";
 import { HoverCard, HoverCardBody, HoverCardTitle } from "@/ds/components/hover-card";
 import { List, ListRowContent } from "@/ds/components/list";
 import { LoadingDots } from "@/ds/components/loading-dots";
-import { Markdown } from "@/ds/components/markdown";
 import { RadioCard, RadioGroup } from "@/ds/components/radio-group";
 import { Spinner } from "@/ds/components/spinner";
 import { Table } from "@/ds/components/table";
-import { TextArea } from "@/ds/components/text-area";
 import { TextField } from "@/ds/components/text-field";
 import { Stepper, type Step } from "@/ds/components/stepper";
 import { useSidebar } from "@/ds/components/sidebar-reopen";
@@ -39,18 +31,13 @@ import {
   AgentIcon,
   AlertIcon,
   CheckIcon,
-  ChevronDownIcon,
   CopyIcon,
-  MessageIcon,
   MonitorIcon,
   ToolIcon,
-  XCircleIcon,
 } from "@/ds/icons";
 import { cn } from "@/ds/lib/cn";
-import { api, RequestError } from "../api";
+import { api } from "../api";
 import type {
-  OnboardingAssistantAction,
-  OnboardingAssistantMessage,
   OnboardingBegin,
   OnboardingDetection,
   OnboardingDiscoveryError,
@@ -102,11 +89,8 @@ const STEPS: Array<Pick<Step, "title" | "description">> = [
   },
   { title: "Choose agents", description: "Pick the runtimes the CLI found." },
   { title: "Get notified", description: "Choose where you get notified." },
-  { title: "Set rules", description: "Decide how each request reaches you." },
-  {
-    title: "Choose tools",
-    description: "Choose which calls wait for you.",
-  },
+  { title: "Notification rules", description: "Decide how each request reaches you." },
+  { title: "Approval rules", description: "Decide which tool calls wait for you." },
   { title: "Test it", description: "Trigger a gated call and decide it here." },
 ];
 
@@ -153,8 +137,8 @@ function isTerminal(status: OnboardingStatus | null): boolean {
   return status === "completed" || status === "skipped";
 }
 
-/* The statuses in which the person's own steps (channels, rules, the
- * assistant) are open: agents chosen, session not over. */
+/* The statuses in which the person's own steps (channels, notification
+ * and approval rules) are open: agents chosen, session not over. */
 function inPersonalSteps(status: OnboardingStatus | null): boolean {
   return (
     status === "agents_selected" ||
@@ -211,7 +195,7 @@ function OnboardingFlow({ page }: { page: ChannelsPage }) {
    * test) and either name a way back. They change nothing about the
    * session, so they are open from anywhere past the agent choice. */
   const [settingsStage, setSettingsStage] = useState<SettingsStage>(null);
-  /* Back from the test to the assistant, to change the rules after
+  /* Back from the test to the approval rules, to change them after
    * seeing what a call looks like. */
   const [reviewingRules, setReviewingRules] = useState(false);
   /* Once the agents are provisioned there is no way back but a fresh
@@ -499,10 +483,9 @@ function OnboardingFlow({ page }: { page: ChannelsPage }) {
     );
   } else if (onTools) {
     pane = (
-      <ChooseToolsStep
+      <ApprovalRulesStep
         session={session}
         origin={config?.public_origin || window.location.origin}
-        assistantEnabled={config?.setup_assistant_enabled ?? false}
         onSession={setSession}
         onBack={beforeProvisioning ? () => setReviewingAgents(true) : () => setSettingsStage("rules")}
         backLabel={beforeProvisioning ? "Back to agents" : "Back"}
@@ -657,7 +640,10 @@ function InstallStep({
       <CardHeader>
         <div>
           <CardTitle>Connect your first agent</CardTitle>
-          <CardDescription>Install the withHuman CLI.</CardDescription>
+          <CardDescription>
+            Install the withHuman CLI on the machine your agent runs on. It sends each of the
+            agent's tool calls to withHuman before the call runs.
+          </CardDescription>
         </div>
       </CardHeader>
       <CardBody className="flex flex-col gap-4">
@@ -740,7 +726,8 @@ function ChooseAgentsStep({
             {installed.length > 0 ? (
               <>
                 We found {installed.length} {installed.length === 1 ? "agent" : "agents"} on{" "}
-                <MachineBadge name={hostname} />. Choose the ones to connect.
+                <MachineBadge name={hostname} />. Choose the ones to connect. Their tool calls
+                will go through your approval rules.
               </>
             ) : (
               <>
@@ -965,41 +952,38 @@ function agentsExist(status: OnboardingStatus): boolean {
   );
 }
 
-/* Starters for a person who has not put it in words yet: each adds
- * a phrase to the box. */
-const ASSISTANT_EXAMPLES = [
-  "Deleting files",
-  "Pushing to git",
-  "Deploys and rollbacks",
-  "Sending emails",
-  "Payments and refunds",
-];
+/* The two ways to answer the step's one question. */
+type Way = "agent" | "manual";
 
-/* The three ways to answer the step's one question. */
-type Way = "agent" | "describe" | "manual";
+/* Installs the published withHuman skills into the person's coding
+ * agent; withhuman-pipelines is the one the prompt names. */
+const SKILLS_COMMAND = "npx skills add https://withhuman.ai";
 
 /* Where a coding agent's MCP client reaches withHuman's own settings. */
 const MCP_PATH = "/api/mcp/v1";
 
 /* What to paste into a coding agent so it writes the rules through
- * withHuman's MCP server: connect, learn the grammar, ask, write,
- * check. Each agent's rules live in a branch of the entry pipeline
- * keyed by its runtime; the prompt names those branches and the
- * setup's escalation path so it touches nothing else. */
+ * withHuman's MCP server, guided by the withhuman-pipelines skill:
+ * connect, learn the grammar, read the agents' tools, propose what
+ * should wait, confirm with the person, write, check. Each agent's rules
+ * live in a branch of the entry pipeline keyed by its runtime; the
+ * prompt names those branches and the setup's escalation path so it
+ * touches nothing else. */
 function agentPrompt(origin: string, agents: { runtime: string; slug: string; name: string }[], pathKey: string): string {
   const endpoint = `${origin}${MCP_PATH}`;
   const list = agents.map((agent) => `${agent.name} (agent slug ${agent.slug}, branch id "${agent.runtime}")`).join(", ");
   return [
-    "Help me decide which of my AI agents' tool calls should wait for my approval in withHuman, then write those rules.",
+    "Use the withhuman-pipelines skill to help me decide which of my AI agents' tool calls should wait for my approval in withHuman, then write those rules.",
     "",
     "1. Connect the withHuman MCP server if it is not connected yet, and sign in when asked:",
     `   Claude Code: claude mcp add --transport http withhuman ${endpoint}`,
     `   Codex: codex mcp add withhuman --url ${endpoint}`,
     "2. Call read_reference to learn how pipeline blocks and conditions are written.",
     `3. Read the current rules with get_pipeline for pipeline_key "entry". Each of these agents has its own branch block at the top level: ${list}.`,
-    "4. Ask me what should wait for me, suggesting a few risky calls these agents can make. Keep reading, searching and tests running without me.",
-    `5. Write the rules with update_pipeline for pipeline_key "entry", changing only the blocks inside those branches and leaving every other block exactly as it is. Set escalation_path "${pathKey}" on every block that can send a call to me, and end each branch with an outcome block that approves the rest.`,
-    "6. Try two or three sample calls with preview_pipeline, one that should wait and one that should not, and tell me what happened.",
+    `4. List each agent's tools with list_tool_catalog (agent_slug ${agents.map((agent) => agent.slug).join(", ")}). Go through them and suggest which calls should wait for my approval because they are consequential: they delete or overwrite data, change things outside this machine (git pushes, deploys, cloud resources), send messages, or spend money. For tools that can do both safe and risky things, such as the shell, suggest rules on the arguments (for example git push or rm -rf) instead of gating the whole tool. Keep reading, searching and running tests without me.`,
+    "5. Show me your suggestions with a short reason for each, and ask me to confirm or change them before you write anything.",
+    `6. Write the rules with update_pipeline for pipeline_key "entry", changing only the blocks inside those branches and leaving every other block exactly as it is. Set escalation_path "${pathKey}" on every block that can send a call to me, and end each branch with an outcome block that approves the rest.`,
+    "7. Try two or three sample calls with preview_pipeline, one that should wait and one that should not, and tell me what happened.",
   ].join("\n");
 }
 
@@ -1010,18 +994,17 @@ function joinNames(names: string[]): string {
 }
 
 /*
- * The rules step: one question and three ways to answer it, as tiles
- * that each open their panel below: a prompt for the person's own
- * coding agent, a box to describe the rules in words for the setup
- * assistant, or a table per agent to tick tools by hand. Nothing is
+ * The approval rules step: one question and two ways to answer it, as
+ * tiles that each open their panel below: the withHuman skills and a
+ * prompt for the person's own coding agent, or a table per agent to
+ * tick tools by hand, which is only fit for a first try. Nothing is
  * chosen at first and the starting rules stand until something is
  * written. The agents are connected behind the question (provisioning,
  * enrolment, the hooks) and Continue opens once the hooks are installed.
  */
-function ChooseToolsStep({
+function ApprovalRulesStep({
   session,
   origin,
-  assistantEnabled,
   onSession,
   onBack,
   backLabel,
@@ -1032,7 +1015,6 @@ function ChooseToolsStep({
 }: {
   session: OnboardingSession;
   origin: string;
-  assistantEnabled: boolean;
   onSession: (next: OnboardingSession) => void;
   onBack: () => void;
   backLabel: string;
@@ -1046,7 +1028,6 @@ function ChooseToolsStep({
   const status = session.status;
   const hostname = session.machine.hostname || "this machine";
   const names = joinNames(runtimes.map(runtimeName));
-  const toast = useToast();
 
   /* Arriving here with the channels set and the tools discovered is
    * what provisions the agents: the choice of agents was made two steps
@@ -1096,51 +1077,10 @@ function ChooseToolsStep({
     /* version and the coding agent's poll are the triggers. */
   }, [exist, session.version, pipelineTick]);
 
-  /* The conversation with the assistant. Sending blocks the composer
-   * until the answer is back; the session stream shows the steps in
-   * between. A turn the server recorded as failed also arrives through
-   * the stream, so the toast only names what the stream cannot. */
-  const transcript = session.assistant;
-  const lastRunning =
-    transcript.length > 0 && transcript[transcript.length - 1].status === "running";
-  const [sending, setSending] = useState(false);
-  const [clearing, setClearing] = useState(false);
-  const busy = sending || lastRunning || clearing;
-  async function send(message: string) {
-    const trimmed = message.trim();
-    if (!trimmed || busy) return;
-    setSending(true);
-    try {
-      onSession(await api.onboardingAsk(trimmed));
-    } catch (reason) {
-      if (!(reason instanceof RequestError && reason.code === "onboarding_assistant_failed")) {
-        toast.add({
-          type: "deny",
-          title: "The assistant could not answer",
-          description: errorMessage(reason, ""),
-        });
-      }
-    } finally {
-      setSending(false);
-    }
-  }
-  async function clear() {
-    setClearing(true);
-    try {
-      onSession(await api.onboardingClearAssistant());
-    } catch (reason) {
-      toast.add({ type: "deny", title: "Could not start over", description: errorMessage(reason, "") });
-    } finally {
-      setClearing(false);
-    }
-  }
-
   const installed = status === "installed" || status === "tested";
-  const latest = latestTurn(transcript);
   const attention = session.install_results.filter((result) => !result.ok || result.manual);
-  /* Nothing is chosen until the person picks a way, unless they
-   * already talked to the assistant. */
-  const [way, setWay] = useState<Way | null>(transcript.length > 0 ? "describe" : null);
+  /* Nothing is chosen until the person picks a way. */
+  const [way, setWay] = useState<Way | null>(null);
 
   /* A coding agent writes through the MCP server, which the session
    * never hears about, so the rules are re-read while that way is open. */
@@ -1159,7 +1099,11 @@ function ChooseToolsStep({
     <Card>
       <CardHeader>
         <div className="flex flex-col gap-2">
-          <CardTitle>How would you like to set up your rules?</CardTitle>
+          <CardTitle>Set up your approval rules</CardTitle>
+          <CardDescription>
+            Approval rules let you choose which tool calls wait for your approval. All other calls
+            run right away. Your rules are saved in your approval pipeline.
+          </CardDescription>
           <ConnectionStatus
             session={session}
             names={names}
@@ -1178,29 +1122,25 @@ function ChooseToolsStep({
           aria-label="How to set up your rules"
           value={way}
           onValueChange={(next) => setWay(next as Way)}
-          className="grid grid-cols-1 gap-3 sm:grid-cols-3"
+          className="grid grid-cols-1 gap-3 sm:grid-cols-2"
         >
           <RadioCard
             value="agent"
             icon={<AgentIcon width={16} height={16} />}
-            label="With my coding agent"
-            description="Paste a prompt into your coding agent to write the rules."
-          />
-          <RadioCard
-            value="describe"
-            icon={<MessageIcon width={16} height={16} />}
-            label="Describe it in words"
-            description={
-              assistantEnabled
-                ? "Say what should wait for you."
-                : "Not available on this deployment."
+            label={
+              <span className="flex flex-wrap items-center gap-1.5">
+                Use your coding agent
+                <Badge fill icon={false}>
+                  Recommended
+                </Badge>
+              </span>
             }
-            disabled={!assistantEnabled}
+            description="Add the withHuman skills to your coding agent and write the rules together."
           />
           <RadioCard
             value="manual"
             icon={<ToolIcon width={16} height={16} />}
-            label="Pick tools myself"
+            label="Pick tools manually"
             description="Tick the tools that should wait for your approval."
           />
         </RadioGroup>
@@ -1211,20 +1151,12 @@ function ChooseToolsStep({
             ready={exist}
             entry={entry ?? null}
           />
-        ) : way === "describe" ? (
-          <WayPanel title="Describe it in your own words">
-            <DescribeWay
-              transcript={transcript}
-              latest={latest}
-              ready={exist}
-              busy={busy}
-              clearing={clearing}
-              onSend={(message) => void send(message)}
-              onClear={() => void clear()}
-            />
-          </WayPanel>
         ) : way === "manual" ? (
           <WayPanel title="Choose the tools that wait for you">
+            <Callout tone="warn" icon={<AlertIcon width={15} height={15} />}>
+              Every call to a tool you tick will wait for you, even the harmless ones. For real use,
+              set up your rules with your coding agent.
+            </Callout>
             <div className="flex flex-col gap-6">
               {runtimes.map((runtime) => (
                 <GatedToolsTable
@@ -1237,7 +1169,7 @@ function ChooseToolsStep({
                   tools={session.tools[runtime] ?? []}
                   errors={session.discovery_errors[runtime] ?? []}
                   gated={exist && entry !== undefined ? gatedToolsOf(entry, runtime) : null}
-                  ready={exist && entry !== undefined && !busy}
+                  ready={exist && entry !== undefined}
                   onSession={onSession}
                 />
               ))}
@@ -1256,7 +1188,7 @@ function ChooseToolsStep({
         </Button>
         <div className="flex items-center gap-3">
           <span className="text-label font-normal text-ink-muted">You can change this later.</span>
-          <Button variant="primary" loading={continuing} disabled={!installed || busy} onClick={onContinue}>
+          <Button variant="primary" loading={continuing} disabled={!installed} onClick={onContinue}>
             {returning ? "Back to the test" : "Continue"}
           </Button>
         </div>
@@ -1305,7 +1237,12 @@ function AgentWay({
     }
   }
   return (
-    <WayPanel title="Paste this into your coding agent">
+    <WayPanel title="Write the rules with your coding agent">
+      <div className="flex flex-col gap-2">
+        <StepLabel>1. Add the withHuman skills to your coding agent</StepLabel>
+        <CodeBlock code={SKILLS_COMMAND} className="bg-surface" />
+      </div>
+      <StepLabel>2. Paste this prompt into your coding agent</StepLabel>
       <p className="max-h-[400px] overflow-y-auto rounded-lg border-hairline border-edge bg-surface p-4 text-body leading-[21px] whitespace-pre-wrap text-ink-secondary [overflow-wrap:anywhere]">
         {prompt}
       </p>
@@ -1347,6 +1284,16 @@ function AgentWay({
         </Button>
       </div>
     </WayPanel>
+  );
+}
+
+/* A numbered step's quiet label inside a way's panel. */
+function StepLabel({ children }: { children: ReactNode }) {
+  return (
+    <div className="flex h-[26px] items-center gap-2 text-label text-ink-muted select-none">
+      <span>{children}</span>
+      <span className="flex-1 border-t-hairline border-edge" />
+    </div>
   );
 }
 
@@ -1403,204 +1350,6 @@ function ConnectionStatus({
   );
 }
 
-/* The latest exchange with the assistant: what the person said and the
- * reply, running, done, or failed. */
-function latestTurn(
-  transcript: OnboardingAssistantMessage[],
-): { ask: OnboardingAssistantMessage; reply: OnboardingAssistantMessage | null; earlier: number } | null {
-  let start = transcript.length - 1;
-  while (start >= 0 && transcript[start].role !== "user") start -= 1;
-  if (start < 0) return null;
-  const reply = transcript.slice(start + 1).find((message) => message.role === "assistant") ?? null;
-  return { ask: transcript[start], reply, earlier: transcript.slice(0, start).filter((m) => m.role === "user").length };
-}
-
-/* Inside the describe tile: the composer before the first message,
- * then what came of it and a box to refine. The rules themselves are
- * read in the third tile; the answer says what changed. */
-function DescribeWay({
-  transcript,
-  latest,
-  ready,
-  busy,
-  clearing,
-  onSend,
-  onClear,
-}: {
-  transcript: OnboardingAssistantMessage[];
-  latest: ReturnType<typeof latestTurn>;
-  ready: boolean;
-  busy: boolean;
-  clearing: boolean;
-  onSend: (message: string) => void;
-  onClear: () => void;
-}) {
-  const [draft, setDraft] = useState("");
-  const [stepsOpen, setStepsOpen] = useState(false);
-  useEffect(() => {
-    if (!busy) setDraft("");
-  }, [transcript.length, busy]);
-  function onKey(event: KeyboardEvent<HTMLTextAreaElement>) {
-    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-      event.preventDefault();
-      onSend(draft);
-    }
-  }
-  const composer = (placeholder: string, label: string, rows: number, aside: ReactNode) => (
-    <div className="flex flex-col gap-2.5">
-      <TextArea
-        aria-label="What should wait for you"
-        placeholder={ready ? placeholder : "Available once your agents are connected."}
-        value={draft}
-        rows={rows}
-        className={rows > 2 ? "min-h-[84px]" : undefined}
-        disabled={!ready || busy}
-        onChange={(event) => setDraft(event.target.value)}
-        onKeyDown={onKey}
-      />
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        {aside}
-        <Button variant="primary" size="sm" loading={busy && !clearing} disabled={!ready || !draft.trim()} onClick={() => onSend(draft)}>
-          {label}
-        </Button>
-      </div>
-    </div>
-  );
-
-  if (latest === null) {
-    return composer(
-      "Only kubectl commands that change the cluster should wait for my approval. Reading and tests can run.",
-      "Write the rules for me",
-      3,
-      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
-        {ASSISTANT_EXAMPLES.map((example) => (
-          <Button key={example} size="sm" variant="neutral" disabled={!ready || busy} onClick={() => setDraft((current) => addExample(current, example))}>
-            {example}
-          </Button>
-        ))}
-      </div>,
-    );
-  }
-
-  const reply = latest.reply;
-  const outcome = reply ? turnOutcome(reply) : null;
-  const actions = reply?.actions ?? [];
-  const refused = actions.filter((action) => !action.ok).length;
-  return (
-    <div className="flex flex-col gap-4">
-      <p className="text-body text-ink-muted">
-        You said: <span className="text-ink">&ldquo;{latest.ask.text}&rdquo;</span>
-      </p>
-      {reply === null || reply.status === "running" ? (
-        <div className="flex flex-col gap-2">
-          <span className="flex items-center gap-2 text-body text-ink-muted">
-            <LoadingDots aria-label="The assistant is working" />
-            Writing the rules
-          </span>
-          {actions.length > 0 ? <StepList actions={actions} /> : null}
-        </div>
-      ) : reply.status === "failed" ? (
-        <Callout tone="warn" title="The assistant could not finish">
-          {reply.error || "Try again, or say what to change."}
-        </Callout>
-      ) : (
-        <>
-          <div className="flex flex-col gap-2.5">
-            {outcome ? (
-              <Badge tone={outcome.tone} icon={false} className="self-start">
-                {outcome.label}
-              </Badge>
-            ) : null}
-            <Markdown className="text-body text-ink">{reply.text}</Markdown>
-          </div>
-          {actions.length > 0 ? (
-            <div className="flex flex-col gap-1.5">
-              <button
-                type="button"
-                className="flex items-center gap-1 self-start text-label text-ink-muted hover:text-ink"
-                aria-expanded={stepsOpen}
-                onClick={() => setStepsOpen((open) => !open)}
-              >
-                <ChevronDownIcon
-                  width={13}
-                  height={13}
-                  aria-hidden
-                  className={cn("transition-transform duration-150", !stepsOpen && "-rotate-90")}
-                />
-                {refused > 0
-                  ? `${actions.length} steps, ${refused} refused`
-                  : `Checked in ${actions.length} ${actions.length === 1 ? "step" : "steps"}`}
-              </button>
-              {stepsOpen ? <StepList actions={actions} /> : null}
-            </div>
-          ) : null}
-        </>
-      )}
-      {reply?.status !== "running"
-        ? composer(
-            "Change something? For example: also wait on git push.",
-            "Send",
-            2,
-            <Button size="sm" variant="ghost" loading={clearing} disabled={busy} onClick={onClear}>
-              Start over
-            </Button>,
-          )
-        : null}
-    </div>
-  );
-}
-
-/* A starter added to what the person has typed: the first opens a
- * sentence, later ones join its list while it is still the starters'
- * sentence, and anything else gets the starter appended. */
-const STARTER_SENTENCE = /^(.+?) should wait for my approval\.$/;
-function addExample(draft: string, example: string): string {
-  const trimmed = draft.trim();
-  if (!trimmed) return `${example} should wait for my approval.`;
-  if (trimmed.toLowerCase().includes(example.toLowerCase())) return draft;
-  const match = STARTER_SENTENCE.exec(trimmed);
-  if (!match) return `${trimmed} ${example} should wait too.`;
-  const items = match[1].split(/, | and /).map((item, index) => (index === 0 ? item : item.toLowerCase()));
-  items.push(example.toLowerCase());
-  return `${joinNames(items)} should wait for my approval.`;
-}
-
-/* The steps a turn took, one line each. */
-function StepList({ actions }: { actions: OnboardingAssistantAction[] }) {
-  return (
-    <ul className="flex flex-col gap-1">
-      {actions.map((action, index) => (
-        <li key={index} className="flex items-start gap-1.5 font-mono text-[11px] text-ink-secondary">
-          {action.ok ? (
-            <CheckIcon width={13} height={13} className="mt-[2px] shrink-0 text-approve" aria-hidden />
-          ) : (
-            <XCircleIcon width={13} height={13} className="mt-[2px] shrink-0 text-deny" aria-hidden />
-          )}
-          <span className={cn(!action.ok && "text-ink-muted")}>{action.summary}</span>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-const LIST_PREVIEW = 3;
-
-/* summarizeCondition with long list values shortened to the first few
- * and a count, recursing through groups the same way it does. */
-function describeCondition(node: ConditionNode, depth = 0): string {
-  const children = node.all ?? node.any;
-  if (children) {
-    const inner = children.map((child) => describeCondition(child, depth + 1)).join(node.all ? " and " : " or ");
-    return children.length <= 1 || depth === 0 ? inner : `(${inner})`;
-  }
-  if (Array.isArray(node.value) && node.value.length > LIST_PREVIEW + 1) {
-    const operator = CONDITION_OPERATORS.find((entry) => entry.value === node.operator);
-    const shown = node.value.slice(0, LIST_PREVIEW).map(String).join(", ");
-    return `${describeField(node.field ?? "").label} ${operator?.label ?? node.operator ?? ""} ${shown} and ${node.value.length - LIST_PREVIEW} more`;
-  }
-  return summarizeCondition(node, depth);
-}
-
 /* One runtime's rules: the top-level branch of the entry pipeline whose
  * block id is the runtime, as the guided setup writes it. */
 function runtimeBranchOf(entry: RequestApprovalPipelineRevision | null, runtime: string): StoredBranchBlock | undefined {
@@ -1612,7 +1361,7 @@ function runtimeBranchOf(entry: RequestApprovalPipelineRevision | null, runtime:
  * starting rule's shape: a branch on the tool name being one of a list
  * that holds one Outcome block asking a human. Read by shape, not by
  * block key, so the same rule written in the editor reads the same. An
- * empty set otherwise, because rules the assistant wrote do not reduce
+ * empty set otherwise, because rules a coding agent wrote do not reduce
  * to a list, and a missing branch gates nothing yet. */
 function gatedToolsOf(entry: RequestApprovalPipelineRevision | null, runtime: string): Set<string> {
   const first = runtimeBranchOf(entry, runtime)?.config.blocks[0];
@@ -1776,26 +1525,7 @@ function ToolSourceBadge({ tool }: { tool: OnboardingTool }) {
   );
 }
 
-/* The conversation, latest exchange first in view: what the person just
- * asked and what came of it. Earlier exchanges fold away behind one
- * line, so the step never grows into a log. */
-function turnOutcome(message: OnboardingAssistantMessage): { tone: "approve" | "warn" | "neutral"; label: string } | null {
-  const actions = message.actions ?? [];
-  if (message.status !== "done" || actions.length === 0) return null;
-  const written = actions
-    .filter((action) => action.ok && action.tool === "update_agent_rules")
-    .map((action) => /^Wrote (.+?)'s rules/.exec(action.summary)?.[1] ?? "")
-    .filter(Boolean);
-  if (written.length > 0) {
-    return { tone: "approve", label: `Rules updated for ${Array.from(new Set(written)).join(", ")}` };
-  }
-  const refused = actions.filter((action) => !action.ok).length;
-  return { tone: refused > 0 ? "warn" : "neutral", label: "No rules changed" };
-}
-
-/* One message of the conversation: the person's as plain text, the
- * assistant's as its outcome and answer, with the steps it took folded
- * behind one line (open while it works, so progress shows). */
+/* A runtime whose hooks need a hand: why, and the snippet to add. */
 function InstallCallout({ result }: { result: OnboardingInstallResult }) {
   const name = runtimeName(result.runtime);
   return (
@@ -1863,7 +1593,8 @@ function TestStep({
           <div>
             <CardTitle>Try it</CardTitle>
             <CardDescription>
-              Run this on <MachineBadge name={hostname} />, then approve or deny the request below.
+              Run this on <MachineBadge name={hostname} />. It makes a tool call your rules send to
+              you. Approve or deny it below.
             </CardDescription>
           </div>
         </CardHeader>

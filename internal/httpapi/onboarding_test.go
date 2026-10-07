@@ -332,14 +332,6 @@ func TestOnboardingRoutesSeparateTheTwoCredentialClasses(t *testing.T) {
 		t.Fatalf("report error: %d %s", response.Code, response.Body.String())
 	}
 
-	// The assistant is absent without a model, and the page learns so
-	// from runtime-config rather than a refused call.
-	if response := serve(router, onboardingRequest(http.MethodPost, "/api/v1/onboarding/session/assistant", map[string]any{"message": "gate kubectl"}, true, "")); response.Code != http.StatusNotImplemented || errorCode(t, response) != "setup_assistant_unconfigured" {
-		t.Fatalf("assistant without a model: %d %s", response.Code, response.Body.String())
-	}
-	if response := serve(router, onboardingRequest(http.MethodGet, "/api/runtime-config", nil, false, "")); response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"setup_assistant_enabled":false`) {
-		t.Fatalf("runtime-config: %d %s", response.Code, response.Body.String())
-	}
 	// The person's own steps are stamps, refused only outside the flow.
 	if response := serve(router, onboardingRequest(http.MethodPost, "/api/v1/onboarding/session/rules", nil, true, "")); response.Code != http.StatusConflict || errorCode(t, response) != "onboarding_session_state" {
 		t.Fatalf("rules before install: %d %s", response.Code, response.Body.String())

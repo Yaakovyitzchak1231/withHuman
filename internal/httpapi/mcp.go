@@ -39,21 +39,6 @@ func isMCPLoopback(ctx context.Context) bool {
 	return marked
 }
 
-// loopbackPrincipalKey carries an already-resolved principal into a
-// loopback request. The setup assistant runs the management tools under
-// the person's own browser session, which has no bearer to forward, so
-// the principal itself rides the context. Only in-process dispatch can
-// set it: an inbound HTTP request's context never carries the key.
-type loopbackPrincipalKey struct{}
-
-func loopbackPrincipal(ctx context.Context) (domain.Principal, bool) {
-	if !isMCPLoopback(ctx) {
-		return domain.Principal{}, false
-	}
-	principal, ok := ctx.Value(loopbackPrincipalKey{}).(domain.Principal)
-	return principal, ok
-}
-
 // installMCPRoutes mounts the streamable HTTP endpoint. Bearer
 // authentication happens here, with the same resolver every /api/v1
 // route uses; tool calls then re-enter /api/v1 in process carrying that
@@ -175,13 +160,11 @@ func (a *API) mcpServer() *mcp.Server {
 }
 
 // mcpCall is one tool invocation's door onto the product API: every
-// request it dispatches carries the caller's bearer and request id, or,
-// for the setup assistant, the person's resolved principal.
+// request it dispatches carries the caller's bearer and request id.
 type mcpCall struct {
-	api       *API
-	ctx       context.Context
-	header    http.Header
-	principal *domain.Principal
+	api    *API
+	ctx    context.Context
+	header http.Header
 }
 
 func (a *API) newMCPCall(ctx context.Context, request *mcp.CallToolRequest) *mcptools.Call {
@@ -238,16 +221,11 @@ func (c *mcpCall) dispatch(method, path string, query url.Values, body any, extr
 		reader = bytes.NewReader(nil)
 	}
 	ctx := context.WithValue(c.ctx, mcpLoopbackKey{}, true)
-	if c.principal != nil {
-		ctx = context.WithValue(ctx, loopbackPrincipalKey{}, *c.principal)
-	}
 	request, err := http.NewRequestWithContext(ctx, method, target, reader)
 	if err != nil {
 		return mcptools.Response{}, &mcptools.Refusal{Status: http.StatusBadRequest, Type: "invalid_request", Code: "invalid_request", Message: err.Error()}
 	}
-	if c.principal == nil {
-		request.Header.Set("Authorization", c.header.Get("Authorization"))
-	}
+	request.Header.Set("Authorization", c.header.Get("Authorization"))
 	request.Header.Set("Accept", "application/json")
 	if body != nil {
 		request.Header.Set("Content-Type", "application/json")
@@ -264,13 +242,6 @@ func (c *mcpCall) dispatch(method, path string, query url.Values, body any, extr
 	engine.ServeHTTP(recorder, request)
 	return mcptools.Response{Status: recorder.status, Header: recorder.header, Body: recorder.body.Bytes()}, nil
 }
-
-// mcpAssistantGrammar hands the setup assistant the deployment's block
-// grammar: the same appendix read_reference serves. The assistant's
-// tools are the setup's own, so nothing of the catalog is exposed to it.
-type mcpAssistantGrammar struct{ api *API }
-
-func (t mcpAssistantGrammar) Grammar() string { return t.api.compiledPipelines.Grammar() }
 
 // mcpServerState lives on the API so the catalog is built once per
 // process and shared by every stateless request. mcpTools are the

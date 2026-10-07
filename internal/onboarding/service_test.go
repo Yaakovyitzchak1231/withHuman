@@ -164,12 +164,6 @@ func (m *memorySessions) UpdateOnboardingSession(_ context.Context, input applic
 	if patch.RulesSetAt != nil {
 		session.RulesSetAt = patch.RulesSetAt
 	}
-	if patch.Assistant != nil {
-		session.Assistant = *patch.Assistant
-	}
-	if patch.AssistantContext != nil {
-		session.AssistantContext = *patch.AssistantContext
-	}
 	if patch.InstallResults != nil {
 		session.InstallResults = *patch.InstallResults
 	}
@@ -294,24 +288,9 @@ type pipelinesStub struct {
 	created   map[string][]approvalblock.Definition
 	activated map[string]int64
 	failOn    string
-	// previews records every sample the assistant checked, previewed the
-	// document the last one ran, and previewOutcome is what each answers.
-	previews       []approvalpipeline.PreviewSample
-	previewed      []approvalblock.Definition
-	previewOutcome approvalpipeline.BlockOutcome
 	// pending is the revision the last create produced, activated next.
 	pending     *approvalpipeline.PipelineRevision
 	activateErr error
-}
-
-func (p *pipelinesStub) Preview(_ context.Context, _ domain.Principal, _ string, definitions []approvalblock.Definition, _ approvalpipeline.Route, sample approvalpipeline.PreviewSample) (approvalpipeline.PreviewResult, error) {
-	p.previews = append(p.previews, sample)
-	p.previewed = definitions
-	outcome := p.previewOutcome
-	if outcome == "" {
-		outcome = approvalpipeline.BlockHuman
-	}
-	return approvalpipeline.PreviewResult{Outcome: outcome, TerminalBlockKey: "stub"}, nil
 }
 
 // GetActive answers like the real service: a pipeline nobody has edited

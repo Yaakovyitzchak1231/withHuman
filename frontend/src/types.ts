@@ -1462,27 +1462,6 @@ export interface OnboardingError {
   message: string;
 }
 
-/* One tool call the setup assistant made during a turn, as the page
- * shows it: the tool, one line of plain language, whether it went
- * through. */
-export interface OnboardingAssistantAction {
-  tool: string;
-  summary: string;
-  ok: boolean;
-}
-
-/* One message of the setup assistant's conversation. The person's carry
- * text alone; the assistant's carry its actions as they happen, its
- * answer once done, and an error in place of one when the turn failed. */
-export interface OnboardingAssistantMessage {
-  role: "user" | "assistant";
-  text: string;
-  actions: OnboardingAssistantAction[];
-  status: "running" | "done" | "failed";
-  error?: string;
-  at: string;
-}
-
 export interface OnboardingSession {
   id: string;
   organization_id: string;
@@ -1506,8 +1485,6 @@ export interface OnboardingSession {
    * counts the gated calls that arrived after it. */
   channels_set_at: string | null;
   rules_set_at: string | null;
-  /* The setup assistant's conversation, oldest first. */
-  assistant: OnboardingAssistantMessage[];
   last_error: OnboardingError | null;
   created_at: string;
   updated_at: string;

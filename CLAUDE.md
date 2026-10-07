@@ -756,10 +756,7 @@ Examples:
   to a human when the resume cannot run); the resume activity is budgeted
   from the webhook's worst case plus
   `blockruntime.MaximumEditionAsynchronousBudget`, which bounds what an
-  edition's asynchronous kinds may take together. The guided setup's
-  assistant runs on whatever `application.ToolUseModel` the edition hands
-  `runtime.ServerOptions.AssistantModel` (nil disables it and
-  `setup_assistant_enabled` reports false); core ships no model adapter.
+  edition's asynchronous kinds may take together.
 - Outcome blocks (type `outcome`, renamed from `always`) return their
   configured `outcome` (`approve`, `deny`, or `human`) for every request
   that reaches them. They use the synchronous envelope (50ms default, 1s
@@ -1018,32 +1015,14 @@ Examples:
   moment, because agent credentials are handed to the CLI once and
   never stored. Tool suggestions are deterministic
   (`internal/toolsuggest`) and carry a reason code; they seed the
-  starting branch. The rules step offers three ways: a prompt for
-  the person's own coding agent (which writes the entry pipeline
-  through the hosted MCP server while the page polls it), a gated-tools
-  table per agent (which rewrites that runtime's branch alone), and the
-  setup assistant
-  (`internal/onboarding/assistant.go`, `POST
-  /api/v1/onboarding/session/assistant`): the person describes in their
-  own words which calls should wait for them and the edition's assistant
-  model (`runtime.ServerOptions.AssistantModel`, an
-  `application.ToolUseModel`; the hosted edition hands over its judge
-  catalog's default model, and runtime-config reports
-  `setup_assistant_enabled`) writes the agents' branches through the
-  setup's own tools (`get_agent_rules`, `update_agent_rules`,
-  `preview_agent_rules`, `set_test_prompt`), implemented in the
-  onboarding service under the person's resolved principal, never a
-  bearer. The service confines it to the session's own runtimes, injects
-  the setup's path on every block that can hand to a human and names
-  none, and `set_test_prompt` previews the proposed sample against the
-  active entry pipeline and refuses one that would not reach a person
-  before it becomes the test command. The grammar the prompt and
-  `read_reference` share lives in `internal/mcpreference`
-  (`onboarding.AssistantGrammar`). The transcript
-  lives on the session (`assistant`, one action per tool call as it
-  happens, so the events stream shows progress); the model's context is
-  a column of its own. The grammar both the assistant's prompt and
-  `read_reference` serve lives in `internal/mcpreference`.
+  starting branch. The approval rules step offers two ways: the
+  published withHuman skills (`npx skills add https://withhuman.ai`)
+  plus a prompt for the person's own coding agent (which writes the
+  entry pipeline through the hosted MCP server while the page polls
+  it), recommended, and a gated-tools table per agent (which rewrites
+  that runtime's branch alone), offered only for a quick try. There is
+  no setup assistant: writing rules from a description is the coding
+  agent's job, through the skills and the MCP server.
   `organizations.onboarding_completed_at` drives the `/welcome` redirect
   through `/me`'s `onboarding.required`; finishing or skipping sets it.
   No adapter policy exists: every call an adapter or the gateway

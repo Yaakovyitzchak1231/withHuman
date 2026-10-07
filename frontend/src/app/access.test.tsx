@@ -25,7 +25,6 @@ const runtimeConfig = {
   version: "test",
   bootstrap_enabled: false,
   custom_permissions_enabled: false,
-  setup_assistant_enabled: false,
   webhook_enabled: false,
   slack_enabled: false,
   discord_enabled: false,

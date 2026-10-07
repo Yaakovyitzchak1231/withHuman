@@ -240,7 +240,7 @@ type Runtime struct {
 	// answers with. Both empty means the block can run.
 	Problem func(approvalblock.Definition) (code string, refusal error)
 	// Grammar is the kind's section of the pipeline_blocks reference the
-	// management MCP server and the setup assistant serve, in Markdown.
+	// management MCP server serves, in Markdown.
 	Grammar string
 }
 
