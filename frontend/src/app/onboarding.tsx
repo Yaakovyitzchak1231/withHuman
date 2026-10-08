@@ -492,11 +492,9 @@ function OnboardingFlow({ page }: { page: ChannelsPage }) {
         returning={reviewingRules && rulesDone}
         continuing={advancing}
         error={advanceError}
-        onContinue={
-          reviewingRules && rulesDone
-            ? () => setReviewingRules(false)
-            : () => void advance(() => api.onboardingRecordRules(), "Could not continue")
-        }
+        /* Every Continue chooses the test calls again, since the rules
+         * may have changed on the way back from the test. */
+        onContinue={() => void advance(() => api.onboardingRecordRules(), "Could not continue")}
       />
     );
   } else {
@@ -984,6 +982,7 @@ function agentPrompt(origin: string, agents: { runtime: string; slug: string; na
     "5. Show me your suggestions with a short reason for each, and ask me to confirm or change them before you write anything.",
     `6. Write the rules with update_pipeline for pipeline_key "entry", changing only the blocks inside those branches and leaving every other block exactly as it is. Set escalation_path "${pathKey}" on every block that can send a call to me, and end each branch with an outcome block that approves the rest.`,
     "7. Try two or three sample calls with preview_pipeline, one that should wait and one that should not, and tell me what happened.",
+    "8. For each agent, give me a prompt I can run that makes a call these rules send to me, so I can test the setup.",
   ].join("\n");
 }
 
@@ -1542,18 +1541,25 @@ function InstallCallout({ result }: { result: OnboardingInstallResult }) {
   );
 }
 
-/* The commands that make each enrolled runtime call a gated tool. */
+/* The commands that make each enrolled runtime call a gated tool. A
+ * runtime without one has rules that let every simple test call run,
+ * so the person asks their coding agent for a prompt that does not. */
 function TestCommands({ session }: { session: OnboardingSession }) {
-  const runtimes = session.selected_runtimes.filter((runtime) => session.test_commands[runtime]);
   return (
     <>
-      {runtimes.map((runtime) => {
+      {session.selected_runtimes.map((runtime) => {
         const test = session.test_commands[runtime];
-        return (
+        const name = runtimeName(runtime);
+        return test ? (
           <div key={runtime} className="flex flex-col gap-1.5">
-            <CodeBlock label={runtimeName(runtime)} code={test.command} />
+            <CodeBlock label={name} code={test.command} />
             {test.note ? <p className="text-label font-normal text-ink-muted">{test.note}</p> : null}
           </div>
+        ) : (
+          <Callout key={runtime} tone="neutral" title={`No test command for ${name}`}>
+            Your rules let the simple test calls run without you. Ask your coding agent for a
+            prompt that needs your approval, and give it to {name}.
+          </Callout>
         );
       })}
     </>
@@ -1586,6 +1592,9 @@ function TestStep({
   const attention = session.install_results.filter((result) => !result.ok || result.manual);
   const lines = page.rules ? ladderLines(page.rules.standard, page.methods) : [];
   const decided = activity.closed[0] ?? null;
+  /* Whether any agent has a stock test command; without one the person
+   * runs a prompt their coding agent gave them. */
+  const commanded = session.selected_runtimes.some((runtime) => session.test_commands[runtime]);
   return (
     <div className="flex flex-col gap-4">
       <Card>
@@ -1593,8 +1602,17 @@ function TestStep({
           <div>
             <CardTitle>Try it</CardTitle>
             <CardDescription>
-              Run this on <MachineBadge name={hostname} />. It makes a tool call your rules send to
-              you. Approve or deny it below.
+              {commanded ? (
+                <>
+                  Run this on <MachineBadge name={hostname} />. It makes a tool call your rules send
+                  to you. Approve or deny it below.
+                </>
+              ) : (
+                <>
+                  On <MachineBadge name={hostname} />, give your agent a prompt that needs your
+                  approval. Approve or deny the request below.
+                </>
+              )}
             </CardDescription>
           </div>
         </CardHeader>
@@ -1628,7 +1646,9 @@ function TestStep({
 
       <OnboardingApprovals
         activity={activity}
-        waitingDescription="Run the command above. The request will appear here."
+        waitingDescription={
+          commanded ? "Run the command above. The request will appear here." : "The request will appear here."
+        }
         next={
           decided ? (
             /* One row: the question and its "no" on the left, Finish on the right. */

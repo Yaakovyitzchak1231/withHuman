@@ -1000,7 +1000,13 @@ Examples:
   but them are stamps, not statuses: the Notifications settings inside
   the flow come right after the agent choice and stamp
   `channels_set_at`, which provisioning requires; the rules step stamps
-  `rules_set_at` once the hooks are in; the CLI is done at `installed`;
+  `rules_set_at` once the hooks are in (the first time only) and, every
+  time it is left, chooses `test_commands` by previewing the stock test
+  calls against the active entry pipeline (`internal/onboarding/testcall.go`:
+  shell, then a file write, then MCP tools other than
+  `toolsuggest.Irreversible` ones; a runtime nothing reaches a person
+  for gets no command, and the page sends the person to their coding
+  agent for a prompt); the CLI is done at `installed`;
   the person then records the request they decided in the one test
   (`tested`, checked against an enrolled agent) and finishes, which
   requires `tested`. Provisioning (the escalation path that notifies

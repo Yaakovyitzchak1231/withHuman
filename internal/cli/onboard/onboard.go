@@ -256,8 +256,8 @@ func (r *runner) run(ctx context.Context) error {
 		return r.fail(ctx, "report_failed", fmt.Errorf("report install results: %w", err))
 	}
 	r.version = session.Version
-	r.event("installed", "", map[string]any{"results": results, "test_commands": session.TestCommands})
-	r.printSummary(results, session.TestCommands)
+	r.event("installed", "", map[string]any{"results": results})
+	r.printSummary(results)
 	for _, result := range results {
 		if !result.OK {
 			return errors.New("adapter registration is incomplete; follow the installation notes and run agent install for the affected runtime")
@@ -385,7 +385,7 @@ func (r *runner) install(ctx context.Context, detections []domain.OnboardingDete
 	return results, nil
 }
 
-func (r *runner) printSummary(results []domain.OnboardingInstallResult, commands map[string]domain.OnboardingTestCommand) {
+func (r *runner) printSummary(results []domain.OnboardingInstallResult) {
 	if r.opts.JSON {
 		return
 	}
@@ -408,17 +408,7 @@ func (r *runner) printSummary(results []domain.OnboardingInstallResult, commands
 		fmt.Fprintln(w, "Repair the reported installation steps and rerun onboarding, or use withhuman agent eject <runtime> --yes.")
 		return
 	}
-	if len(commands) > 0 {
-		fmt.Fprintln(w, "\nHooks are in place. Make each agent call a gated tool:")
-		for _, runtime := range sortedKeys(commands) {
-			command := commands[runtime]
-			fmt.Fprintf(w, "\n  %s (%s):\n    %s\n", displayName(agentruntime.Key(runtime)), command.Tool, command.Command)
-			if command.Note != "" {
-				fmt.Fprintf(w, "    %s\n", command.Note)
-			}
-		}
-	}
-	fmt.Fprintln(w, "\nFinish in the browser: the request appears there for you to approve or deny.")
+	fmt.Fprintln(w, "\nHooks are in place. Finish in the browser: set up your approval rules, then run the test it shows.")
 }
 
 func machine(version string) domain.OnboardingMachine {

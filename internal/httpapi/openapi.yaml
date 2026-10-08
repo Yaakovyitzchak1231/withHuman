@@ -4514,7 +4514,7 @@ paths:
       x-withhuman-permission: agent.write
       x-withhuman-credential-kinds: [session, personal_api_key]
       security: [{ cookieAuth: [] }, { apiKeyAuth: [] }]
-      description: Allowed from provisioning until the session ends, once the agents exist. The quick-try alternative to writing the rules with a coding agent. Rewrites the runtime's branch of the entry pipeline with the starting shape, the named tools to a human and every other call approved, and picks the test command from them; an empty list makes every call run. 409 entry_pipeline_changed when the entry pipeline moved under the write. Every name must have been discovered for the runtime (400 tool_not_discovered); the runtime must be one the session selected (400 runtime_not_selected).
+      description: Allowed from provisioning until the session ends, once the agents exist. The quick-try alternative to writing the rules with a coding agent. Rewrites the runtime's branch of the entry pipeline with the starting shape, the named tools to a human and every other call approved; an empty list makes every call run. 409 entry_pipeline_changed when the entry pipeline moved under the write. Every name must have been discovered for the runtime (400 tool_not_discovered); the runtime must be one the session selected (400 runtime_not_selected).
       requestBody:
         required: true
         content:
@@ -4529,7 +4529,7 @@ paths:
                   items: { type: string }
       responses:
         "200":
-          description: The session with the test command updated
+          description: The session after the write
           content:
             application/json:
               schema: { $ref: "#/components/schemas/OnboardingSession" }
@@ -4545,10 +4545,10 @@ paths:
       x-withhuman-permission: agent.write
       x-withhuman-credential-kinds: [session, personal_api_key]
       security: [{ cookieAuth: [] }, { apiKeyAuth: [] }]
-      description: Allowed in installed and tested; the status does not move. Stamps rules_set_at, so the test step counts the gated calls that arrive after it.
+      description: Allowed in installed and tested; the status does not move. Stamps rules_set_at the first time, so the test step counts the gated calls that arrive after it, and chooses `test_commands` against the active entry pipeline each time. A runtime gets the first stock test call (a shell command, a file write, then an MCP tool) that previews as `human` under the active rules, and no command when none does. Previewing really calls any webhook block the call reaches.
       responses:
         "200":
-          description: The session with rules_set_at stamped
+          description: The session with rules_set_at stamped and its test commands chosen
           content:
             application/json:
               schema: { $ref: "#/components/schemas/OnboardingSession" }
@@ -4877,7 +4877,7 @@ paths:
       operationId: reportOnboardingInstall
       x-withhuman-permission: self
       security: [{ bearerAuth: [] }]
-      description: One result per selected runtime. Moves the session to installed and fills test_commands.
+      description: One result per selected runtime. Moves the session to installed. The test commands wait for the rules step.
       requestBody:
         required: true
         content:
@@ -6077,6 +6077,7 @@ components:
           items: { $ref: "#/components/schemas/OnboardingInstallResult" }
         test_commands:
           type: object
+          description: "Per runtime, the command that makes it make a call the active rules send to the caller. Chosen when the caller leaves the rules step; a runtime is missing when no stock test call would reach them."
           additionalProperties: { $ref: "#/components/schemas/OnboardingTestCommand" }
         test_request_id: { type: [string, "null"], format: uuid }
         tested_at: { type: [string, "null"], format: date-time }

@@ -289,9 +289,16 @@ type Command struct {
 	Note  string `json:"note,omitempty"`
 }
 
+// The test prompts ask for a harmless call whose arguments are known in
+// advance, so onboarding can check the call against the active rules
+// before it shows the command.
 const (
-	shellPrompt = "Run this shell command and show me the output: echo hello from withHuman"
-	editPrompt  = "Create a file named withhuman-test.txt in the current directory containing the single line: hello from withHuman"
+	TestShellCommand = "echo hello from withHuman"
+	TestFileName     = "withhuman-test.txt"
+	TestFileContent  = "hello from withHuman"
+
+	shellPrompt = "Run this shell command and show me the output: " + TestShellCommand
+	editPrompt  = "Create a file named " + TestFileName + " in the current directory containing the single line: " + TestFileContent
 )
 
 func mcpPrompt(tool SelectedTool) string {

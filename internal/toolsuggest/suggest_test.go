@@ -84,3 +84,26 @@ func TestTokens(t *testing.T) {
 		}
 	}
 }
+
+func TestIrreversible(t *testing.T) {
+	yes := true
+	no := false
+	for _, test := range []struct {
+		tool Tool
+		want bool
+	}{
+		{Tool{Name: "delete_repository"}, true},
+		{Tool{Name: "sendEmail"}, true},
+		{Tool{Name: "create_refund"}, true},
+		{Tool{Name: "git_push"}, true},
+		{Tool{Name: "create_pull_request"}, false},
+		{Tool{Name: "list_issues"}, false},
+		{Tool{Name: "update_ticket"}, false},
+		{Tool{Name: "archive_note", Annotations: &Annotations{DestructiveHint: &yes}}, true},
+		{Tool{Name: "update_ticket", Annotations: &Annotations{DestructiveHint: &no}}, false},
+	} {
+		if got := Irreversible(test.tool); got != test.want {
+			t.Errorf("Irreversible(%s) = %v, want %v", test.tool.Name, got, test.want)
+		}
+	}
+}

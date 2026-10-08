@@ -53,6 +53,10 @@ const (
 
 var mutatingVerbs = words("delete remove destroy drop purge send email post publish deploy release push merge pay refund charge transfer withdraw execute exec run create insert upsert update write set patch put cancel revoke grant approve reject kill terminate restart shutdown rotate reset")
 
+// irreversibleVerbs are the mutating verbs whose effect cannot be taken
+// back: data gone, a message sent, money moved, a release out.
+var irreversibleVerbs = words("delete remove destroy drop purge send email post publish deploy release push merge pay refund charge transfer withdraw cancel revoke kill terminate shutdown rotate reset")
+
 var readVerbs = words("get list read search fetch describe find query show view count check lookup retrieve status preview validate ping echo head")
 
 func words(list string) map[string]bool {
@@ -118,6 +122,23 @@ func verbVerdict(tokens []string) (Verdict, bool) {
 		}
 	}
 	return Verdict{}, false
+}
+
+// Irreversible reports whether calling the tool may do something that
+// cannot be undone: the server marks it destructive, or any word of its
+// name is one whose effect stays (delete_repository, send_email,
+// create_refund). It errs towards yes: onboarding never asks an agent to
+// call such a tool as a test, and a tool wrongly kept out costs nothing.
+func Irreversible(tool Tool) bool {
+	if tool.Annotations != nil && tool.Annotations.DestructiveHint != nil && *tool.Annotations.DestructiveHint {
+		return true
+	}
+	for _, token := range tokens(tool.Name) {
+		if irreversibleVerbs[token] || irreversibleVerbs[strings.TrimSuffix(token, "s")] {
+			return true
+		}
+	}
+	return false
 }
 
 // SuggestAll judges every tool in order.

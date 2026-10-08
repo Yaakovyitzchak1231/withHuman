@@ -61,8 +61,7 @@ func TestSetGatedToolsRewritesTheStartingRules(t *testing.T) {
 	if _, err := h.service.SetGatedTools(ctx, h.principal, "claude-code", []string{"Bash"}); !errors.As(err, &step) || step.Code != "runtime_not_selected" {
 		t.Fatalf("foreign runtime: %v", err)
 	}
-	session, err := h.service.SetGatedTools(ctx, h.principal, "codex", []string{"Read", "Bash", "Read"})
-	if err != nil {
+	if _, err := h.service.SetGatedTools(ctx, h.principal, "codex", []string{"Read", "Bash", "Read"}); err != nil {
 		t.Fatalf("SetGatedTools: %v", err)
 	}
 	if got := GatedToolsOf(h.pipelines.entryBlocks(), "codex"); strings.Join(got, ",") != "Bash,Read" {
@@ -71,14 +70,10 @@ func TestSetGatedToolsRewritesTheStartingRules(t *testing.T) {
 	if h.pipelines.activated[EntryPipelineKey] != 2 {
 		t.Fatalf("activation should carry the provisioned revision, got %v", h.pipelines.activated[EntryPipelineKey])
 	}
-	if command := session.TestCommands["codex"]; command.Tool != "Bash" {
-		t.Fatalf("test command should follow the choice: %+v", command)
-	}
-	session, err = h.service.SetGatedTools(ctx, h.principal, "codex", nil)
-	if err != nil {
+	if _, err := h.service.SetGatedTools(ctx, h.principal, "codex", nil); err != nil {
 		t.Fatalf("empty list: %v", err)
 	}
-	if _, ok := session.TestCommands["codex"]; ok || len(GatedToolsOf(h.pipelines.entryBlocks(), "codex")) != 0 {
-		t.Fatalf("nothing gated should leave no test: %+v", session.TestCommands)
+	if len(GatedToolsOf(h.pipelines.entryBlocks(), "codex")) != 0 {
+		t.Fatal("an empty list should gate nothing")
 	}
 }
