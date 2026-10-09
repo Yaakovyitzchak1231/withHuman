@@ -2,7 +2,6 @@ import { AgentToolsPanel } from "./agent-tools";
 import type { AgentCatalogData } from "./tool-catalog";
 import { useState, type FormEvent, type ReactNode } from "react";
 import {
-  Link,
   useNavigate,
   useRouter,
   useRouterState,
@@ -33,14 +32,10 @@ import { TextField } from "@/ds/components/text-field";
 import { useToast } from "@/ds/components/toast";
 import { Page } from "@/ds/components/page";
 import { PageHeader, PageBackLink } from "@/ds/components/page-header";
-import { focusRing } from "@/ds/lib/focus";
 import {
   AgentIcon,
   ShieldIcon,
-  ChevronRightIcon,
   EllipsisIcon,
-  LockIcon,
-  LogIcon,
 } from "@/ds/icons";
 import { api } from "../api";
 import type {
@@ -79,8 +74,7 @@ export interface AgentPage {
 }
 
 /* One agent: its instances with their credential state, its provisioner
- * tokens, the policy that decides its requests, and what it has asked
- * for recently. Reading needs agent.read; the actions check agent.write,
+ * tokens, and what it has asked for. Reading needs agent.read; the actions check agent.write,
  * agent.credential.issue, and agent.credential.revoke against the
  * agent itself (its slug), so a grant scoped to one agent opens only
  * that agent. */
@@ -98,7 +92,7 @@ export function AgentScreen({ page }: { page: AgentPage }) {
   const busy = useRouterState({
     select: (state) => state.status === "pending",
   });
-  const tab = search.tab ?? "overview";
+  const tab = search.tab ?? "instances";
   const pageIndex = search.page ?? 0;
   const changeSearch = (next: AgentSearch) =>
     void navigate({
@@ -640,16 +634,9 @@ export function AgentScreen({ page }: { page: AgentPage }) {
       ) : null}
       <Tabs
         value={tab}
-        onValueChange={(value) =>
-          changeSearch({
-            tab: value === "overview" ? undefined : String(value),
-          })
-        }
+        onValueChange={(value) => changeSearch({ tab: String(value) })}
       >
         <TabsList aria-label="Agent sections" className="gap-6 overflow-x-auto overflow-y-hidden">
-          <Tab value="overview" className="px-0">
-            Overview
-          </Tab>
           {personal ? null : (
             <Tab value="provisioners" className="px-0">
               Provisioner tokens
@@ -689,86 +676,6 @@ export function AgentScreen({ page }: { page: AgentPage }) {
             </TabPanel>
           );
         })}
-        <TabPanel value="overview" className="space-y-3">
-          <Card>
-            <Link
-              to="/agents/$agentSlug"
-              params={{ agentSlug: agent.slug }}
-              search={{ tab: "requests" }}
-              className={`flex items-center gap-3 rounded-lg px-5 py-5 transition-colors hover:bg-fill-hover ${focusRing}`}
-            >
-              <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-fill-hover text-ink-muted">
-                <LogIcon width={18} height={18} />
-              </span>
-              <div className="min-w-0 flex-1">
-                <h3 className="text-body font-medium text-ink">
-                  Approval requests
-                </h3>
-                <p className="text-label font-normal text-ink-muted">
-                  {agent.recent_request_count.toLocaleString()} in the last 7
-                  days.
-                </p>
-              </div>
-              <span className="text-title-lg tabular-nums text-ink">
-                {agent.request_count.toLocaleString()}
-              </span>
-              <ChevronRightIcon
-                width={14}
-                height={14}
-                className="shrink-0 text-ink-muted"
-              />
-            </Link>
-          </Card>
-          {(
-            [
-              {
-                title: "Instances",
-                count: agent.instance_count,
-                description: `${agent.live_instance_count.toLocaleString()} with a live credential.`,
-                icon: <AgentIcon width={18} height={18} />,
-                search: { tab: "instances" },
-              },
-              {
-                title: "Provisioner tokens",
-                count: agent.provisioner_count,
-                description: "Let your platform register instances.",
-                icon: <LockIcon width={18} height={18} />,
-                search: { tab: "provisioners" },
-              },
-            ] as const
-          )
-            .filter((item) => !personal || item.search.tab !== "provisioners")
-            .map((item) => (
-            <Card key={item.title}>
-              <Link
-                to="/agents/$agentSlug"
-                params={{ agentSlug: agent.slug }}
-                search={item.search}
-                className={`flex items-center gap-3 rounded-lg px-5 py-5 transition-colors hover:bg-fill-hover ${focusRing}`}
-              >
-                <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-fill-hover text-ink-muted">
-                  {item.icon}
-                </span>
-                <div className="min-w-0 flex-1">
-                  <h3 className="text-body font-medium text-ink">
-                    {item.title}
-                  </h3>
-                  <p className="text-label font-normal text-ink-muted">
-                    {item.description}
-                  </p>
-                </div>
-                <span className="text-title-lg tabular-nums text-ink">
-                  {item.count.toLocaleString()}
-                </span>
-                <ChevronRightIcon
-                  width={14}
-                  height={14}
-                  className="shrink-0 text-ink-muted"
-                />
-              </Link>
-            </Card>
-          ))}
-        </TabPanel>
         <TabPanel value="provisioners" className="space-y-4">
           <AgentListFilters
             search={search}

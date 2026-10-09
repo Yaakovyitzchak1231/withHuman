@@ -3,8 +3,8 @@ import { agentTab } from "./extensions";
 
 export const AGENT_PAGE_SIZE = 25;
 export interface AgentSearch {
-  /* One of core's tabs (overview when absent, provisioners, instances,
-   * requests, tools) or the id of a tab the edition registered. */
+  /* One of core's tabs (instances, provisioners, requests, tools) or the
+   * id of a tab the edition registered. Validation fills in instances. */
   tab?: string;
   q?: string;
   /* A tool source's name: the runtime's own or one the edition adds. */
@@ -23,9 +23,8 @@ function coreTab(value: unknown): value is "provisioners" | "instances" | "reque
 
 export function validateAgentSearch(raw: Record<string, unknown>): AgentSearch {
   const editionTab = typeof raw.tab === "string" ? agentTab(raw.tab) : undefined;
-  const tab = coreTab(raw.tab) ? raw.tab : editionTab ? editionTab.id : "overview";
-  const search: AgentSearch = tab === "overview" ? {} : { tab };
-  if (tab === "overview") return search;
+  const tab = coreTab(raw.tab) ? raw.tab : editionTab ? editionTab.id : "instances";
+  const search: AgentSearch = { tab };
   if (editionTab) {
     /* An edition tab filters client side, so its search is kept exactly
      * as typed and nothing else carries over from the lists. */

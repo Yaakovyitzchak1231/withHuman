@@ -1388,10 +1388,10 @@ Examples:
   Contributor-only skills go in `.agents/skills/` with
   `metadata: internal: true`.
 
-- The single-agent page has Overview, Provisioner tokens, Instances, Approval
+- The single-agent page has Provisioner tokens, Instances, Approval
   requests, and Tool Catalogue tabs, plus the tabs an edition registers
-  (`extensions.agentTabs`; the hosted Gateway Tools tab). Overview uses a single column of cards linking to the pipeline
-  and each table. The Provisioner tokens
+  (`extensions.agentTabs`; the hosted Gateway Tools tab). It opens on
+  Instances when the URL names no tab. The Provisioner tokens
   tab contains the provisioner table. Tokens page with `provisioner_limit`,
   `provisioner_offset`, `provisioner_q`, and `provisioner_status`. Search matches
   identifiers, never secrets. Revoked status takes precedence over expiry.
