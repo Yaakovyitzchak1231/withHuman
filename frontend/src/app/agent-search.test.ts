@@ -48,15 +48,16 @@ describe("agent page URLs", () => {
     ).toEqual({ tab: "provisioners" });
   });
 
-  it("keeps Overview free of table filters", () => {
+  it("opens on Instances when no tab is named", () => {
     expect(
       validateAgentSearch({ q: "production", status: "active", page: 2 }),
-    ).toEqual({});
-    expect(validateAgentSearch({ tab: "unknown" })).toEqual({});
+    ).toEqual({ tab: "instances", q: "production", status: "active", page: 2 });
+    expect(validateAgentSearch({ tab: "overview" })).toEqual({ tab: "instances" });
+    expect(validateAgentSearch({ tab: "unknown" })).toEqual({ tab: "instances" });
   });
 
   it("rejects statuses belonging to the other list and invalid page offsets", () => {
-    expect(validateAgentSearch({ status: "approved", page: -2 })).toEqual({});
+    expect(validateAgentSearch({ status: "approved", page: -2 })).toEqual({ tab: "instances" });
     expect(
       validateAgentSearch({
         tab: "requests",
@@ -64,6 +65,6 @@ describe("agent page URLs", () => {
         page: Infinity,
       }),
     ).toEqual({ tab: "requests" });
-    expect(validateAgentSearch({ page: 1.5 })).toEqual({});
+    expect(validateAgentSearch({ page: 1.5 })).toEqual({ tab: "instances" });
   });
 });

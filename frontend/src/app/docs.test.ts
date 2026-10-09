@@ -19,7 +19,7 @@ describe("contextual documentation", () => {
     for (const trailingSlash of ["", "/"]) {
       const path = `/agents/support${trailingSlash}`;
       expect(docsForPath(path, { tab: "provisioners", page: 2, q: "token" }).href).toBe("https://withhuman.ai/docs/web-app/provisioner-tokens");
-      for (const tab of [undefined, "overview", "instances", "requests", "unknown"]) {
+      for (const tab of [undefined, "instances", "requests", "unknown"]) {
         expect(docsForPath(path, { tab }).href).toBe("https://withhuman.ai/docs/web-app/agents");
       }
     }
