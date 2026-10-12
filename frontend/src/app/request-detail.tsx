@@ -663,6 +663,24 @@ export function RequestDetail({
             </span>
           }
         />
+        {request.consumption ? (
+          <Fact label="Used" first value={<When at={request.consumption.consumed_at} now={now} />} />
+        ) : null}
+        {request.consumption?.outcome ? (
+          <Fact
+            label="Result"
+            value={
+              <span className="flex flex-col items-start gap-0.5">
+                <Badge className="-ml-2" tone={request.consumption.outcome.status === "succeeded" ? "approve" : "deny"}>
+                  {request.consumption.outcome.status === "succeeded" ? "Succeeded" : "Failed"}
+                </Badge>
+                {request.consumption.outcome.note ? (
+                  <span className="text-label font-normal text-ink-faint">{request.consumption.outcome.note}</span>
+                ) : null}
+              </span>
+            }
+          />
+        ) : null}
         {Cause ? <Cause request={request} /> : null}
       </div>
 
@@ -1044,6 +1062,27 @@ export function requestMoments(
         </>
       ),
       detail: "the agent was told and continued",
+    });
+  }
+  const consumption = request.consumption;
+  if (consumption) {
+    list.push({
+      key: "used",
+      at: consumption.consumed_at,
+      tone: "neutral",
+      title: <>Used by {agent}</>,
+      detail: "the call started",
+    });
+  }
+  if (consumption?.outcome) {
+    const succeeded = consumption.outcome.status === "succeeded";
+    list.push({
+      key: "result",
+      at: consumption.outcome.reported_at,
+      tone: succeeded ? "approve" : "deny",
+      marker: succeeded ? <CheckIcon width={14} height={14} /> : <XIcon width={14} height={14} />,
+      title: succeeded ? "Call succeeded" : "Call failed",
+      detail: consumption.outcome.note,
     });
   }
   list.sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime());
