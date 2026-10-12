@@ -655,8 +655,11 @@ Examples:
   and exactly one active revision per live key at all times (a deferred
   constraint trigger refuses leaving a key without an active row). Every
   organization has the reserved `entry` pipeline (`domain.EntryPipelineKey`,
-  seeded empty and active in the activation transaction by
-  `ensureEntryPipeline`), which every request runs; every other pipeline
+  seeded active in the activation transaction by `ensureEntryPipeline`
+  with one outcome block, `approve-every-call`, so an agent connected
+  before anyone writes a rule is never held; running out of blocks stays
+  a human outcome, and removing that block is how an organization starts
+  sending calls to people), which every request runs; every other pipeline
   is created explicitly (`POST /api/v1/request-approval-pipelines` with
   `pipeline_key`, `name` and its first revision, organization-scope
   `pipeline.write`, 409 `request_approval_pipeline_exists` on any key

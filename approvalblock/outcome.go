@@ -9,6 +9,10 @@ import (
 // "If this, then that" is a branch whose blocks end in one.
 const TypeOutcome BlockType = "outcome"
 
+// OutcomeConfigVersion is the version an outcome block's stored config
+// is stamped with.
+const OutcomeConfigVersion = 1
+
 type OutcomeConfig struct {
 	Outcome        Outcome `json:"outcome"`
 	Reason         string  `json:"reason"`

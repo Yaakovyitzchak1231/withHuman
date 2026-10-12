@@ -105,9 +105,14 @@ session=$(curl --silent --fail --cookie "$cookie_jar" "$app_api/onboarding/sessi
 agent_slug=$(printf '%s' "$session" | jq -r '.enrollments[0].agent_slug')
 test "$agent_slug" = "claude-code"
 printf '%s' "$session" | jq -e '.install_results[0].ok == true and .test_commands == {}' >/dev/null
-# Leaving the rules step chooses the test call the starting rules hold.
+# The starting rules approve every call, so leaving the rules step finds
+# no test call; once Bash is picked by hand, the test makes it.
 curl --silent --fail --cookie "$cookie_jar" --request POST --header "Origin: $origin" "$app_api/onboarding/session/rules" \
-  | jq -e '.status == "installed" and .rules_set_at != null and (.test_commands["claude-code"].command | startswith("claude -p"))' >/dev/null
+  | jq -e '.status == "installed" and .rules_set_at != null and .test_commands == {}' >/dev/null
+curl --silent --fail --cookie "$cookie_jar" --request PUT --header 'Content-Type: application/json' --header "Origin: $origin" \
+  --data '{"runtime":"claude-code","tools":["Bash"]}' "$app_api/onboarding/session/gated-tools" >/dev/null
+curl --silent --fail --cookie "$cookie_jar" --request POST --header "Origin: $origin" "$app_api/onboarding/session/rules" \
+  | jq -e '.status == "installed" and (.test_commands["claude-code"].command | startswith("claude -p"))' >/dev/null
 jq -e '[.hooks.PreToolUse[]?.hooks[]?.command | select(contains("hook claude-code"))] | length == 1' "$runtime_home/.claude/settings.json" >/dev/null
 test -f "$config_dir/credentials/claude-code.json"
 

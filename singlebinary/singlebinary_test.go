@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -90,6 +91,24 @@ func TestSingleBinaryEndToEnd(t *testing.T) {
 	if token == "" {
 		t.Fatal("no agent credential token issued")
 	}
+
+	// A new organization's entry pipeline approves every call until
+	// someone writes a rule.
+	var unruled struct {
+		Status string `json:"status"`
+	}
+	api.request("POST", "/api/aap/v1/requests", map[string]any{
+		"tool": "deploy.production", "arguments": map[string]any{"version": "unruled"}, "timeout": "2m",
+	}, http.StatusCreated, &unruled, "Authorization", "Bearer "+token, "Idempotency-Key", "e2e-request-unruled")
+	if unruled.Status != "approved" {
+		t.Fatalf("a new organization should approve every call, got %q", unruled.Status)
+	}
+	// An entry pipeline with no blocks sends every call to a person.
+	var entry struct {
+		Revision int64 `json:"revision"`
+	}
+	api.postJSON("/api/v1/request-approval-pipelines/entry/revisions", map[string]any{"blocks": []any{}}, http.StatusCreated, &entry)
+	api.request("POST", fmt.Sprintf("/api/v1/request-approval-pipelines/entry/revisions/%d/activate", entry.Revision), nil, http.StatusOK, nil, "If-Match", `"1"`)
 
 	// The AAP path: create a request (through Temporal and the in-process
 	// worker), decide it, and read the terminal state back.

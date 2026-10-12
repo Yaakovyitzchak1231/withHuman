@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/withHumanAI/withHuman/application"
+	"github.com/withHumanAI/withHuman/approvalblock"
 	"github.com/withHumanAI/withHuman/domain"
 )
 
@@ -631,8 +632,33 @@ func (s *Store) ResolvePipelineKeys(ctx context.Context, input application.Resol
 	return result, nil
 }
 
-// ensureEntryPipeline gives an organization its entry pipeline: an empty,
-// active revision 1 that passes every request through. It runs in the
+// entryApproveBlockKey is the key of the one block a new organization's
+// entry pipeline holds.
+const entryApproveBlockKey = "approve-every-call"
+
+// entryApproveBlock approves every call until someone writes a rule. A
+// pipeline that runs out of blocks sends the request to a person, so
+// without it an agent connected before any rules exist would wait on
+// every call. It is a visible block, not a meaning of an empty pipeline,
+// so removing it is how an organization starts sending calls to people.
+func entryApproveBlock() (application.RequestApprovalBlockSnapshotInput, error) {
+	definition := approvalblock.DefineOutcome(entryApproveBlockKey, approvalblock.Approve,
+		approvalblock.Name("Approve every call"),
+		approvalblock.Reason("No rule sent this call to a person."),
+	)
+	config, err := definition.ConfigJSON()
+	if err != nil {
+		return application.RequestApprovalBlockSnapshotInput{}, err
+	}
+	return application.RequestApprovalBlockSnapshotInput{
+		ID: domain.ID(uuid.NewString()), BlockKey: definition.ID, Name: definition.Name,
+		BlockType: string(definition.Type), ConfigVersion: approvalblock.OutcomeConfigVersion, Config: config,
+		TimeoutMS: int(approvalblock.DefaultTimeout.Milliseconds()), MaxAttempts: definition.MaxAttempts,
+	}, nil
+}
+
+// ensureEntryPipeline gives an organization its entry pipeline: an
+// active revision 1 holding the block that approves every call. It runs in the
 // organization's activation transaction so the entry pipeline never
 // exists without an active revision, and is a no-op for an organization
 // that already has one. The membership is recorded as the creator and
@@ -650,9 +676,13 @@ func (s *Store) ensureEntryPipeline(ctx context.Context, tx pgx.Tx, organization
 	if live > 0 {
 		return nil
 	}
-	_, err := s.insertRequestApprovalPipelineRevision(ctx, tx, application.CreateRequestApprovalPipelineRevisionInput{
+	approve, err := entryApproveBlock()
+	if err != nil {
+		return err
+	}
+	_, err = s.insertRequestApprovalPipelineRevision(ctx, tx, application.CreateRequestApprovalPipelineRevisionInput{
 		ID: domain.ID(uuid.NewString()), OrganizationID: organizationID, PipelineKey: domain.EntryPipelineKey, Name: entryPipelineName,
-		CreatedByActorID: membershipID, Now: now,
+		Blocks: []application.RequestApprovalBlockSnapshotInput{approve}, CreatedByActorID: membershipID, Now: now,
 	}, 1, true)
 	return err
 }

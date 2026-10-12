@@ -54,6 +54,10 @@ strict and differs between deployments, so never write blocks from memory.
 
 - **The entry pipeline** (key `entry`) runs for every request. Blocks run
   in order; the first to decide `approve`, `deny` or `human` ends it.
+- **A new organization's entry pipeline approves every call.** It holds
+  one `outcome` block, `approve-every-call`. Put new rules before it, or
+  nothing reaches them. A pipeline that runs out of blocks sends the call
+  to a person.
 - **"If this, then that" is a `branch`** with a condition and its own
   blocks, ending in an `outcome` block. Requests that match are decided
   inside the branch; the rest skip it.

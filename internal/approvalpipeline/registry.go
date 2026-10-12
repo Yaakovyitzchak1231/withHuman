@@ -54,7 +54,7 @@ func NewBlockRegistry(options ...BlockRegistryOption) *BlockRegistry {
 		}
 	}
 	registry.register(blockruntime.Runtime{
-		Type: approvalblock.TypeOutcome, ConfigVersion: 1, Fingerprint: OutcomeRuntimeFingerprint, Compile: compileOutcomeBlock,
+		Type: approvalblock.TypeOutcome, ConfigVersion: approvalblock.OutcomeConfigVersion, Fingerprint: OutcomeRuntimeFingerprint, Compile: compileOutcomeBlock,
 	})
 	registry.register(blockruntime.Runtime{
 		Type: approvalblock.TypeWebhook, ConfigVersion: webhookConfigVersion, Fingerprint: WebhookRuntimeFingerprint,

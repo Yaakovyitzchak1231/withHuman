@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/withHumanAI/withHuman/application"
+	"github.com/withHumanAI/withHuman/approvalblock"
 	"github.com/withHumanAI/withHuman/db"
 	"github.com/withHumanAI/withHuman/domain"
 	"github.com/withHumanAI/withHuman/internal/embeddedpg/embeddedpgtest"
@@ -472,8 +473,16 @@ func TestPipelinesAreKeyedAgainstRealPostgres(t *testing.T) {
 	}
 
 	entry, err := active(domain.EntryPipelineKey)
-	if err != nil || entry.Revision != 1 || len(entry.BlockIDs) != 0 || entry.CreatedByActorID != membershipID || entry.Name != entryPipelineName {
-		t.Fatalf("organization activation did not seed an empty active entry pipeline: %+v, %v", entry, err)
+	if err != nil || entry.Revision != 1 || len(entry.BlockIDs) != 1 || entry.CreatedByActorID != membershipID || entry.Name != entryPipelineName {
+		t.Fatalf("organization activation did not seed an active entry pipeline with one block: %+v, %v", entry, err)
+	}
+	seeded, err := store.GetRequestApprovalBlocks(ctx, application.GetRequestApprovalBlocksInput{OrganizationID: orgID, BlockIDs: entry.BlockIDs})
+	var seededConfig approvalblock.OutcomeConfig
+	if err == nil && len(seeded) == 1 {
+		err = json.Unmarshal(seeded[0].Config, &seededConfig)
+	}
+	if err != nil || len(seeded) != 1 || seeded[0].BlockKey != entryApproveBlockKey || seeded[0].BlockType != string(approvalblock.TypeOutcome) || seededConfig.Outcome != approvalblock.Approve {
+		t.Fatalf("the seeded entry block should approve every call: %+v, %v", seeded, err)
 	}
 	if _, err := store.CreateAgent(ctx, application.CreateAgentInput{Kind: domain.AgentService,
 		OrganizationID: orgID, ActorID: membershipID, Name: "release-one", AgentSlug: "release",
