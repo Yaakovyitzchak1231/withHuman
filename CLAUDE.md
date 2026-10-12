@@ -655,8 +655,11 @@ Examples:
   and exactly one active revision per live key at all times (a deferred
   constraint trigger refuses leaving a key without an active row). Every
   organization has the reserved `entry` pipeline (`domain.EntryPipelineKey`,
-  seeded empty and active in the activation transaction by
-  `ensureEntryPipeline`), which every request runs; every other pipeline
+  seeded active in the activation transaction by `ensureEntryPipeline`
+  with one outcome block, `approve-every-call`, so an agent connected
+  before anyone writes a rule is never held; running out of blocks stays
+  a human outcome, and removing that block is how an organization starts
+  sending calls to people), which every request runs; every other pipeline
   is created explicitly (`POST /api/v1/request-approval-pipelines` with
   `pipeline_key`, `name` and its first revision, organization-scope
   `pipeline.write`, 409 `request_approval_pipeline_exists` on any key
@@ -1023,16 +1026,18 @@ Examples:
   requires `tested`. Provisioning (the escalation path that notifies
   the person, the runtimes' agents, and one entry pipeline revision
   holding a top-level `branch` per runtime, block id the runtime key
-  and condition `/agent/slug equals <runtime>`, whose body sends the
-  suggested tools to a human and approves the rest; `internal/onboarding/generate.go`,
+  and condition `/agent/slug equals <runtime>`, whose body approves
+  every call, so the coding agent the rules step asks to write the rules
+  is never held waiting for a person who does not know the product yet;
+  `internal/onboarding/generate.go`,
   inserted before the first top-level outcome block, other blocks untouched,
   no revision when the document is unchanged) runs under the person's
   own session when they reach the rules step; enrollment is the one CLI-initiated write that mints,
   under a principal rebuilt from the session's membership at that
   moment, because agent credentials are handed to the CLI once and
   never stored. Tool suggestions are deterministic
-  (`internal/toolsuggest`) and carry a reason code; they seed the
-  starting branch. The approval rules step offers two ways: the
+  (`internal/toolsuggest`) and carry a reason code; they mark tools in
+  the gated-tools table and gate nothing until the person picks them. The approval rules step offers two ways: the
   published withHuman skills (`npx skills add https://withhuman.ai`)
   plus a prompt for the person's own coding agent (which writes the
   entry pipeline through the hosted MCP server while the page polls

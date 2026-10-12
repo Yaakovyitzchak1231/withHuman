@@ -181,6 +181,14 @@ revoked_mint_status=$(curl --silent --output /dev/null --write-out '%{http_code}
   --request POST "$origin/api/aap/v1/instances")
 test "$revoked_mint_status" = "401"
 
+# A new organization's entry pipeline approves every call; an entry
+# pipeline with no blocks sends every call to a person.
+entry_active=$(curl --silent --fail --cookie "$cookie_jar" "$app_api/request-approval-pipelines/entry" | jq -r .revision)
+entry_revision=$(curl --silent --fail --cookie "$cookie_jar" --header 'Content-Type: application/json' \
+  --data '{"blocks":[]}' "$app_api/request-approval-pipelines/entry/revisions" | jq -r .revision)
+curl --silent --fail --cookie "$cookie_jar" --request POST --header "If-Match: \"$entry_active\"" \
+  "$app_api/request-approval-pipelines/entry/revisions/$entry_revision/activate" >/dev/null
+
 request=$(curl --silent --fail --header "Authorization: Bearer $token" --header 'Content-Type: application/json' \
 	--header "X-Request-ID: $approval_trace_id" \
   --header "Idempotency-Key: smoke-request-$unique" --data '{"tool":"deploy.production","arguments":{"version":"smoke"},"agent_reasoning":"Deploying the smoke-test version","timeout":"2m"}' \

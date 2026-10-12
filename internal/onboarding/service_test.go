@@ -571,9 +571,6 @@ func TestGuidedSetupHappyPath(t *testing.T) {
 			t.Fatalf("%s suggested=%v, want %v", name, suggested[name], want)
 		}
 	}
-	if got := SuggestedToolNames(session, "claude-code"); strings.Join(got, ",") != "Bash,create_refund,customer" {
-		t.Fatalf("suggested tools: %v", got)
-	}
 	if len(session.DiscoveryErrors["claude-code"]) != 1 {
 		t.Fatalf("discovery errors lost: %+v", session.DiscoveryErrors)
 	}
@@ -611,29 +608,22 @@ func TestGuidedSetupHappyPath(t *testing.T) {
 		t.Fatalf("path not created for the member: %+v", h.paths.created)
 	}
 	entry := h.pipelines.entryBlocks()
-	if got := GatedToolsOf(entry, "claude-code"); strings.Join(got, ",") != "Bash,create_refund,customer" {
-		t.Fatalf("claude-code gated tools: %v", got)
+	// The suggestions gate nothing yet: the next step asks the same coding
+	// agent to write the rules, and a held call would look like a hang.
+	for _, runtime := range []string{"claude-code", "codex"} {
+		if got := GatedToolsOf(entry, runtime); got == nil || len(got) != 0 {
+			t.Fatalf("%s should approve every call after provisioning: %v", runtime, got)
+		}
 	}
-	if got := GatedToolsOf(entry, "codex"); strings.Join(got, ",") != "Bash" {
-		t.Fatalf("codex gated tools: %v", got)
-	}
-	// One entry revision holds one branch per runtime, each gating its
-	// tools to the person's path and approving the rest.
+	// One entry revision holds one branch per runtime, each approving
+	// every call until rules are written.
 	if len(entry) != 2 || entry[0].ID != "claude-code" || entry[1].ID != "codex" || entry[1].Branch == nil || entry[1].Branch.EscalationPath != "notify-chris-battarbee" {
 		t.Fatalf("entry blocks: %+v", entry)
 	}
 	if !entry[1].Branch.AskAgentOwner {
 		t.Fatalf("the runtime's branch must ask the agent's owner with the setup path as the fallback: %+v", entry[1].Branch)
 	}
-	codex := entry[1].Branch.Blocks
-	if len(codex) != 2 || codex[0].Branch == nil || len(codex[0].Branch.Blocks) != 1 || codex[0].Branch.Blocks[0].Outcome == nil {
-		t.Fatalf("codex branch blocks: %+v", codex)
-	}
-	ask := codex[0].Branch.Blocks[0].Outcome
-	if ask.Outcome != approvalblock.Human || !ask.AskAgentOwner {
-		t.Fatalf("the gate must ask the agent's owner: %+v", ask)
-	}
-	if ask.EscalationPath != "notify-chris-battarbee" || codex[1].Outcome == nil || codex[1].Outcome.Outcome != approvalblock.Approve {
+	if codex := entry[1].Branch.Blocks; len(codex) != 1 || codex[0].Outcome == nil || codex[0].Outcome.Outcome != approvalblock.Approve {
 		t.Fatalf("codex branch blocks: %+v", codex)
 	}
 	if h.pipelines.active[EntryPipelineKey].Revision.DefaultEscalationPath != "notify-chris-battarbee" {
@@ -685,6 +675,24 @@ func TestGuidedSetupHappyPath(t *testing.T) {
 	mustStatus(t, session, domain.OnboardingInstalled)
 	if len(session.TestCommands) != 0 {
 		t.Fatalf("the test commands wait for the rules: %+v", session.TestCommands)
+	}
+
+	// The person picks the tools that wait for them by hand.
+	for runtime, tools := range map[string][]string{"claude-code": {"Bash", "create_refund"}, "codex": {"Bash"}} {
+		if _, err := h.service.SetGatedTools(ctx, h.principal, runtime, tools); err != nil {
+			t.Fatalf("SetGatedTools %s: %v", runtime, err)
+		}
+	}
+	codex := h.pipelines.entryBlocks()[1].Branch.Blocks
+	if len(codex) != 2 || codex[0].Branch == nil || len(codex[0].Branch.Blocks) != 1 || codex[0].Branch.Blocks[0].Outcome == nil {
+		t.Fatalf("codex branch blocks: %+v", codex)
+	}
+	ask := codex[0].Branch.Blocks[0].Outcome
+	if ask.Outcome != approvalblock.Human || !ask.AskAgentOwner {
+		t.Fatalf("the gate must ask the agent's owner: %+v", ask)
+	}
+	if ask.EscalationPath != "notify-chris-battarbee" || codex[1].Outcome == nil || codex[1].Outcome.Outcome != approvalblock.Approve {
+		t.Fatalf("codex branch blocks: %+v", codex)
 	}
 
 	// Leaving the rules step is stamped once the hooks are in; the test
@@ -785,7 +793,7 @@ func TestProvisionFailureKeepsSessionAndRecordsError(t *testing.T) {
 	}
 }
 
-func TestSecondRunUnionsPipelineAndReusesAgent(t *testing.T) {
+func TestSecondRunKeepsPickedToolsAndReusesAgent(t *testing.T) {
 	ctx := context.Background()
 	h := newHarness()
 	// The entry already holds a foreign rule, the runtime's starting
@@ -814,8 +822,8 @@ func TestSecondRunUnionsPipelineAndReusesAgent(t *testing.T) {
 		t.Fatalf("Provision: %v", err)
 	}
 	entry := h.pipelines.entryBlocks()
-	if got := GatedToolsOf(entry, "claude-code"); strings.Join(got, ",") != "Bash,Write" {
-		t.Fatalf("second run should union: %v", got)
+	if got := GatedToolsOf(entry, "claude-code"); strings.Join(got, ",") != "Write" {
+		t.Fatalf("second run should keep the tools picked by hand and add none: %v", got)
 	}
 	if len(entry) != 3 || entry[0].ID != "deny-prod" || entry[1].ID != "claude-code" || entry[2].ID != "everything-else" {
 		t.Fatalf("foreign blocks must keep their place around the branch: %+v", entry)
@@ -953,7 +961,7 @@ func TestGenerators(t *testing.T) {
 	// The gate is a branch holding the one outcome block that asks.
 	if gate := blocks[0].Branch; gate == nil || len(gate.Blocks) != 1 || gate.Blocks[0].ID != "codex-ask-about-selected-tools" || gate.Blocks[0].Name != "Ask about these tools" ||
 		gate.Blocks[0].Outcome == nil || gate.Blocks[0].Outcome.Outcome != approvalblock.Human || gate.Blocks[0].Outcome.EscalationPath != "notify-x" ||
-		gate.Blocks[0].Outcome.Reason != "This tool was suggested for human approval during the guided setup." {
+		gate.Blocks[0].Outcome.Reason != "This tool was chosen for human approval during the guided setup." {
 		t.Fatalf("gate: %+v", blocks[0])
 	}
 	if GatedToolsOf(entry, "claude-code") != nil || GatedToolsOf(nil, "codex") != nil {
