@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+	"unicode/utf8"
 
 	"github.com/withHumanAI/withHuman/domain"
 )
@@ -607,6 +608,53 @@ func (input CancelApprovalInput) Validate() error {
 		requiredID("agent instance ID", input.AgentInstanceID),
 		requiredString("authentication method", input.Auth.Method),
 		requiredTime("current time", input.Now),
+	})
+}
+
+// ConsumeApprovalInput marks an approved request used by the instance
+// that opened it, under IdempotencyKey. The store reads the current time
+// from the database, so the expiry check and consumed_at share one clock.
+type ConsumeApprovalInput struct {
+	OrganizationID  domain.ID
+	RequestID       domain.ID
+	AgentInstanceID domain.ID
+	IdempotencyKey  string
+}
+
+func (input ConsumeApprovalInput) Validate() error {
+	return firstError([]error{
+		requiredID("organization ID", input.OrganizationID),
+		requiredID("approval request ID", input.RequestID),
+		requiredID("agent instance ID", input.AgentInstanceID),
+		requiredString("idempotency key", input.IdempotencyKey),
+	})
+}
+
+// ReportApprovalOutcomeInput records how a consumed approval's call went.
+// An empty Note means none.
+type ReportApprovalOutcomeInput struct {
+	OrganizationID  domain.ID
+	RequestID       domain.ID
+	AgentInstanceID domain.ID
+	Status          domain.ConsumptionOutcomeStatus
+	Note            string
+}
+
+func (input ReportApprovalOutcomeInput) Validate() error {
+	var status error
+	if !input.Status.Valid() {
+		status = invalidField("status", "must be succeeded or failed")
+	}
+	var note error
+	if utf8.RuneCountInString(input.Note) > domain.MaximumConsumptionNoteLength {
+		note = invalidField("note", fmt.Sprintf("must be at most %d characters", domain.MaximumConsumptionNoteLength))
+	}
+	return firstError([]error{
+		requiredID("organization ID", input.OrganizationID),
+		requiredID("approval request ID", input.RequestID),
+		requiredID("agent instance ID", input.AgentInstanceID),
+		status,
+		note,
 	})
 }
 

@@ -20,6 +20,7 @@ type aapApprovalResponse struct {
 	CreatedAt      time.Time             `json:"created_at"`
 	DeadlineAt     time.Time             `json:"deadline_at"`
 	Decision       *aapDecisionResponse  `json:"decision,omitempty"`
+	Consumption    *consumptionResponse  `json:"consumption,omitempty"`
 }
 type aapDecisionResponse struct {
 	Status    domain.ApprovalStatus `json:"status"`
@@ -28,8 +29,31 @@ type aapDecisionResponse struct {
 	ExpiresAt *time.Time            `json:"expires_at,omitempty"`
 }
 
+// consumptionResponse is the requesting instance using an approval. AAP
+// and product representations carry the same shape.
+type consumptionResponse struct {
+	ConsumedAt time.Time                   `json:"consumed_at"`
+	Outcome    *consumptionOutcomeResponse `json:"outcome,omitempty"`
+}
+type consumptionOutcomeResponse struct {
+	Status     domain.ConsumptionOutcomeStatus `json:"status"`
+	Note       string                          `json:"note,omitempty"`
+	ReportedAt time.Time                       `json:"reported_at"`
+}
+
+func newConsumptionResponse(consumption *domain.Consumption) *consumptionResponse {
+	if consumption == nil {
+		return nil
+	}
+	out := &consumptionResponse{ConsumedAt: consumption.ConsumedAt.UTC()}
+	if outcome := consumption.Outcome; outcome != nil {
+		out.Outcome = &consumptionOutcomeResponse{Status: outcome.Status, Note: outcome.Note, ReportedAt: outcome.ReportedAt.UTC()}
+	}
+	return out
+}
+
 func newAAPApprovalResponse(r domain.ApprovalRequest) aapApprovalResponse {
-	out := aapApprovalResponse{ID: r.ID, Tool: r.Tool, Server: r.Server, Arguments: r.Arguments, Timeout: r.Timeout, AgentReasoning: r.AgentReasoning, Context: r.Context, Status: r.Status, CreatedAt: r.CreatedAt.UTC(), DeadlineAt: r.DeadlineAt.UTC()}
+	out := aapApprovalResponse{ID: r.ID, Tool: r.Tool, Server: r.Server, Arguments: r.Arguments, Timeout: r.Timeout, AgentReasoning: r.AgentReasoning, Context: r.Context, Status: r.Status, CreatedAt: r.CreatedAt.UTC(), DeadlineAt: r.DeadlineAt.UTC(), Consumption: newConsumptionResponse(r.Consumption)}
 	if d := r.Decision; d != nil {
 		out.Decision = &aapDecisionResponse{Status: d.Status, Note: d.Note, DecidedAt: d.DecidedAt.UTC()}
 		if d.ExpiresAt != nil {

@@ -123,6 +123,8 @@ func TestAAPLibraryAgainstProvider(t *testing.T) {
 	router.POST("/api/aap/v1/requests", api.createApproval)
 	router.GET("/api/aap/v1/requests/:id", api.getApproval)
 	router.DELETE("/api/aap/v1/requests/:id", api.cancelApproval)
+	router.POST("/api/aap/v1/requests/:id/consume", api.consumeApproval)
+	router.POST("/api/aap/v1/requests/:id/outcome", api.reportApprovalOutcome)
 	var mode atomic.Int32
 	var posts atomic.Int32
 	created := make(chan domain.ID, 16)
@@ -133,7 +135,7 @@ func TestAAPLibraryAgainstProvider(t *testing.T) {
 		}
 		rec := httptest.NewRecorder()
 		router.ServeHTTP(rec, r)
-		if r.Method == "POST" {
+		if r.Method == "POST" && r.URL.Path == "/api/aap/v1/requests" {
 			posts.Add(1)
 			var response aapApprovalResponse
 			_ = json.Unmarshal(rec.Body.Bytes(), &response)
@@ -318,6 +320,125 @@ func TestAAPLibraryAgainstProvider(t *testing.T) {
 			if code != 403 && code != 404 {
 				t.Fatalf("cross-instance %s: %d %s", method, code, raw)
 			}
+		}
+	})
+
+	errorCode := func(raw string) string {
+		var body struct {
+			Error struct {
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		json.Unmarshal([]byte(raw), &body)
+		return body.Error.Code
+	}
+	create := func(t *testing.T, tool, key string) aapApprovalResponse {
+		t.Helper()
+		code, created, raw := request("POST", "/api/aap/v1/requests", "instance-one", key, `{"tool":"`+tool+`","arguments":{"amount":1},"timeout":"5m"}`)
+		if code != 201 {
+			t.Fatal(code, raw)
+		}
+		return created
+	}
+	t.Run("consume over HTTP", func(t *testing.T) {
+		approved := create(t, "refund", "consume-http")
+		path := "/api/aap/v1/requests/" + string(approved.ID) + "/consume"
+		code, consumed, raw := request("POST", path, "instance-one", "attempt-1", "")
+		if code != 200 || consumed.Consumption == nil || consumed.Consumption.Outcome != nil || consumed.Status != domain.ApprovalApproved {
+			t.Fatalf("consume: %d %s", code, raw)
+		}
+		if strings.Contains(raw, "attempt-1") || strings.Contains(raw, "idempotency") {
+			t.Fatalf("the consume key leaked: %s", raw)
+		}
+		code, replay, raw := request("POST", path, "instance-one", "attempt-1", "{}")
+		if code != 200 || !replay.Consumption.ConsumedAt.Equal(consumed.Consumption.ConsumedAt) {
+			t.Fatalf("same-key replay: %d %s", code, raw)
+		}
+		code, _, raw = request("POST", path, "instance-one", "attempt-2", "")
+		if code != 409 || errorCode(raw) != "already_consumed" || !strings.Contains(raw, consumed.Consumption.ConsumedAt.Format(time.RFC3339)) {
+			t.Fatalf("another key: %d %s", code, raw)
+		}
+		code, read, raw := request("GET", "/api/aap/v1/requests/"+string(approved.ID), "instance-one", "", "")
+		if code != 200 || read.Consumption == nil || !read.Consumption.ConsumedAt.Equal(consumed.Consumption.ConsumedAt) {
+			t.Fatalf("read after consume: %d %s", code, raw)
+		}
+		code, recreated, raw := request("POST", "/api/aap/v1/requests", "instance-one", "consume-http", `{"tool":"refund","arguments":{"amount":1},"timeout":"5m"}`)
+		if code != 201 || recreated.Consumption == nil {
+			t.Fatalf("create replay after consume: %d %s", code, raw)
+		}
+
+		fresh := create(t, "refund", "consume-http-refusals")
+		freshPath := "/api/aap/v1/requests/" + string(fresh.ID) + "/consume"
+		for name, tc := range map[string]struct {
+			token, key, body string
+			status           int
+			code             string
+		}{
+			"no key":           {"instance-one", "", "", 400, "invalid_request"},
+			"a body field":     {"instance-one", "attempt", `{"note":"x"}`, 400, "invalid_request"},
+			"not JSON":         {"instance-one", "attempt", `[`, 400, "invalid_request"},
+			"another instance": {"instance-two", "attempt", "", 403, "forbidden"},
+		} {
+			code, _, raw := request("POST", freshPath, tc.token, tc.key, tc.body)
+			if code != tc.status || errorCode(raw) != tc.code {
+				t.Fatalf("%s: %d %s", name, code, raw)
+			}
+		}
+		code, _, raw = request("POST", "/api/aap/v1/requests/"+uuid.NewString()+"/consume", "instance-one", "attempt", "")
+		if code != 404 {
+			t.Fatalf("unknown request: %d %s", code, raw)
+		}
+
+		pending := create(t, "pending", "consume-http-pending")
+		<-created
+		code, _, raw = request("POST", "/api/aap/v1/requests/"+string(pending.ID)+"/consume", "instance-one", "attempt", "")
+		if code != 409 || errorCode(raw) != "not_approved" {
+			t.Fatalf("pending: %d %s", code, raw)
+		}
+
+		clock.offset.Store(int64(-6 * time.Minute))
+		stale := create(t, "refund", "consume-http-stale")
+		clock.offset.Store(0)
+		code, _, raw = request("POST", "/api/aap/v1/requests/"+string(stale.ID)+"/consume", "instance-one", "attempt", "")
+		if code != 409 || errorCode(raw) != "approval_expired" {
+			t.Fatalf("stale: %d %s", code, raw)
+		}
+	})
+	t.Run("outcome over HTTP", func(t *testing.T) {
+		approved := create(t, "refund", "outcome-http")
+		path := "/api/aap/v1/requests/" + string(approved.ID) + "/outcome"
+		code, _, raw := request("POST", path, "instance-one", "", `{"status":"succeeded"}`)
+		if code != 409 || errorCode(raw) != "not_consumed" {
+			t.Fatalf("before consume: %d %s", code, raw)
+		}
+		if code, _, raw := request("POST", "/api/aap/v1/requests/"+string(approved.ID)+"/consume", "instance-one", "attempt-1", ""); code != 200 {
+			t.Fatalf("consume: %d %s", code, raw)
+		}
+		for name, body := range map[string]string{
+			"unknown status": `{"status":"done"}`,
+			"no status":      `{"note":"Refund issued"}`,
+			"empty note":     `{"status":"succeeded","note":""}`,
+			"long note":      `{"status":"succeeded","note":"` + strings.Repeat("é", 1001) + `"}`,
+			"unknown field":  `{"status":"succeeded","detail":"x"}`,
+		} {
+			if code, _, raw := request("POST", path, "instance-one", "", body); code != 400 || errorCode(raw) != "invalid_request" {
+				t.Fatalf("%s: %d %s", name, code, raw)
+			}
+		}
+		if code, _, raw := request("POST", path, "instance-two", "", `{"status":"succeeded"}`); code != 403 {
+			t.Fatalf("another instance: %d %s", code, raw)
+		}
+		code, reported, raw := request("POST", path, "instance-one", "", `{"status":"succeeded","note":"`+strings.Repeat("é", 1000)+`"}`)
+		if code != 200 || reported.Consumption == nil || reported.Consumption.Outcome == nil || reported.Consumption.Outcome.Status != domain.ConsumptionSucceeded || reported.Status != domain.ApprovalApproved {
+			t.Fatalf("outcome: %d %s", code, raw)
+		}
+		code, again, raw := request("POST", path, "instance-one", "", `{"status":"succeeded","note":"`+strings.Repeat("é", 1000)+`"}`)
+		if code != 200 || !again.Consumption.Outcome.ReportedAt.Equal(reported.Consumption.Outcome.ReportedAt) {
+			t.Fatalf("identical outcome: %d %s", code, raw)
+		}
+		if code, _, raw := request("POST", path, "instance-one", "", `{"status":"failed"}`); code != 409 || errorCode(raw) != "outcome_conflict" {
+			t.Fatalf("conflicting outcome: %d %s", code, raw)
 		}
 	})
 }

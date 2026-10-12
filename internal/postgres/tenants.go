@@ -245,6 +245,7 @@ func (s *Store) SetOrganizationStatus(ctx context.Context, input application.Set
 // for the duration of the purge, which is acceptable for a rare operation.
 var purgeProtectiveTriggers = [][2]string{
 	{"decisions", "decisions_append_only"},
+	{"approval_consumptions", "approval_consumptions_protect"},
 	{"approval_request_agent_owner_handoffs", "approval_request_agent_owner_handoffs_append_only"},
 	{"approval_request_routing", "approval_request_routing_append_only"},
 	{"approval_request_reviewers", "approval_request_reviewers_append_only"},
@@ -269,6 +270,7 @@ var purgeStatements = []string{
 	`DELETE FROM tool_catalog_sources WHERE organization_id = $1`,
 	`DELETE FROM decision_operations WHERE organization_id = $1`,
 	`DELETE FROM request_resolved_events WHERE organization_id = $1`,
+	`DELETE FROM approval_consumptions WHERE organization_id = $1`,
 	`DELETE FROM decisions WHERE organization_id = $1`,
 	`DELETE FROM approval_request_pipeline_suspensions WHERE organization_id = $1`,
 	`DELETE FROM approval_request_claims WHERE organization_id = $1`,

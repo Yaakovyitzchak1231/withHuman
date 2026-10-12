@@ -365,6 +365,63 @@ func (s *Service) Cancel(ctx context.Context, principal domain.Principal, reques
 	return request, nil
 }
 
+// Consume marks an approved request used by the instance that opened it.
+// The adapter calls it right before running the call, so one approval
+// runs one call. The key identifies this execution attempt: repeating it
+// returns the request as it is now, and another key is refused.
+func (s *Service) Consume(ctx context.Context, principal domain.Principal, requestID domain.ID, idempotencyKey string) (domain.ApprovalRequest, error) {
+	if principal.ActorType != domain.ActorAgent || principal.AgentInstanceID == "" {
+		return domain.ApprovalRequest{}, domain.ErrForbidden
+	}
+	if err := authorization.Check(principal, domain.PermissionRequestCreate, domain.OrganizationResource()); err != nil {
+		return domain.ApprovalRequest{}, err
+	}
+	if strings.TrimSpace(idempotencyKey) == "" {
+		return domain.ApprovalRequest{}, fmt.Errorf("idempotency key is required: %w", domain.ErrInvalid)
+	}
+	return s.approvals.ConsumeApproval(ctx, application.ConsumeApprovalInput{
+		OrganizationID:  principal.OrganizationID,
+		RequestID:       requestID,
+		AgentInstanceID: principal.AgentInstanceID,
+		IdempotencyKey:  idempotencyKey,
+	})
+}
+
+// OutcomeInput is how the approved call went. Note is optional; when
+// present it holds 1 to 1000 characters.
+type OutcomeInput struct {
+	Status domain.ConsumptionOutcomeStatus `json:"status" binding:"required"`
+	Note   *string                         `json:"note"`
+}
+
+// ReportOutcome records how a consumed approval's call went, once. It is
+// audit only and never changes the request's status or decision.
+func (s *Service) ReportOutcome(ctx context.Context, principal domain.Principal, requestID domain.ID, input OutcomeInput) (domain.ApprovalRequest, error) {
+	if principal.ActorType != domain.ActorAgent || principal.AgentInstanceID == "" {
+		return domain.ApprovalRequest{}, domain.ErrForbidden
+	}
+	if err := authorization.Check(principal, domain.PermissionRequestCreate, domain.OrganizationResource()); err != nil {
+		return domain.ApprovalRequest{}, err
+	}
+	if !input.Status.Valid() {
+		return domain.ApprovalRequest{}, fmt.Errorf("status must be succeeded or failed: %w", domain.ErrInvalid)
+	}
+	note := ""
+	if input.Note != nil {
+		note = *input.Note
+		if note == "" {
+			return domain.ApprovalRequest{}, fmt.Errorf("note must not be empty. Leave it out instead: %w", domain.ErrInvalid)
+		}
+	}
+	return s.approvals.ReportApprovalOutcome(ctx, application.ReportApprovalOutcomeInput{
+		OrganizationID:  principal.OrganizationID,
+		RequestID:       requestID,
+		AgentInstanceID: principal.AgentInstanceID,
+		Status:          input.Status,
+		Note:            note,
+	})
+}
+
 // SignalCancelled stands down the workflows of requests another path
 // already cancelled, such as an AAP instance deletion. Like Cancel's, the
 // signal is best-effort.

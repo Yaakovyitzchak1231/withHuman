@@ -39,6 +39,7 @@ type Provider struct {
 	enrolled    bool
 	credentials map[string]string // whc_ token -> runtime
 	requests    map[string]map[string]any
+	consumed    map[string]string // request id -> consuming Idempotency-Key
 	exchanges   int
 }
 
@@ -55,6 +56,7 @@ func NewProvider(t *testing.T) *Provider {
 		changed:     make(chan struct{}),
 		credentials: map[string]string{},
 		requests:    map[string]map[string]any{},
+		consumed:    map[string]string{},
 	}
 	now := time.Now().UTC()
 	p.session = domain.OnboardingSession{
@@ -75,6 +77,8 @@ func NewProvider(t *testing.T) *Provider {
 	mux.HandleFunc("GET /api/v1/agent_instances/self", p.aapAuth(p.instanceSelf))
 	mux.HandleFunc("POST /api/aap/v1/requests", p.aapAuth(p.aapCreate))
 	mux.HandleFunc("GET /api/aap/v1/requests/{id}", p.aapAuth(p.aapGet))
+	mux.HandleFunc("POST /api/aap/v1/requests/{id}/consume", p.aapAuth(p.aapConsume))
+	mux.HandleFunc("POST /api/aap/v1/requests/{id}/outcome", p.aapAuth(p.aapOutcome))
 	p.Server = httptest.NewServer(mux)
 	t.Cleanup(p.Server.Close)
 	return p
@@ -581,6 +585,84 @@ func (p *Provider) aapGet(w http.ResponseWriter, r *http.Request) {
 		writeError(w, &providerError{http.StatusNotFound, "not_found", "no such request"})
 		return
 	}
+	writeJSON(w, http.StatusOK, request)
+}
+
+// aapConsume marks an approved request used, once per key, as the
+// provider does: another key is already_consumed, any other state is
+// not_approved, and a lapsed approval is approval_expired.
+func (p *Provider) aapConsume(w http.ResponseWriter, r *http.Request) {
+	key := r.Header.Get("Idempotency-Key")
+	if key == "" {
+		writeError(w, &providerError{http.StatusBadRequest, "invalid_request", "idempotency key is required"})
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	id := r.PathValue("id")
+	request, ok := p.requests[id]
+	if !ok {
+		writeError(w, &providerError{http.StatusNotFound, "not_found", "no such request"})
+		return
+	}
+	if existing, ok := p.consumed[id]; ok {
+		if existing == key {
+			writeJSON(w, http.StatusOK, request)
+			return
+		}
+		consumption := request["consumption"].(map[string]any)
+		writeError(w, &providerError{http.StatusConflict, "already_consumed", fmt.Sprintf("This approval was already used at %s.", consumption["consumed_at"].(time.Time).Format(time.RFC3339))})
+		return
+	}
+	if request["status"] != "approved" {
+		writeError(w, &providerError{http.StatusConflict, "not_approved", "Only an approved request can be used."})
+		return
+	}
+	now := time.Now().UTC()
+	if expiresAt := request["decision"].(map[string]any)["expires_at"].(time.Time); !now.Before(expiresAt) {
+		writeError(w, &providerError{http.StatusConflict, "approval_expired", "This approval has expired. Request approval again."})
+		return
+	}
+	p.consumed[id] = key
+	request["consumption"] = map[string]any{"consumed_at": now}
+	writeJSON(w, http.StatusOK, request)
+}
+
+// aapOutcome records a consumed request's outcome once.
+func (p *Provider) aapOutcome(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Status string `json:"status"`
+		Note   string `json:"note,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || (body.Status != "succeeded" && body.Status != "failed") {
+		writeError(w, &providerError{http.StatusBadRequest, "invalid_request", "status must be succeeded or failed"})
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	request, ok := p.requests[r.PathValue("id")]
+	if !ok {
+		writeError(w, &providerError{http.StatusNotFound, "not_found", "no such request"})
+		return
+	}
+	consumption, ok := request["consumption"].(map[string]any)
+	if !ok {
+		writeError(w, &providerError{http.StatusConflict, "not_consumed", "This approval has not been used."})
+		return
+	}
+	if outcome, ok := consumption["outcome"].(map[string]any); ok {
+		if outcome["status"] != body.Status || (outcome["note"] != nil && outcome["note"] != body.Note) || (outcome["note"] == nil && body.Note != "") {
+			writeError(w, &providerError{http.StatusConflict, "outcome_conflict", "A different outcome was already reported."})
+			return
+		}
+		writeJSON(w, http.StatusOK, request)
+		return
+	}
+	outcome := map[string]any{"status": body.Status, "reported_at": time.Now().UTC()}
+	if body.Note != "" {
+		outcome["note"] = body.Note
+	}
+	consumption["outcome"] = outcome
 	writeJSON(w, http.StatusOK, request)
 }
 

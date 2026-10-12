@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 var (
@@ -77,6 +78,21 @@ var (
 	ErrUserExists      = errors.New("an account with this email already exists. Sign in to accept")
 	ErrNotTargeted     = errors.New("this request was sent to other reviewers")
 	ErrAlreadyTerminal = errors.New("this request is no longer pending")
+	// ErrApprovalNotApproved refuses consuming a request that is not
+	// approved: pending, denied, expired or cancelled.
+	ErrApprovalNotApproved = errors.New("only an approved request can be used")
+	// ErrApprovalExpired refuses consuming an approval whose decision
+	// expiry has passed.
+	ErrApprovalExpired = errors.New("this approval has expired. Request approval again")
+	// ErrApprovalAlreadyConsumed refuses consuming an approval another
+	// attempt already used. ApprovalAlreadyConsumedError names when.
+	ErrApprovalAlreadyConsumed = errors.New("this approval was already used")
+	// ErrApprovalNotConsumed refuses an outcome for an approval nobody
+	// consumed.
+	ErrApprovalNotConsumed = errors.New("this approval has not been used")
+	// ErrOutcomeConflict refuses an outcome that differs from the one
+	// already recorded.
+	ErrOutcomeConflict = errors.New("a different outcome was already reported")
 	ErrLimitExceeded   = errors.New("limit reached")
 	// ErrWebhookUnconfigured means the deployment has no secrets key, so
 	// webhook endpoints cannot be stored and webhook blocks cannot compile.
@@ -303,6 +319,18 @@ func (err WebhookEndpointsInactiveError) Error() string {
 }
 
 func (err WebhookEndpointsInactiveError) Unwrap() error { return ErrWebhookEndpointInactive }
+
+// ApprovalAlreadyConsumedError is ErrApprovalAlreadyConsumed with the
+// time the approval was used.
+type ApprovalAlreadyConsumedError struct {
+	ConsumedAt time.Time
+}
+
+func (err ApprovalAlreadyConsumedError) Error() string {
+	return fmt.Sprintf("%v at %s", ErrApprovalAlreadyConsumed, err.ConsumedAt.UTC().Format(time.RFC3339))
+}
+
+func (err ApprovalAlreadyConsumedError) Unwrap() error { return ErrApprovalAlreadyConsumed }
 
 // conflictError is a specific conflict that still satisfies
 // errors.Is(err, ErrConflict), so generic conflict handling keeps working

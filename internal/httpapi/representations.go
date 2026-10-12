@@ -30,6 +30,9 @@ type approvalResponse struct {
 	DeadlineAt            time.Time                 `json:"deadline_at"`
 	CreatedAt             time.Time                 `json:"created_at"`
 	Decision              *approvalDecisionResponse `json:"decision,omitempty"`
+	// Consumption is the instance using the approval, and how the call
+	// went once it reported that.
+	Consumption *consumptionResponse `json:"consumption,omitempty"`
 }
 
 // requestApprovalPipelineSummaryResponse is one pipeline. active_revision
@@ -354,7 +357,8 @@ func newApprovalResponse(request domain.ApprovalRequest) approvalResponse {
 		Tool: request.Tool, Server: request.Server, Arguments: request.Arguments,
 		AgentReasoning: request.AgentReasoning, Context: request.Context,
 		Status: request.Status, DeadlineAt: request.DeadlineAt, CreatedAt: request.CreatedAt,
-		Decision: newApprovalDecisionResponse(request.Decision),
+		Decision:    newApprovalDecisionResponse(request.Decision),
+		Consumption: newConsumptionResponse(request.Consumption),
 	}
 }
 

@@ -95,6 +95,8 @@ func TestAAPOperationsUseProtocolResponseSchema(t *testing.T) {
 		{"/api/aap/v1/requests", "post", "201"},
 		{"/api/aap/v1/requests/{id}", "get", "200"},
 		{"/api/aap/v1/requests/{id}", "delete", "200"},
+		{"/api/aap/v1/requests/{id}/consume", "post", "200"},
+		{"/api/aap/v1/requests/{id}/outcome", "post", "200"},
 	} {
 		ref := document.Paths[op.path][op.method].Responses[op.status].Content["application/json"].Schema.Ref
 		if ref != "#/components/schemas/AAPApprovalRequest" {

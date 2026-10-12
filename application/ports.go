@@ -154,6 +154,14 @@ type ApprovalRepository interface {
 	// opened it. Only that instance may cancel; any other terminal state
 	// is ErrAlreadyTerminal, and a repeated cancel returns the request.
 	CancelApproval(ctx context.Context, input CancelApprovalInput) (domain.ApprovalRequest, error)
+	// ConsumeApproval marks an approved, unexpired request used by the
+	// instance that opened it. The same key returns the current request
+	// even after expiry; another key is ErrApprovalAlreadyConsumed.
+	ConsumeApproval(ctx context.Context, input ConsumeApprovalInput) (domain.ApprovalRequest, error)
+	// ReportApprovalOutcome records a consumed approval's outcome once.
+	// The identical outcome again returns the request; a different one is
+	// ErrOutcomeConflict.
+	ReportApprovalOutcome(ctx context.Context, input ReportApprovalOutcomeInput) (domain.ApprovalRequest, error)
 	// GetPipelineSuspension returns the request's pipeline suspension, open
 	// or resumed; ErrNotFound when the pipeline never suspended.
 	GetPipelineSuspension(ctx context.Context, input GetPipelineSuspensionInput) (domain.PipelineSuspension, error)

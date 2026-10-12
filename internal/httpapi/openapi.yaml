@@ -844,6 +844,65 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "409": { description: "The request was already decided or expired (code `already_terminal`)" }
+  /api/aap/v1/requests/{id}/consume:
+    post:
+      summary: Consume an approval
+      operationId: consumeApprovalRequest
+      x-withhuman-permission: request.create
+      description: "Marks an approved request as used, right before the adapter runs the call. Each approval runs one call: only one consume succeeds, so a second attempt to run the same call is refused. Call it after checking `decision.expires_at`, and do not start the call until it succeeds. Only the instance that created the request may consume it; another instance gets a `403`. Requires an `Idempotency-Key` header that identifies this execution attempt: repeating the key returns the request as it is now, even after `expires_at`. The request takes no body; an empty body or `{}` is accepted. Answers `409` with code `already_consumed` when another key already consumed it, `not_approved` when the request is not `approved`, and `approval_expired` once `expires_at` has passed."
+      tags: [Agent Approval Protocol]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/RequestID"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: false }
+      responses:
+        "200":
+          description: The request, now consumed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AAPApprovalRequest" }
+              examples:
+                consumed:
+                  $ref: "#/components/examples/AAPConsumedRequest"
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { description: "The approval was already used (code `already_consumed`), the request is not approved (`not_approved`), or the approval expired (`approval_expired`)" }
+  /api/aap/v1/requests/{id}/outcome:
+    post:
+      summary: Report an approved call's outcome
+      operationId: reportApprovalOutcome
+      x-withhuman-permission: request.create
+      description: "Records whether the approved call succeeded, after the adapter consumed the approval and ran it. The outcome is for the record only: it never changes the request's status or decision. Report it once. Repeating the same body returns the same request; a different outcome answers `409` with code `outcome_conflict`. A request that was not consumed answers `409` with code `not_consumed`. Only the instance that created the request may report its outcome; another instance gets a `403`."
+      tags: [Agent Approval Protocol]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/RequestID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReportApprovalOutcome" }
+      responses:
+        "200":
+          description: The request with the outcome
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AAPApprovalRequest" }
+              examples:
+                reported:
+                  $ref: "#/components/examples/AAPReportedRequest"
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { description: "The approval was not consumed (code `not_consumed`), or a different outcome was already reported (`outcome_conflict`)" }
   /api/v1/enterprise/slack:
     get:
       summary: Read the connected Slack workspace
@@ -5508,7 +5567,7 @@ components:
         created_at: "2026-09-17T12:00:00Z"
         deadline_at: "2026-09-17T12:30:00Z"
     AAPApprovedRequest:
-      summary: Approved with a five-minute execution window
+      summary: Approved, with the window to start the call
       value:
         id: "7ab8c8ec-7b2d-4fd6-9b52-752f9515eb71"
         tool: "issue_refund"
@@ -5518,6 +5577,30 @@ components:
         created_at: "2026-09-17T12:00:00Z"
         deadline_at: "2026-09-17T12:30:00Z"
         decision: {"status": "approved", "note": "Refund the duplicate charge.", "decided_at": "2026-09-17T12:02:00Z", "expires_at": "2026-09-17T12:07:00Z"}
+    AAPConsumedRequest:
+      summary: Approved and consumed
+      value:
+        id: "7ab8c8ec-7b2d-4fd6-9b52-752f9515eb71"
+        tool: "issue_refund"
+        arguments: {"amount": 4900, "reason": "duplicate_charge"}
+        timeout: "30m"
+        status: "approved"
+        created_at: "2026-09-17T12:00:00Z"
+        deadline_at: "2026-09-17T12:30:00Z"
+        decision: {"status": "approved", "note": "Refund the duplicate charge.", "decided_at": "2026-09-17T12:02:00Z", "expires_at": "2026-09-17T12:07:00Z"}
+        consumption: {"consumed_at": "2026-09-17T12:02:04Z"}
+    AAPReportedRequest:
+      summary: Consumed with its outcome
+      value:
+        id: "7ab8c8ec-7b2d-4fd6-9b52-752f9515eb71"
+        tool: "issue_refund"
+        arguments: {"amount": 4900, "reason": "duplicate_charge"}
+        timeout: "30m"
+        status: "approved"
+        created_at: "2026-09-17T12:00:00Z"
+        deadline_at: "2026-09-17T12:30:00Z"
+        decision: {"status": "approved", "note": "Refund the duplicate charge.", "decided_at": "2026-09-17T12:02:00Z", "expires_at": "2026-09-17T12:07:00Z"}
+        consumption: {"consumed_at": "2026-09-17T12:02:04Z", "outcome": {"status": "succeeded", "note": "Refund issued", "reported_at": "2026-09-17T12:02:06Z"}}
     AAPCancelledRequest:
       summary: Cancelled by the adapter
       value:
@@ -7247,7 +7330,7 @@ components:
       type: object
       additionalProperties: false
       required: [status, decided_at]
-      description: Immutable decision. Approved calls must start within five minutes of decided_at. Reads and retries never extend expires_at.
+      description: "Immutable decision. An approved call must start before expires_at: 30 minutes after decided_at when the instance had webhook delivery at decision time, five minutes otherwise. Reads and retries never extend expires_at."
       properties:
         status: { type: string, enum: [approved, denied, expired, cancelled] }
         note: { type: string }
@@ -7278,10 +7361,12 @@ components:
         created_at: { type: string, format: date-time }
         deadline_at: { type: string, format: date-time }
         decision: { $ref: "#/components/schemas/AAPDecision" }
+        consumption: { $ref: "#/components/schemas/AAPConsumption" }
       oneOf:
         - properties:
             status: { const: pending }
             decision: false
+            consumption: false
         - required: [decision]
           properties:
             status: { const: approved }
@@ -7294,18 +7379,48 @@ components:
             decision:
               properties:
                 status: { const: denied }
+            consumption: false
         - required: [decision]
           properties:
             status: { const: expired }
             decision:
               properties:
                 status: { const: expired }
+            consumption: false
         - required: [decision]
           properties:
             status: { const: cancelled }
             decision:
               properties:
                 status: { const: cancelled }
+            consumption: false
+    AAPConsumption:
+      example: {"consumed_at": "2026-09-17T12:02:04Z", "outcome": {"status": "succeeded", "note": "Refund issued", "reported_at": "2026-09-17T12:02:06Z"}}
+      type: object
+      additionalProperties: false
+      required: [consumed_at]
+      description: "The creating instance used the approval. Present only once an approved request was consumed. An adapter that finds a consumption it did not make treats the approval as used."
+      properties:
+        consumed_at: { type: string, format: date-time }
+        outcome: { $ref: "#/components/schemas/AAPOutcome" }
+    AAPOutcome:
+      example: {"status": "succeeded", "note": "Refund issued", "reported_at": "2026-09-17T12:02:06Z"}
+      type: object
+      additionalProperties: false
+      required: [status, reported_at]
+      description: How the approved call went, as the adapter reported it. For the record only.
+      properties:
+        status: { type: string, enum: [succeeded, failed] }
+        note: { type: string, minLength: 1, maxLength: 1000 }
+        reported_at: { type: string, format: date-time }
+    ReportApprovalOutcome:
+      example: {"status": "succeeded", "note": "Refund issued"}
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status: { type: string, enum: [succeeded, failed], description: Whether the approved call succeeded. }
+        note: { type: string, minLength: 1, maxLength: 1000, description: "A short note about the result, such as an error message or a reference." }
     ApprovalRequest:
       type: object
       required: [id, organization_id, agent_slug, agent_instance_id, agent_name, agent_instance_name, tool, arguments, status, deadline_at, created_at]
@@ -7328,6 +7443,9 @@ components:
         decision:
           description: Present once the request has been decided.
           $ref: "#/components/schemas/Decision"
+        consumption:
+          description: "Present once the agent used the approval to run the call, with the call's outcome if the agent reported it."
+          $ref: "#/components/schemas/AAPConsumption"
     QueueApprovalRequest:
       description: "An approval request as reviewers see it: the request itself plus the claim a reviewer holds on it, if any. Agents never see claims."
       allOf:

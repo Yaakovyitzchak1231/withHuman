@@ -65,6 +65,42 @@ type ApprovalRequest struct {
 	// Claim is the open claim on a pending request, populated only by
 	// product reads. AAP representations never copy it.
 	Claim *Claim `json:"claim,omitempty"`
+	// Consumption is the requesting instance using the approval, present
+	// once it consumed an approved request. Unlike a claim, it crosses
+	// the AAP boundary.
+	Consumption *Consumption `json:"consumption,omitempty"`
+}
+
+// Consumption records the instance that opened an approved request using
+// it right before running the call, so one approval runs one call. It
+// is written once and may gain an outcome once. It is unrelated to a
+// reviewer's claim on a pending request.
+type Consumption struct {
+	ConsumedAt time.Time           `json:"consumed_at"`
+	Outcome    *ConsumptionOutcome `json:"outcome,omitempty"`
+}
+
+// ConsumptionOutcomeStatus is how the approved call went, as the adapter
+// reported it. It is audit only: it never changes the request's status
+// or decision.
+type ConsumptionOutcomeStatus string
+
+const (
+	ConsumptionSucceeded ConsumptionOutcomeStatus = "succeeded"
+	ConsumptionFailed    ConsumptionOutcomeStatus = "failed"
+)
+
+// MaximumConsumptionNoteLength bounds an outcome note, in characters.
+const MaximumConsumptionNoteLength = 1000
+
+func (s ConsumptionOutcomeStatus) Valid() bool {
+	return s == ConsumptionSucceeded || s == ConsumptionFailed
+}
+
+type ConsumptionOutcome struct {
+	Status     ConsumptionOutcomeStatus `json:"status"`
+	Note       string                   `json:"note,omitempty"`
+	ReportedAt time.Time                `json:"reported_at"`
 }
 
 type Decision struct {
