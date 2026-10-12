@@ -327,6 +327,18 @@ func TestApprovalConsumptionAgainstRealPostgres(t *testing.T) {
 		}
 	})
 
+	t.Run("the note limit counts characters, not bytes", func(t *testing.T) {
+		target := approved("note-limit-1")
+		if _, err := consume(instance.ID, target.ID, "attempt-1"); err != nil {
+			t.Fatal(err)
+		}
+		note := strings.Repeat("é", domain.MaximumConsumptionNoteLength)
+		reported, err := report(instance.ID, target.ID, domain.ConsumptionSucceeded, note)
+		if err != nil || reported.Consumption.Outcome == nil || reported.Consumption.Outcome.Note != note {
+			t.Fatalf("a note of %d two-byte characters = %+v, %v", domain.MaximumConsumptionNoteLength, reported.Consumption, err)
+		}
+	})
+
 	t.Run("the protective trigger holds against direct SQL", func(t *testing.T) {
 		target := approved("protect-1")
 		if _, err := consume(instance.ID, target.ID, "attempt-1"); err != nil {
