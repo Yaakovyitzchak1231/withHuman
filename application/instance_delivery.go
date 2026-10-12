@@ -71,9 +71,13 @@ func (input VerifyInstanceDeliveryInput) Validate() error {
 }
 
 // InstanceDeliveryVerifier validates a proposed receiver, runs the
-// signed challenge against it, and seals its secret for storage.
+// signed challenge against it, and seals its secret for storage. It also
+// issues the signing secret of a registration started in the app, sealed
+// under the registration's label until the receiver is verified.
 type InstanceDeliveryVerifier interface {
 	VerifyInstanceDelivery(ctx context.Context, input VerifyInstanceDeliveryInput) (AgentInstanceDeliveryRecord, error)
+	IssueRegistrationSecret(organizationID, registrationID domain.ID) (secret string, sealed []byte, err error)
+	OpenRegistrationSecret(organizationID, registrationID domain.ID, sealed []byte) (string, error)
 }
 
 // RequestResolvedDelivery is one due request.resolved event with the

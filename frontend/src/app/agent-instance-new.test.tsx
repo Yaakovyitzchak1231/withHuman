@@ -9,7 +9,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { api } from "../api";
+import { api, RequestError } from "../api";
 import type { AgentDetail, Principal, Resource } from "../types";
 import { can } from "./authorization";
 import {
@@ -179,6 +179,144 @@ describe("new instance page", () => {
     show();
     expect(screen.queryByText(issued.credential.token)).toBeNull();
     expect(create).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers pausing runs only when the server can deliver webhooks", () => {
+    show();
+    expect(
+      screen.queryByRole("radio", { name: /Pause runs while waiting/ }),
+    ).toBeNull();
+    cleanup();
+    mocks.config = { ...mocks.config!, webhook_enabled: true };
+    show();
+    expect(
+      screen.getByRole("radio", { name: /Pause runs while waiting/ }),
+    ).toBeTruthy();
+  });
+
+  describe("pausing runs while waiting", () => {
+    const registration = {
+      registration_id: "5f0c2a8e-8a59-4c1e-9d47-6b2f2d9b7c11",
+      signing_secret: "whsec_c2VjcmV0LXNlY3JldC1zZWNyZXQtc2VjcmV0LXNlYw==",
+      expires_at: "2027-01-01T01:00:00Z",
+    };
+    const verified = {
+      ...issued,
+      agent_instance: {
+        ...issued.agent_instance,
+        delivery: {
+          type: "webhook",
+          url: "https://agent.example.com/aap/events",
+          registration_id: registration.registration_id,
+        },
+      },
+    } as Awaited<ReturnType<typeof api.createAgentInstance>>;
+
+    beforeEach(() => {
+      mocks.config = { ...mocks.config!, webhook_enabled: true };
+    });
+
+    async function startRegistration() {
+      show();
+      fireEvent.click(
+        screen.getByRole("radio", { name: /Pause runs while waiting/ }),
+      );
+      fireEvent.click(
+        screen.getByRole("button", { name: "Generate signing secret" }),
+      );
+      await screen.findByText(registration.signing_secret);
+    }
+    function enterReceiver() {
+      fireEvent.change(screen.getByRole("textbox", { name: "Instance name" }), {
+        target: { value: " support-server-01 " },
+      });
+      fireEvent.change(screen.getByRole("textbox", { name: "Receiver URL" }), {
+        target: { value: " https://agent.example.com/aap/events " },
+      });
+    }
+
+    it("shows the registration once, verifies the receiver and shows the key", async () => {
+      const register = vi
+        .spyOn(api, "createAgentInstanceRegistration")
+        .mockResolvedValue(registration);
+      const create = vi
+        .spyOn(api, "createAgentInstance")
+        .mockResolvedValue(verified);
+      await startRegistration();
+      expect(register).toHaveBeenCalledTimes(1);
+      expect(register).toHaveBeenCalledWith("support");
+      expect(screen.getByText(registration.registration_id)).toBeTruthy();
+      expect(screen.getByText("Copy your signing secret now")).toBeTruthy();
+      expect(create).not.toHaveBeenCalled();
+      const verify = screen.getByRole("button", { name: "Verify receiver" });
+      expect(verify.hasAttribute("disabled")).toBe(true);
+      enterReceiver();
+      fireEvent.submit(verify.closest("form")!);
+      await screen.findByText("Receiver verified");
+      expect(create).toHaveBeenCalledTimes(1);
+      expect(create).toHaveBeenCalledWith("support", "support-server-01", {
+        registration_id: registration.registration_id,
+        url: "https://agent.example.com/aap/events",
+      });
+      expect(screen.getByText(issued.credential.token)).toBeTruthy();
+      expect(
+        screen.getByText("https://agent.example.com/aap/events"),
+      ).toBeTruthy();
+      expect(screen.queryByText(registration.signing_secret)).toBeNull();
+      expect(mocks.invalidate).toHaveBeenCalled();
+    });
+
+    it("keeps the registration after a failed verification so the person can retry", async () => {
+      vi.spyOn(api, "createAgentInstanceRegistration").mockResolvedValue(
+        registration,
+      );
+      const create = vi
+        .spyOn(api, "createAgentInstance")
+        .mockRejectedValueOnce(
+          new RequestError(
+            "The receiver answered 404 instead of 200.",
+            422,
+            "webhook_verification_failed",
+          ),
+        )
+        .mockResolvedValueOnce(verified);
+      await startRegistration();
+      enterReceiver();
+      fireEvent.click(screen.getByRole("button", { name: "Verify receiver" }));
+      await waitFor(() =>
+        expect(screen.getByRole("alert").textContent).toContain(
+          "The receiver answered 404 instead of 200.",
+        ),
+      );
+      expect(screen.getByText("Receiver was not verified")).toBeTruthy();
+      expect(screen.getByText(registration.signing_secret)).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "Verify receiver" }));
+      await screen.findByText("Receiver verified");
+      expect(create).toHaveBeenCalledTimes(2);
+    });
+
+    it("starts again when the registration expired", async () => {
+      const register = vi
+        .spyOn(api, "createAgentInstanceRegistration")
+        .mockResolvedValue(registration);
+      vi.spyOn(api, "createAgentInstance").mockRejectedValue(
+        new RequestError(
+          "This registration has expired. Start again.",
+          410,
+          "instance_registration_expired",
+        ),
+      );
+      await startRegistration();
+      enterReceiver();
+      fireEvent.click(screen.getByRole("button", { name: "Verify receiver" }));
+      await screen.findByText("Registration expired");
+      expect(screen.queryByText(registration.signing_secret)).toBeNull();
+      fireEvent.click(
+        screen.getByRole("button", { name: "Generate signing secret" }),
+      );
+      await screen.findByText(registration.signing_secret);
+      expect(register).toHaveBeenCalledTimes(2);
+    });
   });
 
   it("keeps the form editable after a failed registration", async () => {

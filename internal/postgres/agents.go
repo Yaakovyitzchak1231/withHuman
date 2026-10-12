@@ -815,8 +815,11 @@ func (s *Store) CreateAgentInstanceWithCredential(ctx context.Context, input app
 	organizationID, agentID, actorID := input.OrganizationID, input.AgentID, input.ActorID
 	name, metadata, credential, now := input.Name, input.Metadata, input.Credential, input.Now
 	instance := domain.AgentInstance{
-		ID: domain.ID(uuid.NewString()), OrganizationID: organizationID, AgentID: agentID, MembershipID: input.MembershipID, Name: name,
+		ID: input.InstanceID, OrganizationID: organizationID, AgentID: agentID, MembershipID: input.MembershipID, Name: name,
 		Status: domain.AgentActive, Metadata: metadata, CreatedAt: now, LastSeenAt: now,
+	}
+	if instance.ID == "" {
+		instance.ID = domain.ID(uuid.NewString())
 	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -847,7 +850,23 @@ func (s *Store) CreateAgentInstanceWithCredential(ctx context.Context, input app
 	if err := insertAgentCredential(ctx, tx, organizationID, instance.ID, credential); err != nil {
 		return domain.AgentInstance{}, err
 	}
-	data, _ := json.Marshal(map[string]any{"agent_slug": instance.AgentSlug, "name": name, "membership_id": input.MembershipID})
+	audit := map[string]any{"agent_slug": instance.AgentSlug, "name": name, "membership_id": input.MembershipID}
+	if delivery := input.Delivery; delivery != nil {
+		if err := consumeAgentInstanceRegistration(ctx, tx, input, now); err != nil {
+			return domain.AgentInstance{}, err
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO agent_instance_deliveries
+			(agent_instance_id, organization_id, type, url, registration_id, sealed_signing_secret, verified_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7)`, instance.ID, organizationID, application.InstanceDeliveryWebhook,
+			delivery.URL, delivery.RegistrationID, delivery.SealedSigningSecret, delivery.VerifiedAt); err != nil {
+			return domain.AgentInstance{}, err
+		}
+		instance.Delivery = &domain.AgentInstanceDelivery{
+			Type: application.InstanceDeliveryWebhook, URL: delivery.URL, RegistrationID: delivery.RegistrationID,
+		}
+		audit["delivery"] = instance.Delivery
+	}
+	data, _ := json.Marshal(audit)
 	if err := s.appendAuditEvent(ctx, tx, domain.AuditEvent{
 		OrganizationID: organizationID, EventType: "agent_instance.registered",
 		ActorType: input.ActorType, ActorID: actorID,

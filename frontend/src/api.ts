@@ -14,6 +14,7 @@ import type {
   EnrollmentAgents,
   AgentDetail,
   AgentInstance,
+  AgentInstanceRegistration,
   AgentProvisioner,
   AgentListStatus,
   AgentStatus,
@@ -373,10 +374,22 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ slug, name, kind }),
     }),
-  createAgentInstance: (agentSlug: string, name: string) =>
+  createAgentInstance: (
+    agentSlug: string,
+    name: string,
+    delivery?: { registration_id: string; url: string },
+  ) =>
     request<{ agent_instance: AgentInstance; credential: IssuedCredential }>(
       `${APP_API_BASE}/agents/${encodeURIComponent(agentSlug)}/instances`,
-      { method: "POST", body: JSON.stringify({ name }) },
+      {
+        method: "POST",
+        body: JSON.stringify(delivery ? { name, delivery } : { name }),
+      },
+    ),
+  createAgentInstanceRegistration: (agentSlug: string) =>
+    request<AgentInstanceRegistration>(
+      `${APP_API_BASE}/agents/${encodeURIComponent(agentSlug)}/instance_registrations`,
+      { method: "POST" },
     ),
   members: () => request<{ members: Member[] }>(`${APP_API_BASE}/members`),
   teams: (status: "live" | "archived" | "all" = "live") =>

@@ -95,6 +95,7 @@ type AgentRepository interface {
 	SetAgentInstanceStatus(ctx context.Context, input SetAgentInstanceStatusInput) (domain.AgentInstance, error)
 	RenameAgentInstance(ctx context.Context, input RenameAgentInstanceInput) (domain.AgentInstance, error)
 	CreateAgentInstanceWithCredential(ctx context.Context, input CreateAgentInstanceWithCredentialInput) (domain.AgentInstance, error)
+	AgentInstanceRegistrationRepository
 	RevokeAgentCredential(ctx context.Context, input RevokeAgentCredentialInput) error
 	CreateAgentProvisioner(ctx context.Context, input CreateAgentProvisionerInput) (domain.AgentProvisioner, error)
 	MintAgentInstance(ctx context.Context, input MintAgentInstanceInput) (domain.AgentInstance, error)

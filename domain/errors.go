@@ -109,6 +109,9 @@ var (
 	// ErrInstanceDeleted answers a replayed AAP provisioning whose instance
 	// has since been deleted, and a product attempt to re-enable one.
 	ErrInstanceDeleted = errors.New("agent instance was deleted")
+	// ErrInstanceRegistrationExpired refuses completing a webhook
+	// registration started in the app after it expired or was used.
+	ErrInstanceRegistrationExpired = errors.New("this registration has expired. Start again")
 	// ErrIdempotencyInProgress means another attempt with the same
 	// idempotency key is still running; retry after it finishes.
 	ErrIdempotencyInProgress = errors.New("an attempt with this idempotency key is in progress")

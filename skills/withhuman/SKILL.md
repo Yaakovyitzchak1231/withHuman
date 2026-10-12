@@ -56,7 +56,11 @@ exchange:
 The `withhuman` CLI installs ready-made AAP adapters. An agent built in
 house can speak AAP directly: create an instance in the app with
 **Generate an API key**, then send requests to `<origin>/api/aap` (hosted:
-`https://app.withhuman.ai/api/aap`) with that key as a bearer token.
+`https://app.withhuman.ai/api/aap`) with that key as a bearer token. For
+an agent that should stop while it waits and resume when a decision is
+made, choose **Pause runs while waiting** instead: configure the agent's
+webhook receiver with the registration ID and signing secret the app
+shows once, then enter the receiver's URL and choose **Verify receiver**.
 Specification: <https://agentapprovalprotocol.io>; withHuman's reference:
 <https://withhuman.ai/docs/reference/agent-approval-protocol.md>.
 

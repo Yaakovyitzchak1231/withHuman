@@ -20,7 +20,7 @@ import { RadioGroup, RadioOption } from "@/ds/components/radio-group";
 import { TextField } from "@/ds/components/text-field";
 import { InfoLabel } from "@/ds/components/info-label";
 import { api, RequestError } from "../api";
-import type { AgentDetail } from "../types";
+import type { AgentDetail, AgentInstanceRegistration } from "../types";
 import { agentInstanceSetup } from "./agent-instance-setup";
 import { useAccess } from "./authorization";
 import { formatAbsolute } from "./format";
@@ -66,10 +66,15 @@ export function NewAgentInstanceScreen({
   const [submitting, setSubmitting] = useState(false);
   const pending = useRef(false);
   const [error, setError] = useState("");
-  // The one-time credential never enters a loader, URL, or persistent store.
+  // The one-time credential and signing secret never enter a loader,
+  // URL, or persistent store.
   const [issued, setIssued] = useState<Awaited<
     ReturnType<typeof api.createAgentInstance>
   > | null>(null);
+  const [registration, setRegistration] =
+    useState<AgentInstanceRegistration | null>(null);
+  const [registrationExpired, setRegistrationExpired] = useState(false);
+  const [receiverURL, setReceiverURL] = useState("");
   const resource = { kind: "agent", id: agentSlug } as const;
   const allowed =
     can("agent.read", resource) && can("agent.credential.issue", resource);
@@ -99,6 +104,73 @@ export function NewAgentInstanceScreen({
           ? reason.message
           : "The API key could not be generated. Try again.",
       );
+    } finally {
+      pending.current = false;
+      setSubmitting(false);
+    }
+  }
+
+  async function startRegistration() {
+    if (pending.current || issued || !allowed || agent?.status !== "active")
+      return;
+    pending.current = true;
+    setSubmitting(true);
+    setError("");
+    try {
+      setRegistration(await api.createAgentInstanceRegistration(agentSlug));
+      setRegistrationExpired(false);
+    } catch (reason) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "The signing secret could not be generated. Try again.",
+      );
+    } finally {
+      pending.current = false;
+      setSubmitting(false);
+    }
+  }
+
+  async function verify(event: FormEvent) {
+    event.preventDefault();
+    if (
+      pending.current ||
+      issued ||
+      !registration ||
+      !allowed ||
+      !setup ||
+      agent?.status !== "active" ||
+      !name.trim() ||
+      !receiverURL.trim()
+    )
+      return;
+    pending.current = true;
+    setSubmitting(true);
+    setError("");
+    try {
+      setIssued(
+        await api.createAgentInstance(agentSlug, name.trim(), {
+          registration_id: registration.registration_id,
+          url: receiverURL.trim(),
+        }),
+      );
+      setRegistration(null);
+      await router.invalidate();
+    } catch (reason) {
+      if (
+        reason instanceof RequestError &&
+        (reason.code === "instance_registration_expired" ||
+          reason.status === 404)
+      ) {
+        setRegistration(null);
+        setRegistrationExpired(true);
+      } else {
+        setError(
+          reason instanceof Error
+            ? reason.message
+            : "The receiver could not be verified. Try again.",
+        );
+      }
     } finally {
       pending.current = false;
       setSubmitting(false);
@@ -145,13 +217,22 @@ export function NewAgentInstanceScreen({
       ) : issued && setup ? (
         <Card>
           <CardHeader>
-            <CardTitle>API key generated</CardTitle>
+            <CardTitle>
+              {issued.agent_instance.delivery
+                ? "Receiver verified"
+                : "API key generated"}
+            </CardTitle>
           </CardHeader>
           <CardBody className="flex flex-col gap-4">
             <DescriptionList>
               <DescriptionItem term="Instance" copy={false}>
                 {issued.agent_instance.name}
               </DescriptionItem>
+              {issued.agent_instance.delivery ? (
+                <DescriptionItem term="Receiver" mono copy={false}>
+                  {issued.agent_instance.delivery.url}
+                </DescriptionItem>
+              ) : null}
               <DescriptionItem term="Key expires" copy={false}>
                 {formatAbsolute(issued.credential.expires_at)}
               </DescriptionItem>
@@ -245,6 +326,20 @@ export function NewAgentInstanceScreen({
                   }
                   description="Configure an AAP integration directly."
                 />
+                {config?.webhook_enabled ? (
+                  <RadioOption
+                    value="webhook"
+                    label={
+                      <SetupMethodLabel
+                        anchor="webhook-delivery"
+                        info="Let an AAP integration stop while it waits and resume when a decision is made."
+                      >
+                        Pause runs while waiting
+                      </SetupMethodLabel>
+                    }
+                    description="Your agent’s receiver is notified when a decision is made."
+                  />
+                ) : null}
               </RadioGroup>
             </CardBody>
           </Card>
@@ -315,10 +410,156 @@ export function NewAgentInstanceScreen({
                 </CardFooter>
               </Card>
             </form>
+          ) : method === "webhook" ? (
+            <WebhookSetup
+              registration={registration}
+              expired={registrationExpired}
+              name={name}
+              onNameChange={setName}
+              receiverURL={receiverURL}
+              onReceiverURLChange={setReceiverURL}
+              submitting={submitting}
+              error={error}
+              onStart={() => void startRegistration()}
+              onVerify={verify}
+            />
           ) : null}
         </>
       )}
     </Page>
+  );
+}
+
+/* Pausing runs takes two steps: the receiver needs the registration ID
+ * and signing secret before it can answer the verification. */
+function WebhookSetup({
+  registration,
+  expired,
+  name,
+  onNameChange,
+  receiverURL,
+  onReceiverURLChange,
+  submitting,
+  error,
+  onStart,
+  onVerify,
+}: {
+  registration: AgentInstanceRegistration | null;
+  expired: boolean;
+  name: string;
+  onNameChange: (value: string) => void;
+  receiverURL: string;
+  onReceiverURLChange: (value: string) => void;
+  submitting: boolean;
+  error: string;
+  onStart: () => void;
+  onVerify: (event: FormEvent) => void;
+}) {
+  if (!registration) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Set up your receiver</CardTitle>
+        </CardHeader>
+        <CardBody className="flex flex-col gap-4">
+          {expired ? (
+            <Callout tone="warn" title="Registration expired">
+              Generate a new signing secret and configure your receiver
+              again.
+            </Callout>
+          ) : (
+            <p className="text-body text-ink-muted">
+              Generate a registration ID and signing secret for your agent’s
+              receiver.
+            </p>
+          )}
+          {error ? (
+            <Callout
+              role="alert"
+              tone="deny"
+              title="Signing secret was not generated"
+            >
+              {error}
+            </Callout>
+          ) : null}
+        </CardBody>
+        <CardFooter>
+          <Button variant="primary" loading={submitting} onClick={onStart}>
+            Generate signing secret
+          </Button>
+        </CardFooter>
+      </Card>
+    );
+  }
+  return (
+    <form onSubmit={onVerify}>
+      <Card>
+        <CardHeader>
+          <CardTitle>Set up your receiver</CardTitle>
+        </CardHeader>
+        <CardBody className="flex flex-col gap-4">
+          <p className="text-body text-ink-muted">
+            Configure your receiver with this registration ID and signing
+            secret.
+          </p>
+          <Callout tone="warn" title="Copy your signing secret now">
+            This secret is shown only once.
+          </Callout>
+          <CodeBlock
+            label="Registration ID"
+            code={registration.registration_id}
+            wrap
+          />
+          <CodeBlock
+            label="Signing secret"
+            code={registration.signing_secret}
+            wrap
+          />
+          <DescriptionList>
+            <DescriptionItem term="Registration expires" copy={false}>
+              {formatAbsolute(registration.expires_at)}
+            </DescriptionItem>
+          </DescriptionList>
+          <p className="text-body text-ink-muted">
+            Then enter your receiver’s URL to verify it.
+          </p>
+          <TextField
+            label="Instance name"
+            value={name}
+            onChange={(event) => onNameChange(event.target.value)}
+            placeholder="support-server-01"
+            description="Choose a unique name within this agent."
+            required
+            disabled={submitting}
+          />
+          <TextField
+            label="Receiver URL"
+            type="url"
+            value={receiverURL}
+            onChange={(event) => onReceiverURLChange(event.target.value)}
+            placeholder="https://agent.example.com/aap/events"
+            mono
+            required
+            disabled={submitting}
+          />
+          {error ? (
+            <Callout role="alert" tone="deny" title="Receiver was not verified">
+              {error}
+            </Callout>
+          ) : null}
+        </CardBody>
+        <CardFooter>
+          <Button
+            type="submit"
+            variant="primary"
+            loading={submitting}
+            disabled={!name.trim() || !receiverURL.trim()}
+          >
+            Verify receiver
+          </Button>
+        </CardFooter>
+      </Card>
+    </form>
   );
 }
 

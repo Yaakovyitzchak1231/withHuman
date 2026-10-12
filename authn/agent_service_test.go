@@ -48,6 +48,9 @@ type agentRepositoryStub struct {
 	getBySlugInput      application.GetAgentBySlugInput
 	instanceStatusInput application.SetAgentInstanceStatusInput
 	instanceRenameInput application.RenameAgentInstanceInput
+	instanceInput       application.CreateAgentInstanceWithCredentialInput
+	registrations       map[domain.ID]application.AgentInstanceRegistration
+	getRegistration     application.GetAgentInstanceRegistrationInput
 }
 
 func (r *agentRepositoryStub) ResolveAgentCredential(context.Context, application.ResolveAgentCredentialInput) (domain.Principal, error) {
@@ -112,8 +115,29 @@ func (r *agentRepositoryStub) RenameAgentInstance(_ context.Context, input appli
 	return domain.AgentInstance{ID: input.InstanceID, OrganizationID: input.OrganizationID, AgentSlug: r.agentSlug, Name: input.Name, Status: domain.AgentActive}, nil
 }
 func (r *agentRepositoryStub) CreateAgentInstanceWithCredential(_ context.Context, input application.CreateAgentInstanceWithCredentialInput) (domain.AgentInstance, error) {
+	r.instanceInput = input
 	r.instanceRecord, r.instanceActorID, r.instanceMetadata, r.instanceOwnerID = input.Credential, input.ActorID, input.Metadata, input.MembershipID
+	if input.Delivery != nil {
+		delete(r.registrations, input.Delivery.RegistrationID)
+		return domain.AgentInstance{ID: input.InstanceID, OrganizationID: input.OrganizationID, AgentID: input.AgentID, MembershipID: input.MembershipID, Name: input.Name, Status: domain.AgentActive,
+			Delivery: &domain.AgentInstanceDelivery{Type: "webhook", URL: input.Delivery.URL, RegistrationID: input.Delivery.RegistrationID}}, nil
+	}
 	return domain.AgentInstance{ID: "instance-1", OrganizationID: input.OrganizationID, AgentID: input.AgentID, MembershipID: input.MembershipID, Name: input.Name, Status: domain.AgentActive, Metadata: input.Metadata, CreatedAt: input.Now, LastSeenAt: input.Now}, nil
+}
+func (r *agentRepositoryStub) CreateAgentInstanceRegistration(_ context.Context, input application.CreateAgentInstanceRegistrationInput) error {
+	if r.registrations == nil {
+		r.registrations = map[domain.ID]application.AgentInstanceRegistration{}
+	}
+	r.registrations[input.Registration.ID] = input.Registration
+	return nil
+}
+func (r *agentRepositoryStub) GetAgentInstanceRegistration(_ context.Context, input application.GetAgentInstanceRegistrationInput) (application.AgentInstanceRegistration, error) {
+	r.getRegistration = input
+	registration, ok := r.registrations[input.RegistrationID]
+	if !ok || registration.AgentID != input.AgentID || registration.ActorType != input.ActorType || registration.ActorID != input.ActorID {
+		return application.AgentInstanceRegistration{}, domain.ErrNotFound
+	}
+	return registration, nil
 }
 func (r *agentRepositoryStub) RevokeAgentCredential(context.Context, application.RevokeAgentCredentialInput) error {
 	return nil
@@ -342,6 +366,20 @@ func TestMintAgentInstanceCapsRequestedTTLAndAllowsAnonymousName(t *testing.T) {
 type deliveryVerifierStub struct {
 	input application.VerifyInstanceDeliveryInput
 	err   error
+}
+
+// IssueRegistrationSecret "seals" by prefixing the label, so a test can
+// see the secret was bound to the registration and never stored bare.
+func (v *deliveryVerifierStub) IssueRegistrationSecret(organizationID, registrationID domain.ID) (string, []byte, error) {
+	secret := "whsec_" + string(registrationID)
+	return secret, []byte(application.InstanceRegistrationSigningSecretLabel(organizationID, registrationID) + "|" + secret), nil
+}
+func (v *deliveryVerifierStub) OpenRegistrationSecret(organizationID, registrationID domain.ID, sealed []byte) (string, error) {
+	label, secret, ok := strings.Cut(string(sealed), "|")
+	if !ok || label != application.InstanceRegistrationSigningSecretLabel(organizationID, registrationID) {
+		return "", errors.New("sealed under another label")
+	}
+	return secret, nil
 }
 
 func (v *deliveryVerifierStub) VerifyInstanceDelivery(_ context.Context, input application.VerifyInstanceDeliveryInput) (application.AgentInstanceDeliveryRecord, error) {

@@ -116,3 +116,30 @@ func (v *Verifier) VerifyInstanceDelivery(ctx context.Context, input application
 		URL: proposed.URL, RegistrationID: proposed.RegistrationID, SealedSigningSecret: sealed, VerifiedAt: now,
 	}, nil
 }
+
+// IssueRegistrationSecret generates the signing secret of a registration
+// started in the app and seals it under the registration's label. The
+// plaintext goes back to the person once and is never stored.
+func (v *Verifier) IssueRegistrationSecret(organizationID, registrationID domain.ID) (string, []byte, error) {
+	if v.sealer == nil {
+		return "", nil, domain.ErrWebhookUnconfigured
+	}
+	secret, err := webhookdelivery.NewStandardSecret()
+	if err != nil {
+		return "", nil, err
+	}
+	sealed, err := v.sealer.Seal(application.InstanceRegistrationSigningSecretLabel(organizationID, registrationID), secret)
+	if err != nil {
+		return "", nil, err
+	}
+	return secret, sealed, nil
+}
+
+// OpenRegistrationSecret opens a pending registration's signing secret
+// for its verification attempt.
+func (v *Verifier) OpenRegistrationSecret(organizationID, registrationID domain.ID, sealed []byte) (string, error) {
+	if v.sealer == nil {
+		return "", domain.ErrWebhookUnconfigured
+	}
+	return v.sealer.Open(application.InstanceRegistrationSigningSecretLabel(organizationID, registrationID), sealed)
+}

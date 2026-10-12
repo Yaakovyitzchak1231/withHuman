@@ -154,11 +154,13 @@ type fixture struct {
 	org, user        domain.ID
 	member           domain.ID
 	provisionerToken string
+	databaseURL      string
 }
 
 func newFixture(t *testing.T) *fixture {
 	ctx := context.Background()
-	store, err := postgres.Open(ctx, dbtest.Start(t))
+	databaseURL := dbtest.Start(t)
+	store, err := postgres.Open(ctx, databaseURL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +171,7 @@ func newFixture(t *testing.T) *fixture {
 	}
 	store.WithSealer(sealer)
 	now := time.Now().UTC()
-	f := &fixture{t: t, ctx: ctx, store: store, clock: &offsetClock{},
+	f := &fixture{t: t, ctx: ctx, store: store, clock: &offsetClock{}, databaseURL: databaseURL,
 		org: domain.ID(uuid.NewString()), user: domain.ID(uuid.NewString()), member: domain.ID(uuid.NewString())}
 	if _, err = store.ActivateOrganization(ctx, application.ActivateOrganizationInput{OrganizationID: f.org, OrganizationSlug: "async", OrganizationName: "Async", UserID: f.user, MembershipID: f.member, DisplayName: "Owner", Email: "async@example.com", PasswordHash: "test", AdmissionSource: domain.AdmissionManual, Now: now}); err != nil {
 		t.Fatal(err)

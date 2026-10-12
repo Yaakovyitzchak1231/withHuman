@@ -294,6 +294,7 @@ func (a *API) router() *gin.Engine {
 	a.handle(appAPI, http.MethodPost, "/agents/:slug/restore", string(domain.PermissionAgentWrite), a.restoreAgent)
 	a.handle(appAPI, http.MethodPatch, "/agent_instances/:id", string(domain.PermissionAgentWrite), a.updateAgentInstance)
 	a.handle(appAPI, http.MethodPost, "/agents/:slug/instances", string(domain.PermissionAgentCredentialIssue), a.createAgentInstance)
+	a.handle(appAPI, http.MethodPost, "/agents/:slug/instance_registrations", string(domain.PermissionAgentCredentialIssue), a.createAgentInstanceRegistration)
 	a.handle(appAPI, http.MethodPost, "/agents/:slug/provisioners", string(domain.PermissionAgentCredentialIssue), a.createAgentProvisioner)
 	a.handle(appAPI, http.MethodDelete, "/agent-credentials/:id", string(domain.PermissionAgentCredentialRevoke), a.revokeCredential)
 	a.handle(appAPI, http.MethodDelete, "/agent-provisioners/:id", string(domain.PermissionAgentCredentialRevoke), a.revokeAgentProvisioner)
@@ -1018,6 +1019,12 @@ func (a *API) createAgentInstance(c *gin.Context) {
 	var request struct {
 		Name     string          `json:"name" binding:"required"`
 		Metadata json.RawMessage `json:"metadata"`
+		// Delivery completes a registration started with
+		// createAgentInstanceRegistration.
+		Delivery *struct {
+			RegistrationID string `json:"registration_id" binding:"required"`
+			URL            string `json:"url" binding:"required"`
+		} `json:"delivery"`
 	}
 	if !bind(c, &request) {
 		return
@@ -1026,12 +1033,35 @@ func (a *API) createAgentInstance(c *gin.Context) {
 	if !ok {
 		return
 	}
-	instance, err := a.auth.CreateAgentInstanceCredential(c.Request.Context(), currentPrincipal(c), agentID, request.Name, request.Metadata)
+	var instance domain.AgentInstanceCredential
+	var err error
+	if request.Delivery != nil {
+		instance, err = a.auth.CreateAgentInstanceWithDelivery(c.Request.Context(), currentPrincipal(c), agentID, request.Name, request.Metadata,
+			authn.InstanceRegistrationDelivery{RegistrationID: domain.ID(request.Delivery.RegistrationID), URL: request.Delivery.URL})
+	} else {
+		instance, err = a.auth.CreateAgentInstanceCredential(c.Request.Context(), currentPrincipal(c), agentID, request.Name, request.Metadata)
+	}
 	if err != nil {
 		a.writeError(c, err)
 		return
 	}
 	c.JSON(http.StatusCreated, instance)
+}
+
+func (a *API) createAgentInstanceRegistration(c *gin.Context) {
+	if !bindEmpty(c) {
+		return
+	}
+	agentID, ok := a.agentID(c)
+	if !ok {
+		return
+	}
+	registration, err := a.auth.CreateAgentInstanceRegistration(c.Request.Context(), currentPrincipal(c), agentID)
+	if err != nil {
+		a.writeError(c, err)
+		return
+	}
+	c.JSON(http.StatusCreated, registration)
 }
 
 func (a *API) createAgentProvisioner(c *gin.Context) {
@@ -1608,6 +1638,8 @@ func WriteError(c *gin.Context, logger *slog.Logger, err error) {
 		status, errorType, code = http.StatusUnprocessableEntity, "invalid_request", "webhook_verification_failed"
 	case errors.Is(err, domain.ErrInvalidWebhookURL):
 		status, errorType, code = http.StatusBadRequest, "invalid_request", "invalid_webhook_url"
+	case errors.Is(err, domain.ErrInstanceRegistrationExpired):
+		status, errorType, code = http.StatusGone, "conflict", "instance_registration_expired"
 	case errors.Is(err, domain.ErrInstanceDeleted):
 		status, errorType, code = http.StatusConflict, "conflict", "instance_deleted"
 	case errors.Is(err, domain.ErrIdempotencyInProgress):

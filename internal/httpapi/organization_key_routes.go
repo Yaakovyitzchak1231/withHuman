@@ -18,6 +18,7 @@ var organizationKeyRoutes = map[routeKey]struct{}{
 	{Method: "POST", Path: "/api/v1/agents/:slug/restore"}:                                                   {},
 	{Method: "PATCH", Path: "/api/v1/agent_instances/:id"}:                                                   {},
 	{Method: "POST", Path: "/api/v1/agents/:slug/instances"}:                                                 {},
+	{Method: "POST", Path: "/api/v1/agents/:slug/instance_registrations"}:                                    {},
 	{Method: "POST", Path: "/api/v1/agents/:slug/provisioners"}:                                              {},
 	{Method: "DELETE", Path: "/api/v1/agent-provisioners/:id"}:                                               {},
 	{Method: "DELETE", Path: "/api/v1/agent-credentials/:id"}:                                                {},

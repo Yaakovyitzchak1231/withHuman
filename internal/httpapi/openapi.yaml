@@ -1996,16 +1996,52 @@ paths:
                   additionalProperties: true
                   example: { region: eu-west }
                   description: Any JSON object to store with the instance, such as a region or pod name.
+                delivery: { $ref: "#/components/schemas/AgentInstanceRegistrationDelivery" }
       responses:
         "201":
           description: The new instance and its credential. The token appears only in this response.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/AgentInstanceCredential" }
+        "400": { $ref: "#/components/responses/Error", description: "An organization key tried to register an instance of a personal agent, which belongs to a person (`agent_owner_required`), or the receiver URL is not allowed (`invalid_webhook_url`)" }
+        "403": { $ref: "#/components/responses/Error", description: "You cannot issue credentials" }
+        "404": { $ref: "#/components/responses/Error", description: "No such agent, or no registration you started for it" }
+        "409": { $ref: "#/components/responses/Error", description: "The agent is archived (`agent_archived`)" }
+        "410": { $ref: "#/components/responses/Error", description: "The registration expired or was used (`instance_registration_expired`). Start a new one." }
+        "422": { $ref: "#/components/responses/Error", description: "The receiver did not answer the verification (`webhook_verification_failed`). The registration is kept, so you can fix the receiver and try again." }
+        "501": { $ref: "#/components/responses/Error", description: "This server has no secrets key, so it cannot deliver webhooks (`webhook_unconfigured`)" }
+  /api/v1/agents/{slug}/instance_registrations:
+    post:
+      summary: Start a webhook registration
+      description: >-
+        Starts registering an instance that is notified when its requests
+        are decided, so the agent can pause instead of polling. The
+        response holds a registration ID and a signing secret. The secret
+        appears only in this response.
+
+        Configure your receiver with both, then register the instance with
+        `delivery` naming this registration and the receiver URL. The
+        receiver must answer a signed `webhook.verification` challenge
+        before the instance is created. The registration expires after
+        one hour.
+      operationId: createAgentInstanceRegistration
+      x-withhuman-permission: agent.credential.issue
+      x-withhuman-credential-kinds: [session, personal_api_key, organization_api_key]
+      tags: [Agents]
+      security: [{ cookieAuth: [] }, { apiKeyAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/AgentSlug"
+      responses:
+        "201":
+          description: The registration. The signing secret appears only in this response.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentInstanceRegistration" }
         "400": { $ref: "#/components/responses/Error", description: "An organization key tried to register an instance of a personal agent, which belongs to a person (`agent_owner_required`)" }
         "403": { $ref: "#/components/responses/Error", description: "You cannot issue credentials" }
         "404": { $ref: "#/components/responses/Error", description: "No such agent" }
         "409": { $ref: "#/components/responses/Error", description: "The agent is archived (`agent_archived`)" }
+        "501": { $ref: "#/components/responses/Error", description: "This server has no secrets key, so it cannot deliver webhooks (`webhook_unconfigured`)" }
   /api/v1/agents/{slug}/provisioners:
     post:
       summary: Create a provisioner token
@@ -7108,6 +7144,21 @@ components:
         url: { type: string, format: uri, example: "https://harness.example.com/aap/events", description: "The exact HTTPS receiver URL. Private, loopback and other non-public addresses are refused, and redirects are not followed." }
         registration_id: { type: string, format: uuid, description: A UUID you generate for this configuration and associate with the secret on the receiver. It is echoed in the verification message. }
         signing_secret: { type: string, writeOnly: true, pattern: '^whsec_[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$', description: "`whsec_` followed by 32 random bytes in padded base64. Use a separate secret for each instance. It is never returned." }
+    AgentInstanceRegistration:
+      type: object
+      description: A pending webhook registration. Configure your receiver with the registration ID and signing secret.
+      required: [registration_id, signing_secret, expires_at]
+      properties:
+        registration_id: { type: string, format: uuid, description: "The ID the verification message names. Your receiver uses it to choose the signing secret." }
+        signing_secret: { type: string, pattern: '^whsec_[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$', description: "The receiver's signing secret: `whsec_` followed by 32 random bytes in padded base64. It is never returned again." }
+        expires_at: { type: string, format: date-time, description: When the registration can no longer be completed. }
+    AgentInstanceRegistrationDelivery:
+      type: object
+      description: The receiver for a registration you started. It is verified before the instance is created.
+      required: [registration_id, url]
+      properties:
+        registration_id: { type: string, format: uuid, description: The registration's ID. }
+        url: { type: string, format: uri, example: "https://harness.example.com/aap/events", description: "The exact HTTPS receiver URL. Private, loopback and other non-public addresses are refused, and redirects are not followed." }
     AgentCredentialState:
       type: object
       description: One instance credential as the agent page shows it. The token is never included. A credential is live while it is neither expired nor revoked.
