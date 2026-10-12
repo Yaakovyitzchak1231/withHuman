@@ -23,6 +23,8 @@ type approvalRepositoryStub struct {
 	marked          int
 	listInput       application.ListApprovalsInput
 	cancelInput     application.CancelApprovalInput
+	consumeInput    *application.ConsumeApprovalInput
+	outcomeInput    *application.ReportApprovalOutcomeInput
 	getInput        application.GetApprovalInput
 	routingState    application.ApprovalRoutingState
 	routingErr      error
@@ -111,6 +113,14 @@ func (r *approvalRepositoryStub) CancelApproval(_ context.Context, input applica
 		return domain.ApprovalRequest{}, domain.ErrAlreadyTerminal
 	}
 	r.request.Status = domain.ApprovalCancelled
+	return r.request, nil
+}
+func (r *approvalRepositoryStub) ConsumeApproval(_ context.Context, input application.ConsumeApprovalInput) (domain.ApprovalRequest, error) {
+	r.consumeInput = &input
+	return r.request, nil
+}
+func (r *approvalRepositoryStub) ReportApprovalOutcome(_ context.Context, input application.ReportApprovalOutcomeInput) (domain.ApprovalRequest, error) {
+	r.outcomeInput = &input
 	return r.request, nil
 }
 func (r *approvalRepositoryStub) GetPipelineSuspension(context.Context, application.GetPipelineSuspensionInput) (domain.PipelineSuspension, error) {
@@ -457,6 +467,60 @@ func TestCancelIsTheRequestingInstanceOnly(t *testing.T) {
 	}
 	if _, err := service.Cancel(context.Background(), agent, "request-1"); !errors.Is(err, domain.ErrAlreadyTerminal) {
 		t.Fatalf("terminal cancel error = %v, want already terminal", err)
+	}
+}
+
+// Consume and outcome are the requesting instance's commands: people,
+// instances without request.create, a missing key and malformed outcomes
+// never reach the store, and the store gets the caller's own instance.
+func TestConsumeAndOutcomeAreTheInstancesCommands(t *testing.T) {
+	repository := &approvalRepositoryStub{request: domain.ApprovalRequest{
+		ID: "request-1", OrganizationID: "org-1", AgentID: "agent-1", AgentInstanceID: "instance-1", Status: domain.ApprovalApproved,
+	}}
+	service := NewService(repository, repository, defaultPolicy(), &evaluatorStub{}, nil, &lifecycleStub{}, entitlements.NewUnlimited(), approvalClock{time.Unix(42_000, 0).UTC()})
+	agent := domain.Principal{
+		ActorType: domain.ActorAgent, ActorID: "agent-1", AgentInstanceID: "instance-1", OrganizationID: "org-1",
+		Auth: domain.AuthContext{Method: "bearer"},
+	}.WithGrants(domain.OrganizationGrants([]domain.Permission{domain.PermissionRequestCreate}))
+	note := func(value string) *string { return &value }
+	for name, principal := range map[string]domain.Principal{
+		"human": domain.Principal{ActorType: domain.ActorHuman, ActorID: "user-1", OrganizationID: "org-1", MembershipID: "membership-1"}.
+			WithGrants(domain.OrganizationGrants([]domain.Permission{domain.PermissionRequestCreate})),
+		"agent without create": domain.Principal{ActorType: domain.ActorAgent, ActorID: "agent-1", AgentInstanceID: "instance-1", OrganizationID: "org-1"}.
+			WithGrants(domain.OrganizationGrants([]domain.Permission{domain.PermissionRequestRead})),
+	} {
+		if _, err := service.Consume(context.Background(), principal, "request-1", "key"); !errors.Is(err, domain.ErrForbidden) {
+			t.Fatalf("%s consume error = %v, want forbidden", name, err)
+		}
+		if _, err := service.ReportOutcome(context.Background(), principal, "request-1", OutcomeInput{Status: domain.ConsumptionSucceeded}); !errors.Is(err, domain.ErrForbidden) {
+			t.Fatalf("%s outcome error = %v, want forbidden", name, err)
+		}
+	}
+	if _, err := service.Consume(context.Background(), agent, "request-1", " "); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("consume without a key error = %v, want invalid", err)
+	}
+	for name, input := range map[string]OutcomeInput{
+		"unknown status": {Status: "done"},
+		"empty note":     {Status: domain.ConsumptionFailed, Note: note("")},
+	} {
+		if _, err := service.ReportOutcome(context.Background(), agent, "request-1", input); !errors.Is(err, domain.ErrInvalid) {
+			t.Fatalf("%s outcome error = %v, want invalid", name, err)
+		}
+	}
+	if repository.consumeInput != nil || repository.outcomeInput != nil {
+		t.Fatal("a refused command reached the store")
+	}
+	if _, err := service.Consume(context.Background(), agent, "request-1", "attempt-1"); err != nil {
+		t.Fatal(err)
+	}
+	if got := repository.consumeInput; got == nil || got.AgentInstanceID != "instance-1" || got.IdempotencyKey != "attempt-1" || got.OrganizationID != "org-1" {
+		t.Fatalf("consume input = %#v", got)
+	}
+	if _, err := service.ReportOutcome(context.Background(), agent, "request-1", OutcomeInput{Status: domain.ConsumptionFailed, Note: note("Card declined")}); err != nil {
+		t.Fatal(err)
+	}
+	if got := repository.outcomeInput; got == nil || got.Status != domain.ConsumptionFailed || got.Note != "Card declined" || got.AgentInstanceID != "instance-1" {
+		t.Fatalf("outcome input = %#v", got)
 	}
 }
 

@@ -104,8 +104,10 @@ const approvalSelect = `SELECT r.id::text, r.organization_id::text, r.agent_id::
 	d.id::text, d.membership_id::text, d.source, d.status, d.note, d.channel,
     d.reviewer_display_name, d.reviewer_email, d.auth_method, d.auth_assurance,
     d.authenticated_at, d.session_id::text, d.credential_id::text, d.idempotency_key, d.decided_at, d.expires_at,
-    cl.id::text, cl.membership_id::text, cu.display_name, cl.claimed_at, cl.expires_at
+    cl.id::text, cl.membership_id::text, cu.display_name, cl.claimed_at, cl.expires_at,
+    co.consumed_at, co.outcome_status, co.outcome_note, co.outcome_reported_at
   FROM approval_requests r LEFT JOIN decisions d ON d.request_id = r.id
+  LEFT JOIN approval_consumptions co ON co.request_id = r.id AND co.organization_id = r.organization_id
   LEFT JOIN approval_request_claims cl
     ON cl.request_id = r.id AND cl.organization_id = r.organization_id AND cl.released_at IS NULL
   LEFT JOIN memberships cm ON cm.id = cl.membership_id AND cm.organization_id = cl.organization_id
@@ -219,13 +221,16 @@ func scanApproval(row rowScanner) (domain.ApprovalRequest, error) {
 	var claimID, claimMembershipID, claimantName sql.NullString
 	var claimedAt, claimExpiresAt sql.NullTime
 	var requesterID, requesterName sql.NullString
+	var consumedAt, outcomeReportedAt sql.NullTime
+	var outcomeStatus, outcomeNote sql.NullString
 	err := row.Scan(&id, &organizationID, &agentID, &agentInstanceID, &request.AgentName, &request.AgentInstanceName,
 		&request.AgentSlug, &request.Tool, &request.Arguments, &request.AgentReasoning, &contextJSON,
 		&request.IdempotencyKey, &request.SemanticHash, &status, &request.DeadlineAt, &request.CreatedAt, &request.UpdatedAt, &request.Timeout, &request.Server,
 		&requesterID, &requesterName,
 		&decisionID, &membershipID, &decisionSource, &decisionStatus, &note, &channel, &reviewerName, &reviewerEmail,
 		&authMethod, &authAssurance, &authenticatedAt, &sessionID, &credentialID, &decisionKey, &decidedAt, &expiresAt,
-		&claimID, &claimMembershipID, &claimantName, &claimedAt, &claimExpiresAt)
+		&claimID, &claimMembershipID, &claimantName, &claimedAt, &claimExpiresAt,
+		&consumedAt, &outcomeStatus, &outcomeNote, &outcomeReportedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.ApprovalRequest{}, domain.ErrNotFound
 	}
@@ -253,6 +258,15 @@ func scanApproval(row rowScanner) (domain.ApprovalRequest, error) {
 			ID: domain.ID(claimID.String), RequestID: request.ID, OrganizationID: request.OrganizationID,
 			MembershipID: domain.ID(claimMembershipID.String), ClaimantDisplayName: claimantName.String,
 			ClaimedAt: claimedAt.Time, ExpiresAt: claimExpiresAt.Time,
+		}
+	}
+	if consumedAt.Valid {
+		request.Consumption = &domain.Consumption{ConsumedAt: consumedAt.Time}
+		if outcomeStatus.Valid {
+			request.Consumption.Outcome = &domain.ConsumptionOutcome{
+				Status: domain.ConsumptionOutcomeStatus(outcomeStatus.String), Note: outcomeNote.String,
+				ReportedAt: outcomeReportedAt.Time,
+			}
 		}
 	}
 	return request, nil

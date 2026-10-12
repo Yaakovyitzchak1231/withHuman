@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	_ "embed"
 	"encoding/json"
@@ -248,6 +249,8 @@ func (a *API) router() *gin.Engine {
 	a.handle(aapRuntime, http.MethodPost, "/requests", string(domain.PermissionRequestCreate), a.createApproval)
 	a.handle(aapRuntime, http.MethodGet, "/requests/:id", string(domain.PermissionRequestRead), a.getApproval)
 	a.handle(aapRuntime, http.MethodDelete, "/requests/:id", string(domain.PermissionRequestCreate), a.cancelApproval)
+	a.handle(aapRuntime, http.MethodPost, "/requests/:id/consume", string(domain.PermissionRequestCreate), a.consumeApproval)
+	a.handle(aapRuntime, http.MethodPost, "/requests/:id/outcome", string(domain.PermissionRequestCreate), a.reportApprovalOutcome)
 
 	// The instance's own product surface, outside AAP: what the credential
 	// resolves to (the CLI's authentication probe) and its tool catalogue.
@@ -703,6 +706,40 @@ func (a *API) cancelApproval(c *gin.Context) {
 	requestID := domain.ID(c.Param("id"))
 	setApprovalRequest(c, requestID)
 	request, err := a.approvals.Cancel(c.Request.Context(), currentPrincipal(c), requestID)
+	if err != nil {
+		a.writeError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, newAAPApprovalResponse(request))
+}
+
+// consumeApproval is the AAP consume: the requesting instance marks an
+// approved request used right before it runs the call. The command has no
+// body; an empty one or {} is accepted.
+func (a *API) consumeApproval(c *gin.Context) {
+	requestID := domain.ID(c.Param("id"))
+	setApprovalRequest(c, requestID)
+	if !bindEmpty(c) {
+		return
+	}
+	request, err := a.approvals.Consume(c.Request.Context(), currentPrincipal(c), requestID, c.GetHeader("Idempotency-Key"))
+	if err != nil {
+		a.writeError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, newAAPApprovalResponse(request))
+}
+
+// reportApprovalOutcome is the AAP outcome report: how a consumed
+// approval's call went. The body is its own idempotency.
+func (a *API) reportApprovalOutcome(c *gin.Context) {
+	requestID := domain.ID(c.Param("id"))
+	setApprovalRequest(c, requestID)
+	var input approvals.OutcomeInput
+	if !bindStrict(c, &input) {
+		return
+	}
+	request, err := a.approvals.ReportOutcome(c.Request.Context(), currentPrincipal(c), requestID, input)
 	if err != nil {
 		a.writeError(c, err)
 		return
@@ -1493,6 +1530,22 @@ func bindStrict(c *gin.Context, destination any) bool {
 	return true
 }
 
+// bindEmpty accepts a command without a body: nothing, whitespace, or an
+// empty JSON object. Any field is an invalid request.
+func bindEmpty(c *gin.Context) bool {
+	body, err := io.ReadAll(io.LimitReader(c.Request.Body, 1<<16))
+	if err != nil {
+		writeBindError(c, err)
+		return false
+	}
+	if len(bytes.TrimSpace(body)) == 0 {
+		return true
+	}
+	c.Request.Body = io.NopCloser(bytes.NewReader(body))
+	var empty struct{}
+	return bindStrict(c, &empty)
+}
+
 func writeBindError(c *gin.Context, err error) {
 	writeAPIError(c, http.StatusBadRequest, "invalid_request", "invalid_request", err.Error(), nil)
 }
@@ -1677,6 +1730,16 @@ func WriteError(c *gin.Context, logger *slog.Logger, err error) {
 		status, errorType, code = http.StatusNotFound, "not_found", "not_found"
 	case errors.Is(err, domain.ErrAlreadyTerminal):
 		status, errorType, code = http.StatusConflict, "conflict", "already_terminal"
+	case errors.Is(err, domain.ErrApprovalAlreadyConsumed):
+		status, errorType, code = http.StatusConflict, "conflict", "already_consumed"
+	case errors.Is(err, domain.ErrApprovalNotApproved):
+		status, errorType, code = http.StatusConflict, "conflict", "not_approved"
+	case errors.Is(err, domain.ErrApprovalExpired):
+		status, errorType, code = http.StatusConflict, "conflict", "approval_expired"
+	case errors.Is(err, domain.ErrApprovalNotConsumed):
+		status, errorType, code = http.StatusConflict, "conflict", "not_consumed"
+	case errors.Is(err, domain.ErrOutcomeConflict):
+		status, errorType, code = http.StatusConflict, "conflict", "outcome_conflict"
 	case errors.Is(err, domain.ErrIdempotencyConflict):
 		status, errorType, code = http.StatusConflict, "conflict", "idempotency_conflict"
 	case errors.Is(err, domain.ErrConflict):

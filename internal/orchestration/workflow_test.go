@@ -94,6 +94,12 @@ func (r *workflowRepository) CancelApproval(_ context.Context, input application
 	r.request.Decision = &domain.Decision{ID: "cancellation", RequestID: input.RequestID, OrganizationID: input.OrganizationID, Source: domain.DecisionSourceAgent, Status: domain.ApprovalCancelled, DecidedAt: input.Now}
 	return r.request, nil
 }
+func (r *workflowRepository) ConsumeApproval(context.Context, application.ConsumeApprovalInput) (domain.ApprovalRequest, error) {
+	return r.request, nil
+}
+func (r *workflowRepository) ReportApprovalOutcome(context.Context, application.ReportApprovalOutcomeInput) (domain.ApprovalRequest, error) {
+	return r.request, nil
+}
 func (r *workflowRepository) GetPipelineSuspension(context.Context, application.GetPipelineSuspensionInput) (domain.PipelineSuspension, error) {
 	if r.suspension == nil {
 		return domain.PipelineSuspension{}, domain.ErrNotFound

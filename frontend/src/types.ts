@@ -12,6 +12,19 @@ export interface Decision {
   decided_at: string;
 }
 
+/* The agent using an approval to run the call, with the call's outcome
+ * once the agent reported it. Present only on approved requests. */
+export interface Consumption {
+  consumed_at: string;
+  outcome?: ConsumptionOutcome;
+}
+
+export interface ConsumptionOutcome {
+  status: "succeeded" | "failed";
+  note?: string;
+  reported_at: string;
+}
+
 /* email, slack and discord are core's; any other kind is one the
  * edition registered, which the frontend learns about through
  * extensions.contactKinds. */
@@ -99,6 +112,7 @@ export interface ApprovalRequest {
    * detail refetches its review context whenever it moves. */
   updated_at?: string;
   decision?: Decision;
+  consumption?: Consumption;
   claim?: Claim;
   /* How to show the arguments, resolved by the server from the
    * organization's tool presentations and the shipped catalog. Absent
