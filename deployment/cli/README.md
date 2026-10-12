@@ -157,12 +157,12 @@ the runtime as a stdio MCP server that runs `withhuman mcp <runtime>
 the credential store and forwards the runtime's frames to the endpoint
 with it. The credential is never written into a runtime's configuration.
 Claude Code (`~/.claude.json`), Codex (`~/.codex/config.toml`), Hermes
-(`~/.hermes/config.yaml`) and OpenClaw (`openclaw.json`, when it is strict
-JSON) are edited in place; DeepSeek Harness gets a snippet to paste and Pi
-has no MCP client. The saved enrollment records the servers so
-`agent eject` removes the entries again, and tool discovery leaves them
-out: their tools are the provider's own catalogue. Restart the runtime
-after installing so it starts the relay.
+(`~/.hermes/config.yaml`) and OpenClaw (`mcp.servers` in `openclaw.json`,
+when it is strict JSON) are edited in place; DeepSeek Harness gets a
+snippet to paste and Pi has no MCP client. The saved enrollment records
+the servers so `agent eject` removes the entries again, and tool discovery
+leaves them out: their tools are the provider's own catalogue. Restart the
+runtime after installing so it starts the relay.
 
 `agent discover` checks local runtime presence and installation status. It
 never contacts a provider or discovers MCP tools. `onboard` retains MCP tool

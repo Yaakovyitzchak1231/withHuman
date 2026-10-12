@@ -21,8 +21,6 @@ func (openClaw) configPath(env Env) string {
 	return filepath.Join(env.Home, ".openclaw", "openclaw.json")
 }
 
-// openClawApprovalTimeoutMs is the approval window the plugin registers.
-
 func (o openClaw) Discover(ctx context.Context, env Env, _ Detection) (Discovered, error) {
 	content, existed, err := configfile.ReadFile(o.configPath(env))
 	if err != nil {
@@ -33,8 +31,18 @@ func (o openClaw) Discover(ctx context.Context, env Env, _ Detection) (Discovere
 	if err != nil {
 		return Discovered{}, fmt.Errorf("cannot discover tools from OpenClaw configuration: %w", err)
 	}
-	if object, ok := doc.Root.ObjectIfPresent("mcpServers"); ok {
+	if object, ok := openClawServers(doc.Root); ok {
 		servers = env.ownServers(claudeStyleServers(object, o.configPath(env), env.Cwd))
 	}
 	return discover(ctx, o.Key(), servers), nil
+}
+
+// openClawServers is the mcp.servers object, where OpenClaw keeps its
+// MCP servers.
+func openClawServers(root *configfile.JSONObject) (*configfile.JSONObject, bool) {
+	mcp, ok := root.ObjectIfPresent("mcp")
+	if !ok {
+		return nil, false
+	}
+	return mcp.ObjectIfPresent("servers")
 }

@@ -13,7 +13,7 @@ func manualDeepSeek(env Env, reg Registration) Result {
 	return Result{
 		Manual:  true,
 		Message: fmt.Sprintf("DeepSeek Harness reads MCP servers from its profile, which the CLI does not edit. Add %s to the MCP configuration of the profile at %s.", labels(reg.Servers), deepSeekProfileDir(env)),
-		Snippet: snippet(env, reg),
+		Snippet: snippet(claudeServers, env, reg),
 	}
 }
 

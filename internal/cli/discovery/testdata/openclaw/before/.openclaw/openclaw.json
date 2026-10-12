@@ -8,7 +8,9 @@
       "memory-core": { "enabled": true }
     }
   },
-  "mcpServers": {
-    "fixture": { "command": "fixture-mcp" }
+  "mcp": {
+    "servers": {
+      "fixture": { "command": "fixture-mcp" }
+    }
   }
 }
