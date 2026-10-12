@@ -502,6 +502,7 @@ function OnboardingFlow({ page }: { page: ChannelsPage }) {
     pane = (
       <TestStep
         session={session}
+        origin={config?.public_origin || window.location.origin}
         page={page}
         activity={activity}
         finishing={closing === "finished"}
@@ -961,6 +962,21 @@ const SKILLS_COMMAND = "npx skills add https://withhuman.ai";
 /* Where a coding agent's MCP client reaches withHuman's own settings. */
 const MCP_PATH = "/api/mcp/v1";
 
+/* An agent the setup connects: its runtime, which keys its branch of
+ * the entry pipeline, and the slug and name it was enrolled under. */
+interface OnboardingAgent {
+  runtime: string;
+  slug: string;
+  name: string;
+}
+
+function onboardingAgents(session: OnboardingSession): OnboardingAgent[] {
+  return session.selected_runtimes.map((runtime) => {
+    const enrollment = session.enrollments.find((entry) => entry.runtime === runtime);
+    return { runtime, slug: enrollment?.agent_slug ?? runtime, name: enrollment?.agent_name ?? runtimeName(runtime) };
+  });
+}
+
 /* What to paste into a coding agent so it writes the rules through
  * withHuman's MCP server, guided by the withhuman-pipelines skill:
  * connect, learn the grammar, read the agents' tools, propose what
@@ -968,7 +984,7 @@ const MCP_PATH = "/api/mcp/v1";
  * live in a branch of the entry pipeline keyed by its runtime; the
  * prompt names those branches and the setup's escalation path so it
  * touches nothing else. */
-function agentPrompt(origin: string, agents: { runtime: string; slug: string; name: string }[], pathKey: string): string {
+function agentPrompt(origin: string, agents: OnboardingAgent[], pathKey: string): string {
   const endpoint = `${origin}${MCP_PATH}`;
   const list = agents.map((agent) => `${agent.name} (agent slug ${agent.slug}, branch id "${agent.runtime}")`).join(", ");
   return [
@@ -984,6 +1000,26 @@ function agentPrompt(origin: string, agents: { runtime: string; slug: string; na
     `6. Write the rules with update_pipeline for pipeline_key "entry", changing only the blocks inside those branches and leaving every other block exactly as it is. Set escalation_path "${pathKey}" on every block that can send a call to me, and end each branch with an outcome block that approves the rest.`,
     "7. Try two or three sample calls with preview_pipeline, one that should wait and one that should not, and tell me what happened.",
     "8. For each agent, give me a prompt I can run that makes a call these rules send to me, so I can test the setup.",
+  ].join("\n");
+}
+
+/* What to paste into a coding agent when no stock test call reaches a
+ * person for these agents: it reads their branches of the entry
+ * pipeline and writes a prompt that makes one call the rules send to
+ * the person, harmless if approved, checked with a preview first. */
+function testPrompt(origin: string, agents: OnboardingAgent[]): string {
+  const endpoint = `${origin}${MCP_PATH}`;
+  const list = agents.map((agent) => `${agent.name} (agent slug ${agent.slug}, branch id "${agent.runtime}")`).join(", ");
+  return [
+    "Use the withhuman-pipelines skill to help me test my withHuman approval rules.",
+    "",
+    "1. Connect the withHuman MCP server if it is not connected yet, and sign in when asked:",
+    `   Claude Code: claude mcp add --transport http withhuman ${endpoint}`,
+    `   Codex: codex mcp add withhuman --url ${endpoint}`,
+    `2. Read my rules with get_pipeline for pipeline_key "entry". Each of these agents has its own branch block at the top level: ${list}.`,
+    "3. For each agent, pick one tool call those rules send to me for approval. It must be harmless if I approve it and it runs.",
+    "4. Check each call with preview_pipeline and make sure the result is human.",
+    "5. For each agent, give me a short prompt I can paste into it that makes exactly that call.",
   ].join("\n");
 }
 
@@ -1092,10 +1128,7 @@ function ApprovalRulesStep({
     return () => window.clearInterval(timer);
   }, [way, exist]);
 
-  const agents = runtimes.map((runtime) => {
-    const enrollment = session.enrollments.find((entry) => entry.runtime === runtime);
-    return { runtime, slug: enrollment?.agent_slug ?? runtime, name: enrollment?.agent_name ?? runtimeName(runtime) };
-  });
+  const agents = onboardingAgents(session);
 
   return (
     <Card>
@@ -1220,7 +1253,7 @@ function AgentWay({
   entry,
 }: {
   prompt: string;
-  agents: { runtime: string; slug: string; name: string }[];
+  agents: OnboardingAgent[];
   ready: boolean;
   entry: RequestApprovalPipelineRevision | null;
 }) {
@@ -1544,28 +1577,53 @@ function InstallCallout({ result }: { result: OnboardingInstallResult }) {
   );
 }
 
-/* The commands that make each enrolled runtime call a gated tool. A
- * runtime without one has rules that let every simple test call run,
- * so the person asks their coding agent for a prompt that does not. */
-function TestCommands({ session }: { session: OnboardingSession }) {
+/* The commands that make each enrolled runtime call a gated tool. The
+ * runtimes without one have rules that let every simple test call run,
+ * so the person asks their coding agent for a prompt that makes a call
+ * the rules send to them, and runs it in those runtimes. */
+function TestCommands({ session, origin }: { session: OnboardingSession; origin: string }) {
+  const commanded = session.selected_runtimes.filter((runtime) => session.test_commands[runtime]);
+  const uncommanded = onboardingAgents(session).filter((agent) => !session.test_commands[agent.runtime]);
   return (
     <>
-      {session.selected_runtimes.map((runtime) => {
+      {commanded.map((runtime) => {
         const test = session.test_commands[runtime];
-        const name = runtimeName(runtime);
-        return test ? (
+        return (
           <div key={runtime} className="flex flex-col gap-1.5">
-            <CodeBlock label={name} code={test.command} />
+            <CodeBlock label={runtimeName(runtime)} code={test.command} />
             {test.note ? <p className="text-label font-normal text-ink-muted">{test.note}</p> : null}
           </div>
-        ) : (
-          <Callout key={runtime} tone="neutral" title={`No test command for ${name}`}>
-            Your rules let the simple test calls run without you. Ask your coding agent for a
-            prompt that needs your approval, and give it to {name}.
-          </Callout>
         );
       })}
+      {uncommanded.length > 0 ? <TestPrompt prompt={testPrompt(origin, uncommanded)} agents={uncommanded} /> : null}
     </>
+  );
+}
+
+/* The prompt that asks the person's coding agent for a test prompt,
+ * and where to run what it gives back. */
+function TestPrompt({ prompt, agents }: { prompt: string; agents: OnboardingAgent[] }) {
+  const { copy, copied } = useCopyToClipboard(prompt);
+  return (
+    <div className="flex flex-col gap-2">
+      <StepLabel>Ask your coding agent for a test prompt</StepLabel>
+      <p className="max-h-[400px] overflow-y-auto rounded-lg border-hairline border-edge bg-canvas p-4 text-body leading-[21px] whitespace-pre-wrap text-ink-secondary [overflow-wrap:anywhere]">
+        {prompt}
+      </p>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <span className="text-label font-normal text-ink-muted">
+          Then run the prompt it gives you in {joinNames(agents.map((agent) => agent.name))}.
+        </span>
+        <Button variant="primary" size="sm" onClick={() => void copy()}>
+          {copied ? (
+            <CheckIcon width={14} height={14} aria-hidden />
+          ) : (
+            <CopyIcon width={14} height={14} aria-hidden />
+          )}
+          {copied ? "Copied" : "Copy prompt"}
+        </Button>
+      </div>
+    </div>
   );
 }
 
@@ -1576,6 +1634,7 @@ function TestCommands({ session }: { session: OnboardingSession }) {
  * arrival is verified; delivery is the person's word. */
 function TestStep({
   session,
+  origin,
   page,
   activity,
   finishing,
@@ -1583,6 +1642,7 @@ function TestStep({
   onChannels,
 }: {
   session: OnboardingSession;
+  origin: string;
   page: ChannelsPage;
   activity: TestActivity;
   finishing: boolean;
@@ -1612,7 +1672,7 @@ function TestStep({
                 </>
               ) : (
                 <>
-                  On <MachineBadge name={hostname} />, give your agent a prompt that needs your
+                  On <MachineBadge name={hostname} />, run a prompt in your agent that needs your
                   approval. Approve or deny the request below.
                 </>
               )}
@@ -1623,7 +1683,7 @@ function TestStep({
           {attention.map((result) => (
             <InstallCallout key={result.runtime} result={result} />
           ))}
-          <TestCommands session={session} />
+          <TestCommands session={session} origin={origin} />
           <div className="flex flex-col gap-2">
             <div className="flex h-[26px] items-center gap-2 text-label text-ink-muted select-none">
               <span>Where the notifications go</span>
