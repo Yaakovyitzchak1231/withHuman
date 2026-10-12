@@ -977,10 +977,26 @@ Examples:
   the target directory. Release installer and command producers together.
 - AAP request representations are separate from product views. Preserve the
   exact submitted timeout. Approval idempotency is instance scoped, and
-  an instance reads and cancels only its own requests. The database records
-  approved decision expiry once at insertion as decided_at plus five minutes.
-  Reads never extend it. Duration text in approval_requests.timeout is an
-  exception to numeric duration columns: its exact wire spelling is immutable.
+  an instance reads, cancels, consumes and reports outcomes only for its
+  own requests. The database records approved decision expiry once at
+  insertion (`set_approval_decision_expiry`): decided_at plus 30 minutes
+  when the request's instance has a row in `agent_instance_deliveries`,
+  plus five minutes otherwise. Reads never extend it. Duration text in
+  approval_requests.timeout is an exception to numeric duration columns:
+  its exact wire spelling is immutable.
+- One approval runs one call, enforced by the provider: the adapter
+  consumes an approved request (`POST /api/aap/v1/requests/:id/consume`,
+  `Idempotency-Key` per execution attempt) before it runs the call, and
+  may then report the outcome (`.../outcome`, once, audit only). The
+  `approval_consumptions` row (one per request, protected by
+  `protect_approval_consumption`: approved requests only, the outcome set
+  once, never deleted outside the purge) is checked under the request's
+  row lock against the database clock, with `approval.consumed` and
+  `approval.outcome_reported` audited. The same key replays the current
+  state even after expiry; another key is 409 `already_consumed`, and
+  other refusals are `not_approved`, `approval_expired`, `not_consumed`
+  and `outcome_conflict`. A consumption is the agent using an approval;
+  it is unrelated to a reviewer's claim on a pending request.
 - Guided onboarding takes a new
   organization from first sign-in to a decided request. One
   `onboarding_sessions` row is the shared state between the browser and

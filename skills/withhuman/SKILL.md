@@ -107,6 +107,9 @@ pause, be refused, or time out. That is the organization's policy working.
   tell the user, and ask how to continue.
 - **Expired.** Nobody answered in time. It is not a denial, but don't retry
   on your own: tell the user so they can ask again or chase a reviewer.
+- **Already attempted.** Each approval runs its call once. If the adapter
+  says the approved call was already attempted, request approval again
+  only if the call still needs to happen.
 - **Cancelled, or withHuman unreachable.** The call did not run. Treat it
   as not approved and tell the user. The adapter fails closed on purpose.
 - **Credential refused.** Every call is denied until someone acts: the
