@@ -50,9 +50,8 @@ func (s jsonServers) objectIfPresent(root *configfile.JSONObject) (*configfile.J
 	return root, true
 }
 
-// claudeEntry is one relay in the mcpServers shape Claude Code and the
-// runtimes that copied it read: a stdio command with args and env.
-func claudeEntry(servers jsonServers, env Env, runtime agentruntime.Key, server domain.AgentMCPServer) *configfile.JSONObject {
+// entry is one relay: a stdio command with args and env.
+func (s jsonServers) entry(env Env, runtime agentruntime.Key, server domain.AgentMCPServer) *configfile.JSONObject {
 	args := []configfile.JSONValue{}
 	for _, arg := range Args(runtime, server.Name) {
 		args = append(args, arg)
@@ -60,7 +59,7 @@ func claudeEntry(servers jsonServers, env Env, runtime agentruntime.Key, server 
 	variables := configfile.NewJSONObject()
 	variables.Set(ConfigDirVariable, env.ConfigDir)
 	entry := configfile.NewJSONObject()
-	if servers.typed {
+	if s.typed {
 		entry.Set("type", "stdio")
 	}
 	entry.Set("command", env.Binary)
@@ -69,9 +68,9 @@ func claudeEntry(servers jsonServers, env Env, runtime agentruntime.Key, server 
 	return entry
 }
 
-// claudeEntryMatches reports whether the configured entry already says
-// what claudeEntry would write.
-func claudeEntryMatches(entry *configfile.JSONObject, env Env, runtime agentruntime.Key, server domain.AgentMCPServer) bool {
+// entryMatches reports whether the configured entry already says what
+// entry would write.
+func entryMatches(entry *configfile.JSONObject, env Env, runtime agentruntime.Key, server domain.AgentMCPServer) bool {
 	if entry.String("command") != env.Binary || entry.StringMap("env")[ConfigDirVariable] != env.ConfigDir {
 		return false
 	}
@@ -88,9 +87,9 @@ func claudeEntryMatches(entry *configfile.JSONObject, env Env, runtime agentrunt
 	return true
 }
 
-// installClaudeStyle upserts the servers into the file's servers object.
-// notes are appended when the file changed.
-func installClaudeStyle(path string, servers jsonServers, env Env, reg Registration, notes []string) (Result, error) {
+// installJSON upserts the servers into the file's servers object. notes
+// are appended when the file changed.
+func installJSON(path string, servers jsonServers, env Env, reg Registration, notes []string) (Result, error) {
 	content, existed, err := configfile.ReadFile(path)
 	if err != nil {
 		return Result{}, err
@@ -102,10 +101,10 @@ func installClaudeStyle(path string, servers jsonServers, env Env, reg Registrat
 	changed := false
 	configured := servers.object(doc.Root)
 	for _, server := range reg.Servers {
-		if entry, ok := configured.ObjectIfPresent(server.Name); ok && claudeEntryMatches(entry, env, reg.Runtime, server) {
+		if entry, ok := configured.ObjectIfPresent(server.Name); ok && entryMatches(entry, env, reg.Runtime, server) {
 			continue
 		}
-		configured.Set(server.Name, claudeEntry(servers, env, reg.Runtime, server))
+		configured.Set(server.Name, servers.entry(env, reg.Runtime, server))
 		changed = true
 	}
 	var result Result
@@ -120,8 +119,8 @@ func installClaudeStyle(path string, servers jsonServers, env Env, reg Registrat
 	return result, nil
 }
 
-// removeClaudeStyle deletes the servers' entries that still run the relay.
-func removeClaudeStyle(path string, servers jsonServers, registered []domain.AgentMCPServer) (Result, error) {
+// removeJSON deletes the servers' entries that still run the relay.
+func removeJSON(path string, servers jsonServers, registered []domain.AgentMCPServer) (Result, error) {
 	content, existed, err := configfile.ReadFile(path)
 	if err != nil || !existed {
 		return Result{}, err
@@ -158,7 +157,7 @@ func snippet(servers jsonServers, env Env, reg Registration) string {
 	root := configfile.NewJSONObject()
 	configured := servers.object(root)
 	for _, server := range reg.Servers {
-		configured.Set(server.Name, claudeEntry(servers, env, reg.Runtime, server))
+		configured.Set(server.Name, servers.entry(env, reg.Runtime, server))
 	}
 	return string(configfile.FormatJSON(root, "  "))
 }

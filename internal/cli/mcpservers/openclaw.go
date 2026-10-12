@@ -10,7 +10,7 @@ import (
 // an edit that would flatten it.
 func installOpenClaw(path string, env Env, reg Registration) (Result, error) {
 	restart := fmt.Sprintf("Restart the OpenClaw Gateway so it connects to %s.", labels(reg.Servers))
-	result, err := installClaudeStyle(path, openClawServers, env, reg, []string{restart})
+	result, err := installJSON(path, openClawServers, env, reg, []string{restart})
 	if !isNotStrictJSON(err) {
 		return result, err
 	}
