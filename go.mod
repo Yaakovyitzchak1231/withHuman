@@ -3,14 +3,14 @@ module github.com/withHumanAI/withHuman
 go 1.26.4
 
 require (
-	github.com/agentapprovalprotocol/agentapprovalprotocol v0.2.0
+	github.com/agentapprovalprotocol/agentapprovalprotocol v0.3.0
 	github.com/fergusstrange/embedded-postgres v1.34.0
 	github.com/gin-gonic/gin v1.12.0
 	github.com/google/cel-go v0.25.0
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/modelcontextprotocol/go-sdk v1.7.0
-	github.com/pelletier/go-toml/v2 v2.2.4
+	github.com/pelletier/go-toml/v2 v2.4.3
 	github.com/stretchr/testify v1.11.1
 	go.temporal.io/api v1.63.5
 	go.temporal.io/sdk v1.46.0

@@ -79,6 +79,18 @@ func TestExecutableAdapters(t *testing.T) {
 					w.Write([]byte(`{"agent_slug":"fixture","agent_instance_id":"instance"}`))
 					return
 				}
+				if id, ok := strings.CutSuffix(strings.TrimPrefix(r.URL.Path, "/api/aap/v1/requests/"), "/consume"); ok && r.Method == "POST" {
+					for _, existing := range requests {
+						if existing["id"] == id && existing["consumption"] == nil {
+							existing["consumption"] = map[string]any{"consumed_at": time.Now().UTC()}
+							json.NewEncoder(w).Encode(existing)
+							return
+						}
+					}
+					w.WriteHeader(409)
+					w.Write([]byte(`{"error":{"type":"conflict","code":"already_consumed","message":"already consumed","request_id":"` + uuid.NewString() + `"}}`))
+					return
+				}
 				if r.Method != "POST" || r.URL.Path != "/api/aap/v1/requests" {
 					t.Errorf("unexpected provider call: %s %s", r.Method, r.URL.Path)
 					w.WriteHeader(404)
