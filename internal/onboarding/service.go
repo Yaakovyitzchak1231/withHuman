@@ -315,7 +315,10 @@ func (e *StepError) Unwrap() error { return e.Err }
 
 // Provision writes the generated objects under the person's own
 // authority: the path, one agent per selected runtime, and one branch per
-// runtime in the entry pipeline holding its starting rules. It needs the person to have passed
+// runtime in the entry pipeline that approves every call. Nothing waits
+// at first, because the next step asks the same coding agent to write the
+// rules, and a call held for a person who has not learned the product yet
+// looks like a hang. It needs the person to have passed
 // the notification steps, because the path it writes notifies them. On
 // failure the session keeps its status and records the error.
 func (s *Service) Provision(ctx context.Context, principal domain.Principal) (domain.OnboardingSession, error) {
@@ -392,8 +395,9 @@ func (s *Service) provision(ctx context.Context, principal domain.Principal, ses
 			// rules; a later setup on another machine leaves them alone.
 			continue
 		}
-		selected := Union(GatedToolsOf(current.blocks, runtime), SuggestedToolNames(session, runtime))
-		branches = append(branches, RuntimeBranch(runtime, StartingBlocks(runtime, selected, pathKey), pathKey))
+		// A rerun keeps the tools the person already picked by hand.
+		gated := GatedToolsOf(current.blocks, runtime)
+		branches = append(branches, RuntimeBranch(runtime, StartingBlocks(runtime, gated, pathKey), pathKey))
 	}
 	activated, err := s.writeEntry(ctx, principal, current, EntryBlocks(current.blocks, branches...))
 	if err != nil {

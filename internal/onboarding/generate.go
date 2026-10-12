@@ -104,10 +104,10 @@ func conditionID(runtime, purpose string) string {
 	return uuid.NewSHA1(uuid.NameSpaceOID, []byte(conditionNamespace+runtime+"/"+purpose)).String()
 }
 
-// StartingBlocks builds the two-block starting body for one runtime: a
-// branch whose outcome block sends the suggested tools to a human through
-// the path, and an outcome block that approves everything else, until
-// the person or their coding agent writes their own rules. The explicit
+// StartingBlocks builds the starting body for one runtime: a branch
+// whose outcome block sends the tools the person picked by hand to a
+// human through the path, and an outcome block that approves everything
+// else, until the person or their coding agent writes their own rules. The explicit
 // approve block matters because running out of a branch is an implicit
 // human outcome, and the adapter policy is shared across runtimes, so a
 // tool gated for one runtime can reach another's branch. An empty tool list leaves the gate out: every call runs.
@@ -121,14 +121,14 @@ func StartingBlocks(runtime string, selected []string, pathKey string) []approva
 	tools := Union(selected)
 	rest := approvalblock.DefineOutcome(runtime+approveBlockSuffix, approvalblock.Approve,
 		approvalblock.Name(approveBlockName),
-		approvalblock.Reason("This tool was not suggested for human approval during the guided setup."),
+		approvalblock.Reason("This tool was not chosen for human approval during the guided setup."),
 	)
 	if len(tools) == 0 {
 		return []approvalblock.Definition{*rest}
 	}
 	ask := approvalblock.DefineOutcome(runtime+askBlockSuffix, approvalblock.Human,
 		approvalblock.Name(askBlockName),
-		approvalblock.Reason("This tool was suggested for human approval during the guided setup."),
+		approvalblock.Reason("This tool was chosen for human approval during the guided setup."),
 	)
 	ask.Outcome.EscalationPath = pathKey
 	ask.Outcome.AskAgentOwner = true
@@ -299,14 +299,4 @@ func PlanHooks(session domain.OnboardingSession) map[string]HookPlan {
 		}
 	}
 	return plans
-}
-
-// SuggestedToolNames lists the names of one runtime's suggested tools:
-// what the starting pipeline gates.
-func SuggestedToolNames(session domain.OnboardingSession, runtime string) []string {
-	var names []string
-	for _, tool := range session.SuggestedTools(runtime) {
-		names = append(names, tool.Name)
-	}
-	return Union(names)
 }

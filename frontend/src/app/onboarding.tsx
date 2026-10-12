@@ -998,9 +998,11 @@ function joinNames(names: string[]): string {
  * tiles that each open their panel below: the withHuman skills and a
  * prompt for the person's own coding agent, or a table per agent to
  * tick tools by hand, which is only fit for a first try. Nothing is
- * chosen at first and the starting rules stand until something is
- * written. The agents are connected behind the question (provisioning,
- * enrolment, the hooks) and Continue opens once the hooks are installed.
+ * chosen at first and the starting rules, which approve every call,
+ * stand until something is written, so the coding agent writing them is
+ * never held. The agents are connected behind the question
+ * (provisioning, enrolment, the hooks) and Continue opens once the hooks
+ * are installed.
  */
 function ApprovalRulesStep({
   session,
