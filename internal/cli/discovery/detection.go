@@ -66,7 +66,7 @@ func (o openClaw) Detect(env Env) (Detection, error) {
 		return d, err
 	}
 	if doc, err := configfile.LoadJSONObject(raw, existed); err == nil {
-		if obj, ok := doc.Root.ObjectIfPresent("mcpServers"); ok {
+		if obj, ok := openClawServers(doc.Root); ok {
 			d.MCPServers = detectionServers(env.ownServers(claudeStyleServers(obj, d.ConfigPath, env.Cwd)))
 		}
 	}

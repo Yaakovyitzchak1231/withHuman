@@ -63,8 +63,8 @@ func TestInstallAndRemoveRelayEntries(t *testing.T) {
 		},
 		{
 			agentruntime.OpenClaw, ".openclaw/openclaw.json",
-			"{\n  \"gateway\": {\n    \"port\": 18789\n  }\n}\n",
-			[]string{`"withhuman": {`, `"command": "/opt/withhuman/bin/withhuman"`, `"openclaw",`, `"port": 18789`},
+			"{\n  \"gateway\": {\n    \"port\": 18789\n  },\n  \"mcp\": {\n    \"servers\": {\n      \"crm\": {\n        \"url\": \"https://crm.example.com/mcp\"\n      }\n    }\n  }\n}\n",
+			[]string{"  \"mcp\": {\n    \"servers\": {\n      \"crm\": {\n        \"url\": \"https://crm.example.com/mcp\"\n      },\n      \"withhuman\": {\n        \"command\": \"/opt/withhuman/bin/withhuman\",", `"openclaw",`, `"WITHHUMAN_CONFIG_DIR": "/home/me/.config/withhuman"`, `"port": 18789`},
 		},
 	} {
 		t.Run(string(tc.runtime), func(t *testing.T) {
@@ -88,6 +88,10 @@ func TestInstallAndRemoveRelayEntries(t *testing.T) {
 			if tc.runtime == agentruntime.OpenClaw && (len(result.Notes) != 1 || !strings.Contains(result.Notes[0], "Restart the OpenClaw Gateway")) {
 				t.Fatalf("openclaw notes = %v", result.Notes)
 			}
+			// The OpenClaw Gateway refuses keys it does not know.
+			if tc.runtime == agentruntime.OpenClaw && (strings.Contains(got, "mcpServers") || strings.Contains(got, `"type"`)) {
+				t.Fatalf("openclaw.json has keys OpenClaw does not read:\n%s", got)
+			}
 			again, err := Install(env, reg)
 			if err != nil || len(again.Changes) != 0 {
 				t.Fatalf("second install = %+v, %v", again, err)
@@ -103,14 +107,11 @@ func TestInstallAndRemoveRelayEntries(t *testing.T) {
 			if strings.Contains(after, "withhuman") {
 				t.Fatalf("relay left behind:\n%s", after)
 			}
-			if !strings.Contains(after, "crm") && tc.runtime != agentruntime.OpenClaw {
+			if !strings.Contains(after, "crm") {
 				t.Fatalf("the person's own server was lost:\n%s", after)
 			}
-			if tc.runtime == agentruntime.ClaudeCode && after != tc.before {
-				t.Fatalf("claude-code file not restored:\n%s", after)
-			}
-			if tc.runtime == agentruntime.Hermes && after != tc.before {
-				t.Fatalf("hermes file not restored:\n%s", after)
+			if tc.runtime != agentruntime.Codex && after != tc.before {
+				t.Fatalf("%s file not restored:\n%s", tc.runtime, after)
 			}
 		})
 	}
@@ -147,7 +148,7 @@ func TestManualRuntimes(t *testing.T) {
 	write(t, filepath.Join(env.Home, ".openclaw", "openclaw.json"), "{\n  // comments make this JSON5\n  \"gateway\": {}\n}\n")
 	servers := []domain.AgentMCPServer{gateway}
 	openclaw, err := Install(env, Registration{Runtime: agentruntime.OpenClaw, Servers: servers})
-	if err != nil || !openclaw.Manual || len(openclaw.Changes) != 0 || !strings.Contains(openclaw.Message, "not strict JSON") || !strings.Contains(openclaw.Snippet, `"openclaw"`) {
+	if err != nil || !openclaw.Manual || len(openclaw.Changes) != 0 || !strings.Contains(openclaw.Message, "Add withHuman MCP gateway to its mcp.servers") || !strings.HasPrefix(openclaw.Snippet, "{\n  \"mcp\": {\n    \"servers\": {") || !strings.Contains(openclaw.Snippet, `"openclaw"`) {
 		t.Fatalf("openclaw = %+v, %v", openclaw, err)
 	}
 	removed, err := Remove(env, Registration{Runtime: agentruntime.OpenClaw, Servers: servers})

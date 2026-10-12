@@ -95,7 +95,7 @@ func Install(env Env, reg Registration) (Result, error) {
 	}
 	switch reg.Runtime {
 	case agentruntime.ClaudeCode:
-		return installClaudeStyle(filepath.Join(env.Home, ".claude.json"), env, reg, nil)
+		return installJSON(filepath.Join(env.Home, ".claude.json"), claudeServers, env, reg, nil)
 	case agentruntime.Codex:
 		return installCodex(filepath.Join(env.Home, ".codex", "config.toml"), env, reg)
 	case agentruntime.Hermes:
@@ -129,13 +129,13 @@ func Remove(env Env, reg Registration) (Result, error) {
 func remove(env Env, reg Registration) (Result, error) {
 	switch reg.Runtime {
 	case agentruntime.ClaudeCode:
-		return removeClaudeStyle(filepath.Join(env.Home, ".claude.json"), reg.Servers)
+		return removeJSON(filepath.Join(env.Home, ".claude.json"), claudeServers, reg.Servers)
 	case agentruntime.Codex:
 		return removeCodex(filepath.Join(env.Home, ".codex", "config.toml"), reg.Servers)
 	case agentruntime.Hermes:
 		return removeHermes(filepath.Join(env.Home, ".hermes", "config.yaml"), reg.Servers)
 	case agentruntime.OpenClaw:
-		return removeClaudeStyle(filepath.Join(env.Home, ".openclaw", "openclaw.json"), reg.Servers)
+		return removeJSON(filepath.Join(env.Home, ".openclaw", "openclaw.json"), openClawServers, reg.Servers)
 	case agentruntime.DeepSeek:
 		return Result{Notes: []string{fmt.Sprintf("Remove %s from the DeepSeek Harness profile's MCP configuration by hand if you added it.", names(reg.Servers))}}, nil
 	case agentruntime.Pi:
