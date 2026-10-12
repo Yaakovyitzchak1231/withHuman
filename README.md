@@ -1,8 +1,6 @@
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset=".github/readme/logo-dark.svg">
-    <img src=".github/readme/logo-light.svg" alt="withHuman" width="320">
-  </picture>
+  <img src=".github/readme/logo-light.svg#gh-light-mode-only" alt="withHuman" width="320">
+  <img src=".github/readme/logo-dark.svg#gh-dark-mode-only" alt="withHuman" width="320">
 </p>
 
 <p align="center"><strong>The approval layer for AI agents.</strong><br>
@@ -36,10 +34,8 @@ send the rest to the right team or person, who decides in a review queue
 the whole team shares.
 
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset=".github/readme/request-dark.png">
-    <img src=".github/readme/request-light.png" alt="A request in withHuman: an agent wants to call issue_refund for 75 USD, with its arguments, its explanation, and Deny and Approve buttons" width="720">
-  </picture>
+  <img src=".github/readme/request-light.png#gh-light-mode-only" alt="A request in withHuman: an agent wants to call issue_refund for 75 USD, with its arguments, its explanation, and Deny and Approve buttons" width="720">
+  <img src=".github/readme/request-dark.png#gh-dark-mode-only" alt="A request in withHuman: an agent wants to call issue_refund for 75 USD, with its arguments, its explanation, and Deny and Approve buttons" width="720">
 </p>
 
 ## What you can do
