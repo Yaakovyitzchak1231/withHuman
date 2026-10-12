@@ -10,11 +10,9 @@ concurrency:
   group: ci-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
-# Pull requests from forks run on GitHub-hosted runners: anyone can open
-# one, and the Ubicloud runners are paid for by the maintainers.
 jobs:
   verify:
-    runs-on: ${{ github.event.pull_request.head.repo.full_name == github.repository && 'ubicloud-standard-4' || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -48,7 +46,7 @@ jobs:
         run: sh scripts/check-cli-builds.sh
 
   image-build:
-    runs-on: ${{ github.event.pull_request.head.repo.full_name == github.repository && 'ubicloud-standard-4' || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
