@@ -328,7 +328,14 @@ type CreateAgentInstanceWithCredentialInput struct {
 	Name         string
 	Metadata     json.RawMessage
 	Credential   AgentCredentialRecord
-	Now          time.Time
+	// InstanceID is the ID reserved by the registration a Delivery
+	// completes. Empty without delivery: the store generates one.
+	InstanceID domain.ID
+	// Delivery is a verified webhook receiver. The store stores it and
+	// consumes the pending registration it names in the same transaction,
+	// so a registration creates at most one instance.
+	Delivery *AgentInstanceDeliveryRecord
+	Now      time.Time
 }
 
 func (input CreateAgentInstanceWithCredentialInput) Validate() error {
@@ -337,6 +344,13 @@ func (input CreateAgentInstanceWithCredentialInput) Validate() error {
 	}
 	if input.MembershipID != "" && input.ActorType != domain.ActorHuman {
 		return invalidField("membership ID", "only a person can own an instance")
+	}
+	if input.Delivery != nil {
+		if err := firstError([]error{requiredID("agent instance ID", input.InstanceID), input.Delivery.Validate()}); err != nil {
+			return err
+		}
+	} else if input.InstanceID != "" {
+		return invalidField("agent instance ID", "is reserved only by a registration with delivery")
 	}
 	return firstError([]error{
 		requiredID("organization ID", input.OrganizationID),

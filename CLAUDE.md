@@ -313,9 +313,24 @@ Examples:
   instance is disabled. Deleting an instance keeps the row for the record
   (`deleted_at`, disabled, never re-enabled), revokes its credentials,
   removes the receiver with its queued events first, and then cancels its
-  pending requests, so they send no notification. Not built yet:
+  pending requests, so they send no notification. The app's New
+  instance page reaches the same verification for any agent, personal
+  included, in two steps, because the receiver must hold the secret
+  before it can answer: `POST /api/v1/agents/{slug}/instance_registrations`
+  generates the registration ID and `whsec_` secret, shows them once,
+  and keeps the secret sealed (`InstanceRegistrationSigningSecretLabel`)
+  in `agent_instance_registrations` for an hour with a reserved instance
+  ID, bound to the agent and the caller's actor; then
+  `POST /api/v1/agents/{slug}/instances` with `delivery` (registration ID
+  and URL) opens it, verifies through the same `VerifyInstanceDelivery`,
+  and creates the instance with its receiver while deleting the
+  registration in one transaction (`agent_instance.registered` carries
+  the delivery). A failed verification keeps the registration for a
+  retry; an expired or used one is 410 `instance_registration_expired`,
+  and expired rows are pruned with the AAP state. Not built yet:
   per-destination rate limits on registration and delivery, delivery on
-  other enrollment paths, and any product UI for receivers.
+  the CLI and onboarding enrollment paths, and editing or removing a
+  receiver in the app.
 - `Agent` is the stable organization-owned machine principal, addressed
   everywhere outside the database by its immutable slug and shown by its
   editable name. `AgentInstance`
@@ -1427,12 +1442,17 @@ Examples:
   visibility checks, so hidden rows cannot prevent later visible results.
 
 - New instance opens `/agents/{slug}/instances/new`. The page offers CLI
-  installation with browser authorization or manual agent API-key generation.
+  installation with browser authorization, manual agent API-key generation,
+  and, when runtime-config's `webhook_enabled` is set, Pause runs while
+  waiting: a Generate signing secret step that shows the registration ID
+  and signing secret once, then the instance name and receiver URL with
+  Verify receiver (a failure keeps the secret on screen for a retry; an
+  expired registration starts again).
   CLI commands use runtime-config's public origin and download mirror; the
-  API-key result shows the instance credential once with its AAP provider URL.
-  Both paths require scoped `agent.read` and `agent.credential.issue` and
-  an active agent. The page never creates an instance merely by showing a
-  CLI command.
+  API-key and webhook results show the instance credential once with its
+  AAP provider URL. Every path requires scoped `agent.read` and
+  `agent.credential.issue` and an active agent. The page never creates an
+  instance merely by showing a CLI command.
 
 - Tool definitions live in the core-owned catalogue (`internal/toolcatalog`),
   shared by both compositions. Instance-only reports replace successful source

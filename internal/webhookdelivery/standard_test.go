@@ -42,3 +42,17 @@ func TestStandardSigningKeyRejectsMalformedSecrets(t *testing.T) {
 		}
 	}
 }
+
+func TestNewStandardSecretIsAValidSigningSecret(t *testing.T) {
+	first, err := NewStandardSecret()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := StandardSigningKey(first); err != nil {
+		t.Fatalf("generated secret %q is not a signing secret: %v", first, err)
+	}
+	second, _ := NewStandardSecret()
+	if first == second {
+		t.Fatal("two generated secrets are equal")
+	}
+}

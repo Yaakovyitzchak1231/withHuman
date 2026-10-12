@@ -290,6 +290,7 @@ var purgeStatements = []string{
 	`DELETE FROM agent_credentials WHERE organization_id = $1`,
 	`DELETE FROM agent_instance_provisioning_keys WHERE organization_id = $1`,
 	`DELETE FROM agent_instance_update_keys WHERE organization_id = $1`,
+	`DELETE FROM agent_instance_registrations WHERE organization_id = $1`,
 	`DELETE FROM agent_provisioners WHERE organization_id = $1`,
 	`DELETE FROM agent_instance_deliveries WHERE organization_id = $1`,
 	`DELETE FROM agent_instances WHERE organization_id = $1`,

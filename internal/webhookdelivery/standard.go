@@ -2,6 +2,7 @@ package webhookdelivery
 
 import (
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
@@ -36,6 +37,16 @@ func StandardSigningKey(secret string) ([]byte, error) {
 		return nil, ErrInvalidStandardSecret
 	}
 	return key, nil
+}
+
+// NewStandardSecret generates a whsec_ secret: 32 random bytes in
+// canonical padded base64.
+func NewStandardSecret() (string, error) {
+	key := make([]byte, standardKeyBytes)
+	if _, err := rand.Read(key); err != nil {
+		return "", err
+	}
+	return standardSecretPrefix + base64.StdEncoding.EncodeToString(key), nil
 }
 
 // StandardHeaders signs body for one attempt at timestamp and returns

@@ -736,16 +736,28 @@ func (s *Service) requireAgentPermission(ctx context.Context, principal domain.P
 }
 
 func (s *Service) CreateAgentInstanceCredential(ctx context.Context, principal domain.Principal, agentID domain.ID, name string, metadata json.RawMessage) (domain.AgentInstanceCredential, error) {
+	ownerID, err := s.authorizeInstanceRegistration(ctx, principal, agentID)
+	if err != nil {
+		return domain.AgentInstanceCredential{}, err
+	}
+	return s.registerAgentInstance(ctx, principal, agentID, ownerID, name, metadata, "", nil)
+}
+
+// authorizeInstanceRegistration is the rule every way of registering an
+// instance by hand shares: a management principal (an organization key
+// freshly authenticated) holding agent.credential.issue on an active
+// agent. It answers the owner a personal agent's instance gets.
+func (s *Service) authorizeInstanceRegistration(ctx context.Context, principal domain.Principal, agentID domain.ID) (domain.ID, error) {
 	if !domain.ManagementPrincipal(principal) {
-		return domain.AgentInstanceCredential{}, domain.ErrForbidden
+		return "", domain.ErrForbidden
 	}
 	if principal.ActorType == domain.ActorAPIKey {
 		policy, err := s.identities.GetOrganizationPolicy(ctx, application.GetOrganizationPolicyInput{OrganizationID: principal.OrganizationID})
 		if err != nil {
-			return domain.AgentInstanceCredential{}, err
+			return "", err
 		}
 		if rejected := authorization.RequireFresh(principal.Auth, policy.ApprovalReauthWindow, policy.MFAMode, s.clock.Now()); rejected != nil {
-			return domain.AgentInstanceCredential{}, rejected.Err
+			return "", rejected.Err
 		}
 	}
 
@@ -754,31 +766,37 @@ func (s *Service) CreateAgentInstanceCredential(ctx context.Context, principal d
 		AgentID:        agentID,
 	})
 	if err != nil {
-		return domain.AgentInstanceCredential{}, err
+		return "", err
 	}
 	if err := authorization.Check(principal, domain.PermissionAgentCredentialIssue, domain.AgentResource(agent.AgentSlug)); err != nil {
-		return domain.AgentInstanceCredential{}, err
+		return "", err
 	}
 	if agent.Status == domain.AgentArchived {
-		return domain.AgentInstanceCredential{}, domain.ErrAgentArchived
+		return "", domain.ErrAgentArchived
 	}
 	if agent.Status != domain.AgentActive {
-		return domain.AgentInstanceCredential{}, domain.ErrAgentInactive
+		return "", domain.ErrAgentInactive
 	}
 	// An instance of a personal agent belongs to the person registering
 	// it. An organization key is nobody, so it cannot register one.
-	var ownerID domain.ID
 	if agent.Kind == domain.AgentPersonal {
 		if !humanMember(principal) {
-			return domain.AgentInstanceCredential{}, domain.ErrAgentOwnerRequired
+			return "", domain.ErrAgentOwnerRequired
 		}
-		ownerID = principal.MembershipID
+		return principal.MembershipID, nil
 	}
+	return "", nil
+}
+
+// registerAgentInstance validates the name and metadata, issues the
+// credential and stores the instance. instanceID and delivery come
+// together from a verified registration, or not at all.
+func (s *Service) registerAgentInstance(ctx context.Context, principal domain.Principal, agentID, ownerID domain.ID, name string, metadata json.RawMessage, instanceID domain.ID, delivery *application.AgentInstanceDeliveryRecord) (domain.AgentInstanceCredential, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return domain.AgentInstanceCredential{}, fmt.Errorf("agent instance name is required: %w", domain.ErrInvalid)
 	}
-	metadata, err = normalizeMetadata(metadata)
+	metadata, err := normalizeMetadata(metadata)
 	if err != nil {
 		return domain.AgentInstanceCredential{}, err
 	}
@@ -794,6 +812,8 @@ func (s *Service) CreateAgentInstanceCredential(ctx context.Context, principal d
 		Name:           name,
 		Metadata:       metadata,
 		Credential:     record,
+		InstanceID:     instanceID,
+		Delivery:       delivery,
 		Now:            s.clock.Now(),
 	})
 	if err != nil {

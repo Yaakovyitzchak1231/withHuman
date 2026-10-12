@@ -213,7 +213,8 @@ func (input DeleteProvisionedInstanceInput) Validate() error {
 }
 
 // PruneAAPStateInput drops what AAP no longer requires: idempotency keys
-// past retention (their credential salts with them) and undelivered
+// past retention (their credential salts with them), expired webhook
+// registrations started in the app, and undelivered
 // events whose retry window closed while their instance was disabled.
 type PruneAAPStateInput struct {
 	Now time.Time

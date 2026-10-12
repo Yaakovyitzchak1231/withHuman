@@ -490,6 +490,22 @@ export interface AgentInstance {
   metadata: Record<string, unknown>;
   created_at: string;
   last_seen_at: string;
+  /* The verified webhook receiver, present only when the instance has
+   * just been created with one. */
+  delivery?: AgentInstanceDelivery;
+}
+
+export interface AgentInstanceDelivery {
+  type: "webhook";
+  url: string;
+  registration_id: string;
+}
+
+/* A pending webhook registration. The signing secret is shown once. */
+export interface AgentInstanceRegistration {
+  registration_id: string;
+  signing_secret: string;
+  expires_at: string;
 }
 
 /* One instance credential as the inventory shows it, never the

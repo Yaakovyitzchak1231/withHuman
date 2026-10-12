@@ -91,7 +91,8 @@ func (s *Store) RecordRequestResolvedAttempt(ctx context.Context, input applicat
 
 // PruneAAPState drops idempotency keys past retention, taking the
 // credential salts with them so an old credential can no longer be
-// derived, and abandons undelivered events whose retry window closed
+// derived, drops expired webhook registrations started in the app with
+// their sealed secrets, and abandons undelivered events whose retry window closed
 // while their instance was disabled and nothing attempted them.
 func (s *Store) PruneAAPState(ctx context.Context, input application.PruneAAPStateInput) error {
 	if err := input.Validate(); err != nil {
@@ -100,6 +101,7 @@ func (s *Store) PruneAAPState(ctx context.Context, input application.PruneAAPSta
 	for _, statement := range []string{
 		`DELETE FROM agent_instance_provisioning_keys WHERE expires_at <= $1`,
 		`DELETE FROM agent_instance_update_keys WHERE expires_at <= $1`,
+		`DELETE FROM agent_instance_registrations WHERE expires_at <= $1`,
 		`UPDATE request_resolved_events SET abandoned_at = $1
 		  WHERE delivered_at IS NULL AND abandoned_at IS NULL AND retry_until <= $1`,
 	} {
