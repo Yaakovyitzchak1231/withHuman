@@ -1383,7 +1383,8 @@ Examples:
 - Workflows under `.github/workflows/` pin every action to a full commit
   SHA with the version in a trailing comment. Dependabot bumps minor and
   patch versions; bump a major version by hand after reading its changelog.
-  Pull requests from forks run on GitHub-hosted runners, never Ubicloud.
+  Every job runs on GitHub-hosted runners, never a self-hosted or
+  third-party runner.
   Only `tag.yml` pushes, with `RELEASE_CREATION_TOKEN`; every other
   checkout sets `persist-credentials: false`. Every merge to `main` is
   tagged as the next patch version and released; run `tag.yml` by hand

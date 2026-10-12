@@ -9,8 +9,7 @@ permissions:
 
 jobs:
   publish:
-    # BuildKit builds both target architectures concurrently.
-    runs-on: ubicloud-standard-8
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -54,8 +53,7 @@ jobs:
   # install script, to the R2 bucket behind downloads.withhuman.ai; see
   # deployment/cli/README.md for the bucket setup.
   cli:
-    # CLI targets compile sequentially without a frontend or image build.
-    runs-on: ubicloud-standard-2
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
