@@ -1008,19 +1008,13 @@ function agentPrompt(origin: string, agents: OnboardingAgent[], pathKey: string)
  * pipeline and writes a prompt that makes one call the rules send to
  * the person, harmless if approved, checked with a preview first. */
 function testPrompt(origin: string, agents: OnboardingAgent[]): string {
-  const endpoint = `${origin}${MCP_PATH}`;
-  const list = agents.map((agent) => `${agent.name} (agent slug ${agent.slug}, branch id "${agent.runtime}")`).join(", ");
+  const list = joinNames(agents.map((agent) => `${agent.name} (agent slug ${agent.slug})`));
+  const each = agents.length > 1 ? " for each agent" : "";
   return [
-    "Use the withhuman-pipelines skill to help me test my withHuman approval rules.",
-    "",
-    "1. Connect the withHuman MCP server if it is not connected yet, and sign in when asked:",
-    `   Claude Code: claude mcp add --transport http withhuman ${endpoint}`,
-    `   Codex: codex mcp add withhuman --url ${endpoint}`,
-    `2. Read my rules with get_pipeline for pipeline_key "entry". Each of these agents has its own branch block at the top level: ${list}.`,
-    "3. For each agent, pick one tool call those rules send to me for approval. It must be harmless if I approve it and it runs.",
-    "4. Check each call with preview_pipeline and make sure the result is human.",
-    "5. For each agent, give me a short prompt I can paste into it that makes exactly that call.",
-  ].join("\n");
+    `Use the withhuman-pipelines skill and the withHuman MCP server at ${origin}${MCP_PATH} to read my approval rules for ${list}.`,
+    `Pick one call${each} that the rules send to me and that is harmless if I approve it. Check it with preview_pipeline.`,
+    `Then give me a short prompt${each} that makes that call.`,
+  ].join(" ");
 }
 
 /* Names joined the way a sentence wants them: "Codex and Pi". */
