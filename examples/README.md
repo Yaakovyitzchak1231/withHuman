@@ -99,3 +99,7 @@ uv run --env-file ../.env langgraph_refund.py --amount 2500
 For a TypeScript example, use `npm run ai-sdk -- --amount 2500`. The
 $2,500 refund appears in the review queue, and the agent waits for your
 decision.
+
+Your coding agent can also write this rule for you. Add the withHuman
+skills with `npx skills add https://withhuman.ai`, then describe the rule
+to your agent.
