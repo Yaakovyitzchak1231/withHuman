@@ -1416,6 +1416,12 @@ Examples:
   `TestMCPListsTheManagementCatalog` checks the MCP tools they name.
   Contributor-only skills go in `.agents/skills/` with
   `metadata: internal: true`.
+- `examples/` holds user-facing examples that connect an agent framework
+  to withHuman through the AAP SDKs: one self-contained refund agent per
+  framework (`python/` runs with `uv run`, `typescript/` on Node's type
+  stripping). Nothing in `make` builds or tests them, so run one against a
+  local single binary after changing it. Keep them small, keep the same
+  scenario across frameworks, and follow the user guide writing rules.
 - Workflows under `.github/workflows/` pin every action to a full commit
   SHA with the version in a trailing comment. Dependabot bumps minor and
   patch versions; bump a major version by hand after reading its changelog.

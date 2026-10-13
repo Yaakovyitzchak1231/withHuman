@@ -44,6 +44,9 @@ the whole team shares.
   OpenClaw, Pi, Hermes or DeepSeek with
   [one command](https://withhuman.ai/docs/web-app/agents). Their tools don't change: withHuman
   sees each call before it runs.
+- **Connect the agents you build.** Agents built with LangGraph, Pydantic
+  AI, the OpenAI Agents SDK, CrewAI, Mastra and other frameworks connect
+  through the Agent Approval Protocol SDKs. See the [examples](examples/).
 - **Decide what needs a person.**
   [Approval pipelines](https://withhuman.ai/docs/concepts/approval-pipelines) approve, deny or ask
   someone based on the tool and its arguments, such as "approve refunds up
