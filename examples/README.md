@@ -65,15 +65,37 @@ npm run ai-sdk
 
 Use `npm run mastra` for the Mastra example.
 
-## What to expect
+## Decide the requests
 
-- Each tool call appears in the review queue. The agent waits for your
-  decision.
+While the example runs, open withHuman and choose **Review queue** in the
+side menu. Each tool call from the agent appears there with its tool and
+arguments. The agent waits until you approve or deny it.
+
 - An approved call runs once. The request shows when it was used and
   whether it succeeded.
 - A denied call does not run. The agent receives your note.
 - A call made by a sub-agent is its own request.
 
-To change the duplicate charge, add `--amount 2500` to a Python command,
-or `-- --amount 2500` to an `npm run` command. Use it to try an approval
-rule, such as approving refunds under 100 automatically.
+## Ask only for large refunds
+
+Approval pipelines decide which calls need a person. Try a rule that
+approves everything except refunds over 40:
+
+1. In **Approval pipelines**, open the **entry** pipeline and choose
+   **Edit pipeline**.
+2. Add a **Branch**. Set its conditions to the tool equals `issue_refund`
+   and the `amount` argument is greater than `40`.
+3. Inside the branch, add an **Outcome block** set to **Ask a human**.
+4. After the branch, add an **Outcome block** set to **Approve**.
+5. Choose **Create revision**, then **Make active**.
+
+Run an example as before. The $40 refund is approved automatically and
+never reaches the review queue. Then ask for a larger refund:
+
+```sh
+uv run --env-file ../.env langgraph_refund.py --amount 2500
+```
+
+For a TypeScript example, use `npm run ai-sdk -- --amount 2500`. The
+$2,500 refund appears in the review queue, and the agent waits for your
+decision.
