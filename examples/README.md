@@ -36,7 +36,8 @@ Copy the settings file and fill it in:
 cp .env.example .env
 ```
 
-- `AAP_INSTANCE_TOKEN`: the API key from step 3.
+- `AAP_INSTANCE_TOKEN`: the API key you copied from withHuman in step 3
+  of [Set up withHuman](#set-up-withhuman).
 - `OPENAI_API_KEY` and `OPENAI_MODEL`: the model the agents use. To use
   another OpenAI-compatible endpoint, such as Azure OpenAI or a local
   model server, also set `OPENAI_BASE_URL`.
