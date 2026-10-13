@@ -15,7 +15,7 @@ import asyncio
 import os
 
 from agents import Agent, OpenAIChatCompletionsModel, Runner, function_tool, set_tracing_disabled
-from openai import AsyncAzureOpenAI
+from openai import AsyncOpenAI
 
 from agentapprovalprotocol.openai_agents import Approvals
 
@@ -37,21 +37,13 @@ def issue_refund(order_id: str, amount: float, reason: str) -> str:
     return f"Refunded {amount} on order {order_id}."
 
 
-def chat_model():
-    if os.environ.get("AZURE_OPENAI_ENDPOINT"):
-        set_tracing_disabled(True)  # traces go to OpenAI, which an Azure setup has no key for
-        return OpenAIChatCompletionsModel(
-            model=os.environ["AZURE_OPENAI_DEPLOYMENT"],
-            openai_client=AsyncAzureOpenAI(
-                azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
-                api_version=os.environ["OPENAI_API_VERSION"],
-                api_key=os.environ["AZURE_OPENAI_API_KEY"],
-            ),
-        )
-    return os.environ["OPENAI_MODEL"]
-
-
-model = chat_model()
+base_url = os.environ.get("OPENAI_BASE_URL") or None
+if base_url:
+    set_tracing_disabled(True)  # traces go to OpenAI, which another endpoint's key can't reach
+model = OpenAIChatCompletionsModel(
+    model=os.environ["OPENAI_MODEL"],
+    openai_client=AsyncOpenAI(base_url=base_url, api_key=os.environ["OPENAI_API_KEY"]),
+)
 billing = Agent(
     name="billing_specialist",
     model=model,

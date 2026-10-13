@@ -17,7 +17,7 @@ import argparse
 import os
 
 from deepagents import create_deep_agent
-from langchain_openai import AzureChatOpenAI, ChatOpenAI
+from langchain_openai import ChatOpenAI
 
 from agentapprovalprotocol.langgraph import ApprovalMiddleware, deep_agent_subagents
 
@@ -37,12 +37,6 @@ def issue_refund(order_id: str, amount: float, reason: str) -> str:
     return f"Refunded {amount} on order {order_id}."
 
 
-def chat_model():
-    if os.environ.get("AZURE_OPENAI_ENDPOINT"):
-        return AzureChatOpenAI(azure_deployment=os.environ["AZURE_OPENAI_DEPLOYMENT"])
-    return ChatOpenAI(model=os.environ["OPENAI_MODEL"])
-
-
 billing_specialist = {
     "name": "billing-specialist",
     "description": "Issues refunds. Give it the order ID, the amount and the reason.",
@@ -53,7 +47,7 @@ billing_specialist = {
 approvals = ApprovalMiddleware(os.environ["AAP_URL"], os.environ["AAP_INSTANCE_TOKEN"])
 
 agent = create_deep_agent(
-    model=chat_model(),
+    model=ChatOpenAI(model=os.environ["OPENAI_MODEL"], base_url=os.environ.get("OPENAI_BASE_URL") or None),
     tools=[lookup_order],
     system_prompt="You are a support agent. Look the order up, then hand the refund to the billing-specialist subagent.",
     middleware=[approvals],

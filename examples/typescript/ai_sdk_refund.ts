@@ -4,8 +4,7 @@
 //   npm run ai-sdk -- --amount 2500
 
 import { parseArgs } from "node:util";
-import { createAzure } from "@ai-sdk/azure";
-import { openai } from "@ai-sdk/openai";
+import { createOpenAI } from "@ai-sdk/openai";
 import { Client, Gate } from "@agentapprovalprotocol/sdk";
 import { approvals, gatedTools } from "@agentapprovalprotocol/ai-sdk";
 import { ToolLoopAgent, stepCountIs, tool } from "ai";
@@ -13,19 +12,6 @@ import { z } from "zod";
 
 const { values: args } = parseArgs({ options: { amount: { type: "string", default: "40" } } });
 const env = (name: string) => process.env[name] ?? "";
-
-function chatModel() {
-  if (env("AZURE_OPENAI_ENDPOINT")) {
-    const azure = createAzure({
-      baseURL: env("AZURE_OPENAI_ENDPOINT").replace(/\/?$/, "/openai"),
-      apiKey: env("AZURE_OPENAI_API_KEY"),
-      apiVersion: env("OPENAI_API_VERSION"),
-      useDeploymentBasedUrls: true,
-    });
-    return azure.chat(env("AZURE_OPENAI_DEPLOYMENT"));
-  }
-  return openai(env("OPENAI_MODEL"));
-}
 
 const lookupOrder = tool({
   description: "Look up an order's charges.",
@@ -43,7 +29,8 @@ const issueRefund = tool({
   },
 });
 
-const model = chatModel();
+const openai = createOpenAI({ baseURL: env("OPENAI_BASE_URL") || undefined, apiKey: env("OPENAI_API_KEY") });
+const model = openai.chat(env("OPENAI_MODEL"));
 const gate = new Gate(new Client(env("AAP_URL"), env("AAP_INSTANCE_TOKEN")));
 
 // approvals() covers only the agent it is spread into, so the billing agent's

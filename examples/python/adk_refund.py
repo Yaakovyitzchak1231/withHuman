@@ -43,18 +43,11 @@ def issue_refund(order_id: str, amount: float, reason: str) -> str:
     return f"Refunded {amount} on order {order_id}."
 
 
-def chat_model() -> LiteLlm:
-    if os.environ.get("AZURE_OPENAI_ENDPOINT"):
-        return LiteLlm(
-            model=f"azure/{os.environ['AZURE_OPENAI_DEPLOYMENT']}",
-            api_base=os.environ["AZURE_OPENAI_ENDPOINT"],
-            api_key=os.environ["AZURE_OPENAI_API_KEY"],
-            api_version=os.environ["OPENAI_API_VERSION"],
-        )
-    return LiteLlm(model=f"openai/{os.environ['OPENAI_MODEL']}")
-
-
-model = chat_model()
+model = LiteLlm(
+    model=f"openai/{os.environ['OPENAI_MODEL']}",
+    api_base=os.environ.get("OPENAI_BASE_URL") or None,
+    api_key=os.environ["OPENAI_API_KEY"],
+)
 billing = LlmAgent(
     name="billing_specialist",
     model=model,

@@ -19,7 +19,7 @@ os.environ.setdefault("PYDANTIC_AI_NO_BANNER", "1")
 
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.models.openai import OpenAIChatModel
-from pydantic_ai.providers.azure import AzureProvider
+from pydantic_ai.providers.openai import OpenAIProvider
 
 from agentapprovalprotocol.pydantic_ai import ApprovalCapability
 
@@ -39,13 +39,10 @@ def issue_refund(order_id: str, amount: float, reason: str) -> str:
     return f"Refunded {amount} on order {order_id}."
 
 
-def chat_model():
-    if os.environ.get("AZURE_OPENAI_ENDPOINT"):
-        return OpenAIChatModel(os.environ["AZURE_OPENAI_DEPLOYMENT"], provider=AzureProvider())
-    return OpenAIChatModel(os.environ["OPENAI_MODEL"])
-
-
-model = chat_model()
+model = OpenAIChatModel(
+    os.environ["OPENAI_MODEL"],
+    provider=OpenAIProvider(base_url=os.environ.get("OPENAI_BASE_URL") or None, api_key=os.environ["OPENAI_API_KEY"]),
+)
 approvals = ApprovalCapability(os.environ["AAP_URL"], os.environ["AAP_INSTANCE_TOKEN"])
 
 # Every agent that calls tools needs the capability, including agents run from a tool.

@@ -37,8 +37,9 @@ cp .env.example .env
 ```
 
 - `AAP_INSTANCE_TOKEN`: the API key from step 3.
-- `OPENAI_API_KEY` and `OPENAI_MODEL`: the model the agents use. For Azure
-  OpenAI, fill in the `AZURE_OPENAI_` settings instead.
+- `OPENAI_API_KEY` and `OPENAI_MODEL`: the model the agents use. To use
+  another OpenAI-compatible endpoint, such as Azure OpenAI or a local
+  model server, also set `OPENAI_BASE_URL`.
 
 The Claude Agent SDK example uses Claude. Set `ANTHROPIC_API_KEY`, or sign
 in to Claude Code on the same machine.

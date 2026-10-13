@@ -13,9 +13,8 @@
     "@agentapprovalprotocol/ai-sdk": "^0.1.0",
     "@agentapprovalprotocol/mastra": "^0.1.0",
     "@agentapprovalprotocol/sdk": "^0.1.0",
-    "@ai-sdk/azure": "^4.0.101",
-    "@ai-sdk/azure-v3": "npm:@ai-sdk/azure@^3.0.138",
-    "@ai-sdk/openai": "^4.0.0",
+    "@ai-sdk/openai": "^4.0.93",
+    "@ai-sdk/openai-v3": "npm:@ai-sdk/openai@^3.0.0",
     "@mastra/core": "^1.76.0",
     "ai": "^7.0.139",
     "zod": "^4.6.7"

@@ -2,7 +2,6 @@
 # requires-python = ">=3.10,<3.14"
 # dependencies = [
 #   "agentapprovalprotocol[crewai]",
-#   "crewai[azure-ai-inference]",
 # ]
 # ///
 """A CrewAI support agent and its billing coworker, whose tool calls wait for withHuman.
@@ -42,18 +41,11 @@ def issue_refund(order_id: str, amount: float, reason: str) -> str:
     return f"Refunded {amount} on order {order_id}."
 
 
-def chat_model() -> LLM:
-    if os.environ.get("AZURE_OPENAI_ENDPOINT"):
-        return LLM(
-            model=f"azure/{os.environ['AZURE_OPENAI_DEPLOYMENT']}",
-            endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
-            api_key=os.environ["AZURE_OPENAI_API_KEY"],
-            api_version=os.environ["OPENAI_API_VERSION"],
-        )
-    return LLM(model=f"openai/{os.environ['OPENAI_MODEL']}")
-
-
-llm = chat_model()
+llm = LLM(
+    model=f"openai/{os.environ['OPENAI_MODEL']}",
+    base_url=os.environ.get("OPENAI_BASE_URL") or None,
+    api_key=os.environ["OPENAI_API_KEY"],
+)
 billing = Agent(
     role="Billing specialist",
     goal="Issue refunds exactly as requested",

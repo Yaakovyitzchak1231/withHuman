@@ -4,8 +4,8 @@
 //   npm run mastra -- --amount 2500
 
 import { parseArgs } from "node:util";
-// Mastra takes AI SDK 5 and 6 models, so Azure uses @ai-sdk/azure 3 under an alias.
-import { createAzure } from "@ai-sdk/azure-v3";
+// Mastra takes AI SDK 5 and 6 models, so this is @ai-sdk/openai 3 under an alias.
+import { createOpenAI } from "@ai-sdk/openai-v3";
 import { Client, Gate } from "@agentapprovalprotocol/sdk";
 import { Approvals } from "@agentapprovalprotocol/mastra";
 import { Agent } from "@mastra/core/agent";
@@ -15,19 +15,6 @@ import { z } from "zod";
 
 const { values: args } = parseArgs({ options: { amount: { type: "string", default: "40" } } });
 const env = (name: string) => process.env[name] ?? "";
-
-function chatModel() {
-  if (env("AZURE_OPENAI_ENDPOINT")) {
-    const azure = createAzure({
-      baseURL: env("AZURE_OPENAI_ENDPOINT").replace(/\/?$/, "/openai"),
-      apiKey: env("AZURE_OPENAI_API_KEY"),
-      apiVersion: env("OPENAI_API_VERSION"),
-      useDeploymentBasedUrls: true,
-    });
-    return azure.chat(env("AZURE_OPENAI_DEPLOYMENT"));
-  }
-  return `openai/${env("OPENAI_MODEL")}`;
-}
 
 const lookupOrder = createTool({
   id: "lookup_order",
@@ -47,7 +34,8 @@ const issueRefund = createTool({
   },
 });
 
-const model = chatModel();
+const openai = createOpenAI({ baseURL: env("OPENAI_BASE_URL") || undefined, apiKey: env("OPENAI_API_KEY") });
+const model = openai.chat(env("OPENAI_MODEL"));
 const approvals = new Approvals(new Gate(new Client(env("AAP_URL"), env("AAP_INSTANCE_TOKEN"))));
 
 // Build every agent with approvals.config, sub-agents included.
