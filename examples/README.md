@@ -89,6 +89,10 @@ approves everything except refunds over 40:
 4. After the branch, add an **Outcome block** set to **Approve**.
 5. Choose **Create revision**, then **Make active**.
 
+Your coding agent can also write this rule for you. Add the withHuman
+skills with `npx skills add https://withhuman.ai`, then describe the rule
+to your agent.
+
 Run an example as before. The $40 refund is approved automatically and
 never reaches the review queue. Then ask for a larger refund:
 
@@ -99,7 +103,3 @@ uv run --env-file ../.env langgraph_refund.py --amount 2500
 For a TypeScript example, use `npm run ai-sdk -- --amount 2500`. The
 $2,500 refund appears in the review queue, and the agent waits for your
 decision.
-
-Your coding agent can also write this rule for you. Add the withHuman
-skills with `npx skills add https://withhuman.ai`, then describe the rule
-to your agent.
