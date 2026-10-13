@@ -2,8 +2,8 @@
 
 These examples put an agent you build with an agent framework behind
 withHuman. Each one is a small support agent that looks up an order and
-refunds a duplicate charge. Every tool call waits for withHuman before it
-runs, including calls made by sub-agents.
+refunds a duplicate charge. Every tool call goes to withHuman before it
+runs. Calls made by sub-agents do too.
 
 They use the [Agent Approval Protocol SDKs](https://agentapprovalprotocol.io/docs/sdks/overview).
 
