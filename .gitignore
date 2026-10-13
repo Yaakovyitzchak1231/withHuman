@@ -3,3 +3,4 @@
 node_modules/
 *.tsbuildinfo
 webapp/assets/
+examples/typescript/package-lock.json
