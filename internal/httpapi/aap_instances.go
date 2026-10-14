@@ -69,7 +69,7 @@ func (a *API) mintAgentInstance(c *gin.Context) {
 	if result.Replayed {
 		status = http.StatusOK
 	}
-	c.JSON(status, result.AgentInstanceCredential)
+	c.JSON(status, newAAPProvisionedInstanceResponse(result.AgentInstanceCredential))
 }
 
 func (a *API) getProvisionedInstance(c *gin.Context) {
@@ -83,7 +83,7 @@ func (a *API) getProvisionedInstance(c *gin.Context) {
 		a.writeError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, instance)
+	c.JSON(http.StatusOK, newAAPInstanceResponse(instance))
 }
 
 // updateProvisionedInstance tells an absent delivery (unchanged) from an
@@ -128,7 +128,7 @@ func (a *API) updateProvisionedInstance(c *gin.Context) {
 		a.writeError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, instance)
+	c.JSON(http.StatusOK, newAAPInstanceResponse(instance))
 }
 
 // deleteProvisionedInstance retires the instance, then stands down the

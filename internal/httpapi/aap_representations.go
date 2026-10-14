@@ -63,3 +63,34 @@ func newAAPApprovalResponse(r domain.ApprovalRequest) aapApprovalResponse {
 	}
 	return out
 }
+
+// aapInstanceResponse is AAP's Instance: what a provisioner reads back about
+// an instance, never the product view's organization, status or metadata.
+type aapInstanceResponse struct {
+	ID       domain.ID                     `json:"id"`
+	Name     string                        `json:"name"`
+	Delivery *domain.AgentInstanceDelivery `json:"delivery,omitempty"`
+}
+
+// aapProvisionedInstanceResponse is AAP's ProvisionInstanceResponse.
+type aapProvisionedInstanceResponse struct {
+	Instance   aapInstanceResponse         `json:"instance"`
+	Credential aapIssuedCredentialResponse `json:"credential"`
+}
+type aapIssuedCredentialResponse struct {
+	Token     string     `json:"token"`
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+}
+
+func newAAPInstanceResponse(instance domain.AgentInstance) aapInstanceResponse {
+	return aapInstanceResponse{ID: instance.ID, Name: instance.Name, Delivery: instance.Delivery}
+}
+
+func newAAPProvisionedInstanceResponse(issued domain.AgentInstanceCredential) aapProvisionedInstanceResponse {
+	out := aapProvisionedInstanceResponse{Instance: newAAPInstanceResponse(issued.AgentInstance), Credential: aapIssuedCredentialResponse{Token: issued.Credential.Token}}
+	if !issued.Credential.ExpiresAt.IsZero() {
+		expiry := issued.Credential.ExpiresAt.UTC()
+		out.Credential.ExpiresAt = &expiry
+	}
+	return out
+}
