@@ -160,7 +160,7 @@ provisioner_token=$(printf '%s' "$provisioner" | jq -r .credential.token)
 minted=$(curl --silent --fail --header "Authorization: Bearer $provisioner_token" --header 'Content-Type: application/json' \
   --header "Idempotency-Key: smoke-mint-$unique" \
   --data '{"instance_metadata":{"region":"smoke"},"ttl_seconds":3600}' "$origin/api/aap/v1/instances")
-printf '%s' "$minted" | jq -e '.agent_instance.name | length > 0' >/dev/null
+printf '%s' "$minted" | jq -e '.instance.name | length > 0' >/dev/null
 minted_token=$(printf '%s' "$minted" | jq -r .credential.token)
 # A replay with the same key returns the same instance and credential.
 replayed=$(curl --silent --fail --header "Authorization: Bearer $provisioner_token" --header 'Content-Type: application/json' \

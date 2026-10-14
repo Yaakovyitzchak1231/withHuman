@@ -993,7 +993,10 @@ Examples:
   (including `onboard`), and reconnects terminal input when available.
   No arguments means install only. `WITHHUMAN_CLI_INSTALL_DIR` overrides
   the target directory. Release installer and command producers together.
-- AAP request representations are separate from product views. Preserve the
+- AAP request and instance representations are separate from product views
+  (`aap_representations.go`), and the instance routes answer with the
+  protocol's own `Instance` and `ProvisionInstanceResponse`, checked against
+  the pinned AAP module's OpenAPI document. Preserve the
   exact submitted timeout. Approval idempotency is instance scoped, and
   an instance reads, cancels, consumes and reports outcomes only for its
   own requests. The database records approved decision expiry once at

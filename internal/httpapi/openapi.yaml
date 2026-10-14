@@ -688,12 +688,12 @@ paths:
           description: The new instance and its credential. Keep the credential's token; only a replay with the same provisioner token and idempotency key returns it again.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/AgentInstanceCredential" }
+              schema: { $ref: "#/components/schemas/AAPProvisionedInstance" }
         "200":
           description: The instance and credential an earlier submission with the same idempotency key created.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/AgentInstanceCredential" }
+              schema: { $ref: "#/components/schemas/AAPProvisionedInstance" }
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
@@ -714,7 +714,7 @@ paths:
           description: The instance
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/AgentInstance" }
+              schema: { $ref: "#/components/schemas/AAPInstance" }
         "401": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
     patch:
@@ -745,7 +745,7 @@ paths:
           description: The updated instance
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/AgentInstance" }
+              schema: { $ref: "#/components/schemas/AAPInstance" }
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
@@ -7376,6 +7376,31 @@ components:
           description: "Where the call comes from, as observed by the adapter rather than stated by the agent: for example the runtime, session id, or working directory."
           example: { run_id: "4821", framework: claude-code }
         timeout: { type: string, example: 30m, description: "How long the request may wait for a decision, as a duration such as `30m` or `24h`. Between one second and seven days. Once it passes, the request expires." }
+    AAPInstance:
+      example: {"id": "b29a43a7-1949-4b9f-9d61-b7ae66f85d31", "name": "ci-runner-07", "delivery": {"type": "webhook", "url": "https://harness.example.com/aap/events", "registration_id": "8246931c-4ce0-4c15-a94a-e9c078ad06e2"}}
+      type: object
+      additionalProperties: false
+      required: [id, name]
+      description: An instance as the Agent Approval Protocol returns it to a provisioner. Credentials and the signing secret are never included.
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string, minLength: 1, description: Unique within the agent. }
+        delivery: { $ref: "#/components/schemas/AgentInstanceDelivery", description: Absent when the instance has no receiver. }
+    AAPProvisionedInstance:
+      example: {"instance": {"id": "b29a43a7-1949-4b9f-9d61-b7ae66f85d31", "name": "ci-runner-07"}, "credential": {"token": "whc_live_3f6b9c1d0e7a4b2c", "expires_at": "2026-09-18T12:00:00Z"}}
+      type: object
+      additionalProperties: false
+      required: [instance, credential]
+      description: A provisioned instance and its credential.
+      properties:
+        instance: { $ref: "#/components/schemas/AAPInstance" }
+        credential:
+          type: object
+          additionalProperties: false
+          required: [token]
+          properties:
+            token: { type: string, minLength: 1, description: The instance credential. Only a replay with the same provisioner token and idempotency key returns it again. }
+            expires_at: { type: string, format: date-time, description: When the credential stops working. }
     AAPDecision:
       example: {"status": "approved", "note": "Refund the duplicate charge.", "decided_at": "2026-09-17T12:02:00Z", "expires_at": "2026-09-17T12:07:00Z"}
       type: object
