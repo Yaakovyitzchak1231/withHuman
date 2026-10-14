@@ -228,6 +228,9 @@ export function NewAgentInstanceScreen({
               <DescriptionItem term="Instance" copy={false}>
                 {issued.agent_instance.name}
               </DescriptionItem>
+              <DescriptionItem term="Instance ID" mono>
+                {issued.agent_instance.id}
+              </DescriptionItem>
               {issued.agent_instance.delivery ? (
                 <DescriptionItem term="Receiver" mono copy={false}>
                   {issued.agent_instance.delivery.url}

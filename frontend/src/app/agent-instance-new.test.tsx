@@ -56,7 +56,7 @@ const agent = {
   status: "active",
 } as AgentDetail;
 const issued = {
-  agent_instance: { name: "support-server-01" },
+  agent_instance: { id: "4f1c2b7e-8d3a-4c55-9b1e-2a7d6f0c9e31", name: "support-server-01" },
   credential: { token: "whc_test_secret", expires_at: "2027-01-01T00:00:00Z" },
 } as Awaited<ReturnType<typeof api.createAgentInstance>>;
 
@@ -158,6 +158,7 @@ describe("new instance page", () => {
     expect(screen.getByText(issued.credential.token)).toBeTruthy();
     expect(screen.getByText("https://app.example.test/api/aap")).toBeTruthy();
     expect(screen.getByText("support-server-01")).toBeTruthy();
+    expect(screen.getByText("4f1c2b7e-8d3a-4c55-9b1e-2a7d6f0c9e31")).toBeTruthy();
     expect(screen.getByText("Key expires")).toBeTruthy();
     expect(screen.getByText(/Authorization: Bearer/)).toBeTruthy();
     expect(
