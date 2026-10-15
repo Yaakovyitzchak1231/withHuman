@@ -32,9 +32,8 @@ own.
 - The Go module path is `github.com/withHumanAI/withHuman`.
 - Do not copy privately licensed marketing fonts or assets into core. Product
   assets must be independently distributable.
-- This is a prototype. Do not add compatibility shims, migrations for
-  superseded prototype interfaces, deprecation windows, or legacy fallbacks.
-  Change the design directly and delete the obsolete path.
+- Do not add compatibility shims, deprecation windows, or legacy
+  fallbacks. Change the design directly and delete the obsolete path.
 - Never use em dashes in user-facing product copy.
 - Status is always a labeled `Badge`, never a bare status dot. The design
   system deliberately has no status-dot component: each tone has a status
@@ -143,9 +142,9 @@ Examples:
   it with `db.WithTable` to keep its record apart.
 - A migration file that has shipped in a tagged release is frozen: the
   runner applies each file once by name, so an in-place edit silently never
-  reaches any database that already ran it. Schema changes always go in a new numbered file. Prototype
-  mode's no-backwards-compatibility rule is about interfaces and designs;
-  it does not extend to editing applied migrations. The chain restarted as
+  reaches any database that already ran it. Schema changes always go in a new numbered file. The
+  no-compatibility-shims rule is about interfaces and designs; it does not
+  extend to editing applied migrations. The chain restarted as
   one `0001_initial.sql` at the repository split (2026-09-24), generated
   from a dump of the schema the old files built.
   Because the squashed file reuses the old first file's name, `db.Apply`
