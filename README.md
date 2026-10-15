@@ -40,9 +40,6 @@ server runs the organization's approval pipeline and answers `approved` or
 `denied`, or holds the request as `pending` and notifies reviewers along an
 escalation path.
 
-Pipelines and escalation paths are configured per organization, not per
-agent, so every connected agent is gated by the same rules.
-
 This repository contains:
 
 - **`withhuman`** ([`cmd/withhuman`](cmd/withhuman)): the server. One Go
