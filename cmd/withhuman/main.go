@@ -15,6 +15,7 @@ import (
 	"github.com/withHumanAI/withHuman/loggermdc"
 	"github.com/withHumanAI/withHuman/runtime"
 	"github.com/withHumanAI/withHuman/singlebinary"
+	"github.com/withHumanAI/withHuman/telemetry"
 	"github.com/withHumanAI/withHuman/webapp"
 )
 
@@ -38,6 +39,15 @@ func main() {
 func run(logger *slog.Logger, dataDir, httpAddress string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	shutdownTelemetry, err := telemetry.Start(ctx, telemetry.Options{ServiceName: "withhuman", Version: version, Logger: logger})
+	if err != nil {
+		return err
+	}
+	defer func() {
+		flushContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = shutdownTelemetry(flushContext)
+	}()
 
 	instance, err := singlebinary.Start(ctx, singlebinary.Config{
 		DataDir:     dataDir,

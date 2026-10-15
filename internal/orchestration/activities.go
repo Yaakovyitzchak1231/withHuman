@@ -11,6 +11,7 @@ import (
 	"github.com/withHumanAI/withHuman/application"
 	"github.com/withHumanAI/withHuman/domain"
 	"github.com/withHumanAI/withHuman/loggermdc"
+	"github.com/withHumanAI/withHuman/telemetry"
 	"go.temporal.io/sdk/activity"
 )
 
@@ -358,6 +359,7 @@ func (a *Activities) admit(ctx context.Context, request domain.ApprovalRequest, 
 					continue
 				}
 				if admission.Held {
+					telemetry.NotificationHeld(ctx, string(kind))
 					held = append(held, kind)
 					holds = append(holds, NotificationHold{Outcome: step.Outcome, Recipient: recipient.Only(kind), Kind: kind, ClosesAt: admission.ClosesAt})
 				}

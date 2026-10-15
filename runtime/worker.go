@@ -25,6 +25,7 @@ import (
 	"github.com/withHumanAI/withHuman/internal/webhookdelivery"
 	"github.com/withHumanAI/withHuman/loggermdc"
 	"github.com/withHumanAI/withHuman/notifications"
+	"github.com/withHumanAI/withHuman/telemetry"
 	"github.com/withHumanAI/withHuman/tenants"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/interceptor"
@@ -107,9 +108,14 @@ func RunWorker(ctx context.Context, options WorkerOptions) error {
 		store.WithAuditSink(options.AuditSink)
 	}
 	store.WithPurgeHooks(options.PurgeHooks...)
+	stopObservingPool, err := telemetry.ObservePool("worker", store.Pool())
+	if err != nil {
+		return err
+	}
+	defer stopObservingPool()
 	temporalClient, err := client.Dial(client.Options{HostPort: cfg.TemporalAddress, Namespace: cfg.TemporalNamespace,
 		ContextPropagators: []workflow.ContextPropagator{orchestration.NewMDCPropagator()},
-		Logger:             temporallog.NewStructuredLogger(logger)})
+		Logger:             temporallog.NewStructuredLogger(logger), MetricsHandler: telemetry.TemporalMetrics(logger)})
 	if err != nil {
 		return err
 	}
@@ -205,7 +211,7 @@ func RunWorker(ctx context.Context, options WorkerOptions) error {
 
 	healthServer := &http.Server{Addr: cfg.WorkerHealthAddress, ReadHeaderTimeout: 2 * time.Second}
 	healthServer.Handler = http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		if request.URL.Path != "/livez" && request.URL.Path != "/readyz" && request.URL.Path != "/metrics" {
+		if request.URL.Path != "/livez" && request.URL.Path != "/readyz" {
 			http.NotFound(response, request)
 			return
 		}
@@ -220,12 +226,6 @@ func RunWorker(ctx context.Context, options WorkerOptions) error {
 			if _, err := temporalClient.CheckHealth(checkContext, &client.CheckHealthRequest{}); err != nil {
 				status, payload["status"], payload["temporal"] = http.StatusServiceUnavailable, "not_ready", err.Error()
 			}
-		}
-		if request.URL.Path == "/metrics" {
-			response.Header().Set("Content-Type", "text/plain")
-			response.WriteHeader(status)
-			_, _ = response.Write([]byte("withhuman_worker_up 1\n"))
-			return
 		}
 		response.Header().Set("Content-Type", "application/json")
 		response.WriteHeader(status)

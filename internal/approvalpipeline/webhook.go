@@ -15,6 +15,7 @@ import (
 	"github.com/withHumanAI/withHuman/approvalblock"
 	"github.com/withHumanAI/withHuman/domain"
 	"github.com/withHumanAI/withHuman/internal/webhookdelivery"
+	"github.com/withHumanAI/withHuman/telemetry"
 )
 
 // WebhookRuntimeFingerprint covers the payload shape, the signature scheme,
@@ -264,7 +265,8 @@ func (block *CompiledWebhookBlock) payload(input RequestApprovalBlockInput, idem
 // every other non-2xx answer and every malformed answer does not.
 func (block *CompiledWebhookBlock) deliver(ctx context.Context, endpointURL, secret string, body []byte, idempotencyKey string) webhookAttempt {
 	response, err := block.runtime.Deliverer.Deliver(ctx, webhookdelivery.Delivery{
-		URL: endpointURL, Secret: secret, Body: body, Timeout: block.timeout,
+		Purpose: telemetry.WebhookPipelineBlock,
+		URL:     endpointURL, Secret: secret, Body: body, Timeout: block.timeout,
 		DeliveryID: deliveryIDOf(body), IdempotencyKey: idempotencyKey,
 	})
 	attempt := webhookAttempt{status: response.StatusCode, duration: response.Duration}

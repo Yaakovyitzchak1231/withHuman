@@ -15,12 +15,18 @@ import (
 	"github.com/withHumanAI/withHuman/db"
 	"github.com/withHumanAI/withHuman/domain"
 	"github.com/withHumanAI/withHuman/internal/embeddedpg/embeddedpgtest"
+	"github.com/withHumanAI/withHuman/telemetry"
+	"github.com/withHumanAI/withHuman/telemetry/telemetrytest"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 // Exercises the store against a real PostgreSQL instance: migrations with
 // their triggers, the serializable transaction paths, idempotent retries,
 // and the append-only and terminal-state invariants.
 func TestStoreAgainstRealPostgres(t *testing.T) {
+	telemetrytest.Install()
+	resolvedBefore := telemetrytest.Count(t, "withhuman.approval.requests.resolved",
+		telemetry.AttributeApprovalStatus.String("expired"), telemetry.AttributeDecisionSource.String("system"))
 	server := embeddedpgtest.Start(t)
 	ctx := context.Background()
 	store, err := Open(ctx, server.URL("postgres"))
@@ -282,9 +288,15 @@ func TestStoreAgainstRealPostgres(t *testing.T) {
 			t.Fatalf("no %s event reached the sink", eventType)
 		}
 	}
-	metrics, err := store.OperationalMetrics(ctx)
-	if err != nil || metrics.Expired != 1 || metrics.Approved != 2 {
-		t.Fatalf("OperationalMetrics: %+v %v", metrics, err)
+	pending, oldest, err := store.PendingApprovals(ctx)
+	if err != nil || pending != 0 || !oldest.IsZero() {
+		t.Fatalf("PendingApprovals: %d %v %v", pending, oldest, err)
+	}
+	// Each terminal decision is counted once, after its commit; the
+	// idempotent expiry retry counts nothing.
+	expiredBySystem := []attribute.KeyValue{telemetry.AttributeApprovalStatus.String("expired"), telemetry.AttributeDecisionSource.String("system")}
+	if got := telemetrytest.Count(t, "withhuman.approval.requests.resolved", expiredBySystem...) - resolvedBefore; got != 1 {
+		t.Fatalf("expired requests counted %v times, want 1", got)
 	}
 }
 

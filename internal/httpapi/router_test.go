@@ -428,7 +428,6 @@ func TestFrontendFallbackSeparatesProductRoutesFromAPIs(t *testing.T) {
 		{path: "/requests/example", status: http.StatusOK, contentType: "text/html"},
 		{path: "/api/missing", status: http.StatusNotFound, contentType: "application/json"},
 		{path: "/auth/missing", status: http.StatusNotFound, contentType: "application/json"},
-		{path: "/metrics", status: http.StatusNotFound, contentType: "application/json"},
 	}
 
 	for _, test := range tests {

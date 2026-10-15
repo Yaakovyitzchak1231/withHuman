@@ -12,6 +12,7 @@ import (
 	"github.com/withHumanAI/withHuman/internal/escalation"
 	"github.com/withHumanAI/withHuman/loggermdc"
 	"github.com/withHumanAI/withHuman/routing"
+	"github.com/withHumanAI/withHuman/telemetry"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/temporal"
 )
@@ -146,6 +147,9 @@ func (a *Activities) ApplyEscalationEffects(ctx context.Context, input ApplyEsca
 	if !result.Applied {
 		logger.Info("escalation update skipped: request is no longer pending or update is stale", append(fields, "sequence", input.Sequence)...)
 		return ApplyEscalationEffectsOutput{Stale: true}, nil
+	}
+	for _, effect := range input.Effects {
+		telemetry.EscalationEffect(ctx, string(effect.Kind))
 	}
 	var entries []application.LevelEntry
 	for _, effect := range input.Effects {

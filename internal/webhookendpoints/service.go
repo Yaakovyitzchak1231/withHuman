@@ -26,6 +26,7 @@ import (
 	"github.com/withHumanAI/withHuman/internal/authorization"
 	"github.com/withHumanAI/withHuman/internal/secrets"
 	"github.com/withHumanAI/withHuman/internal/webhookdelivery"
+	"github.com/withHumanAI/withHuman/telemetry"
 )
 
 const (
@@ -357,7 +358,8 @@ func (s *Service) Test(ctx context.Context, principal domain.Principal, endpoint
 		return TestResult{}, err
 	}
 	response, deliverErr := s.deliverer.Deliver(ctx, webhookdelivery.Delivery{
-		URL: target.URL, Secret: secret, Body: body, Timeout: testDeliveryTimeout,
+		Purpose: telemetry.WebhookEndpointTest,
+		URL:     target.URL, Secret: secret, Body: body, Timeout: testDeliveryTimeout,
 		DeliveryID: deliveryID, IdempotencyKey: "test:" + deliveryID,
 	})
 	result := classifyTest(response, deliverErr)

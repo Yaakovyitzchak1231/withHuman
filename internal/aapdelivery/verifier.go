@@ -20,6 +20,7 @@ import (
 	"github.com/withHumanAI/withHuman/internal/secrets"
 	"github.com/withHumanAI/withHuman/internal/webhookdelivery"
 	"github.com/withHumanAI/withHuman/loggermdc"
+	"github.com/withHumanAI/withHuman/telemetry"
 )
 
 // AttemptTimeout bounds every verification and notification attempt, the
@@ -90,7 +91,7 @@ func (v *Verifier) VerifyInstanceDelivery(ctx context.Context, input application
 	if err != nil {
 		return application.AgentInstanceDeliveryRecord{}, err
 	}
-	response, err := v.client.Deliver(ctx, webhookdelivery.Delivery{URL: proposed.URL, Headers: headers, Body: body, Timeout: AttemptTimeout})
+	response, err := v.client.Deliver(ctx, webhookdelivery.Delivery{Purpose: telemetry.WebhookAAPVerification, URL: proposed.URL, Headers: headers, Body: body, Timeout: AttemptTimeout})
 	if err != nil {
 		v.logger.WarnContext(ctx, "AAP receiver verification failed; the receiver could not be reached, so no instance was created", "error", err)
 		return application.AgentInstanceDeliveryRecord{}, fmt.Errorf("the receiver could not be reached: %w", domain.ErrWebhookVerificationFailed)

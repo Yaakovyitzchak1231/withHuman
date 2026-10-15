@@ -13,6 +13,7 @@ import (
 	"github.com/withHumanAI/withHuman/internal/secrets"
 	"github.com/withHumanAI/withHuman/internal/webhookdelivery"
 	"github.com/withHumanAI/withHuman/loggermdc"
+	"github.com/withHumanAI/withHuman/telemetry"
 )
 
 const (
@@ -113,7 +114,7 @@ func (d *Dispatcher) attempt(ctx context.Context, event application.RequestResol
 		body := EventBody(event)
 		var headers http.Header
 		if headers, err = webhookdelivery.StandardHeaders(secret, string(event.EventID), d.clock.Now(), body); err == nil {
-			response, err = d.client.Deliver(ctx, webhookdelivery.Delivery{URL: event.URL, Headers: headers, Body: body, Timeout: AttemptTimeout})
+			response, err = d.client.Deliver(ctx, webhookdelivery.Delivery{Purpose: telemetry.WebhookAAPEvent, URL: event.URL, Headers: headers, Body: body, Timeout: AttemptTimeout})
 		}
 	}
 	attemptedAt := d.clock.Now()

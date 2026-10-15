@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/withHumanAI/withHuman/application"
 	"github.com/withHumanAI/withHuman/domain"
+	"github.com/withHumanAI/withHuman/telemetry"
 )
 
 func (s *Store) InitializeApproval(ctx context.Context, input application.InitializeApprovalInput) (domain.ApprovalRequest, error) {
@@ -89,6 +90,10 @@ func (s *Store) InitializeApproval(ctx context.Context, input application.Initia
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return domain.ApprovalRequest{}, err
+	}
+	telemetry.ApprovalCreated(ctx, string(request.Status))
+	if decision := input.Decision; decision != nil {
+		telemetry.ApprovalResolved(ctx, string(decision.Status), string(domain.DecisionSourcePipeline), request.CreatedAt, decision.DecidedAt)
 	}
 	return s.GetApprovalByIdempotencyKey(ctx, application.GetApprovalByIdempotencyKeyInput{
 		OrganizationID:  request.OrganizationID,
@@ -283,7 +288,8 @@ func (s *Store) ExpireApproval(ctx context.Context, input application.ExpireAppr
 	}
 	defer tx.Rollback(ctx)
 	var status string
-	err = tx.QueryRow(ctx, `SELECT status FROM approval_requests WHERE organization_id=$1 AND id=$2 FOR UPDATE`, organizationID, requestID).Scan(&status)
+	var createdAt time.Time
+	err = tx.QueryRow(ctx, `SELECT status, created_at FROM approval_requests WHERE organization_id=$1 AND id=$2 FOR UPDATE`, organizationID, requestID).Scan(&status, &createdAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.ApprovalRequest{}, domain.ErrNotFound
 	}
@@ -322,6 +328,7 @@ func (s *Store) ExpireApproval(ctx context.Context, input application.ExpireAppr
 	if err := tx.Commit(ctx); err != nil {
 		return domain.ApprovalRequest{}, err
 	}
+	telemetry.ApprovalResolved(ctx, string(domain.ApprovalExpired), string(domain.DecisionSourceSystem), createdAt, now)
 	return s.GetApproval(ctx, application.GetApprovalInput{OrganizationID: organizationID, RequestID: requestID})
 }
 
@@ -366,49 +373,69 @@ func (s *Store) CancelApproval(ctx context.Context, input application.CancelAppr
 	default:
 		return domain.ApprovalRequest{}, domain.ErrAlreadyTerminal
 	}
-	if err := s.cancelLockedApproval(ctx, tx, organizationID, requestID, domain.ID(agentID), instanceID, instanceName, input.Auth, now); err != nil {
+	createdAt, err := s.cancelLockedApproval(ctx, tx, organizationID, requestID, domain.ID(agentID), instanceID, instanceName, input.Auth, now)
+	if err != nil {
 		return domain.ApprovalRequest{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return domain.ApprovalRequest{}, err
 	}
+	telemetry.ApprovalResolved(ctx, string(domain.ApprovalCancelled), string(domain.DecisionSourceAgent), createdAt, now)
 	return s.GetApproval(ctx, application.GetApprovalInput{OrganizationID: organizationID, RequestID: requestID})
 }
 
 // cancelLockedApproval records the cancellation of a pending request the
 // caller's transaction has locked: the terminal decision (source agent,
 // channel aap), the status, the claims, the request.resolved event when
-// the instance still has a receiver, and approval.cancelled.
-func (s *Store) cancelLockedApproval(ctx context.Context, tx pgx.Tx, organizationID, requestID, agentID domain.ID, instanceID, instanceName string, auth domain.AuthContext, now time.Time) error {
+// the instance still has a receiver, and approval.cancelled. It returns
+// when the request was created, for the caller to record once committed.
+func (s *Store) cancelLockedApproval(ctx context.Context, tx pgx.Tx, organizationID, requestID, agentID domain.ID, instanceID, instanceName string, auth domain.AuthContext, now time.Time) (time.Time, error) {
 	decisionID := domain.ID(uuid.NewString())
 	key := "cancellation:" + string(requestID)
 	if _, err := tx.Exec(ctx, `INSERT INTO decisions
 		(id,request_id,organization_id,source,status,channel,auth_method,auth_assurance,authenticated_at,credential_id,idempotency_key,decided_at)
 		VALUES ($1,$2,$3,'agent','cancelled','aap',$4,$5,$6,NULLIF($7::text,'')::uuid,$8,$9)`, decisionID, requestID, organizationID,
 		auth.Method, auth.Assurance, auth.AuthenticatedAt, auth.CredentialID, key, now); err != nil {
-		return err
+		return time.Time{}, err
 	}
-	if _, err := tx.Exec(ctx, `UPDATE approval_requests SET status='cancelled',updated_at=$3 WHERE organization_id=$1 AND id=$2`, organizationID, requestID, now); err != nil {
-		return err
+	var createdAt time.Time
+	if err := tx.QueryRow(ctx, `UPDATE approval_requests SET status='cancelled',updated_at=$3 WHERE organization_id=$1 AND id=$2
+		RETURNING created_at`, organizationID, requestID, now).Scan(&createdAt); err != nil {
+		return time.Time{}, err
 	}
 	if err := recordRequestResolvedEvent(ctx, tx, organizationID, requestID); err != nil {
-		return err
+		return time.Time{}, err
 	}
 	// A claim that already lapsed closes as lapsed with its own event, as
 	// on a decision; only a still-live claim is closed by the cancellation.
 	if err := s.lapseStaleClaims(ctx, tx, organizationID, requestID, now); err != nil {
-		return err
+		return time.Time{}, err
 	}
 	if err := closeOpenClaims(ctx, tx, organizationID, requestID, domain.ClaimCancelled, now); err != nil {
-		return err
+		return time.Time{}, err
 	}
 	data, _ := json.Marshal(map[string]any{"agent_instance_id": instanceID, "agent_instance_name": instanceName})
-	return s.appendAuditEvent(ctx, tx, domain.AuditEvent{
+	return createdAt, s.appendAuditEvent(ctx, tx, domain.AuditEvent{
 		OrganizationID: organizationID, EventType: "approval.cancelled",
 		ActorType: domain.ActorAgent, ActorID: agentID,
 		SubjectType: "approval_request", SubjectID: requestID,
 		Data: data, OccurredAt: now,
 	})
+}
+
+// PendingApprovals is the pending backlog across every organization for
+// the operational metric: how many requests wait and when the oldest was
+// created, zero when none waits.
+func (s *Store) PendingApprovals(ctx context.Context) (int64, time.Time, error) {
+	var count int64
+	var oldest *time.Time
+	if err := s.pool.QueryRow(ctx, `SELECT count(*), min(created_at) FROM approval_requests WHERE status = 'pending'`).Scan(&count, &oldest); err != nil {
+		return 0, time.Time{}, err
+	}
+	if oldest == nil {
+		return count, time.Time{}, nil
+	}
+	return count, *oldest, nil
 }
 
 func (s *Store) CountPendingApprovals(ctx context.Context, input application.CountPendingApprovalsInput) (int64, error) {

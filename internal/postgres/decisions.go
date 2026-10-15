@@ -13,6 +13,7 @@ import (
 	"github.com/withHumanAI/withHuman/application"
 	"github.com/withHumanAI/withHuman/domain"
 	"github.com/withHumanAI/withHuman/internal/authorization"
+	"github.com/withHumanAI/withHuman/telemetry"
 )
 
 func (s *Store) CreateDecisionOperation(ctx context.Context, input application.CreateDecisionOperationInput) (domain.DecisionOperation, error) {
@@ -168,8 +169,9 @@ func (s *Store) ApplyDecision(ctx context.Context, input application.ApplyDecisi
 		})
 	}
 	var requestStatus string
-	err = tx.QueryRow(ctx, `SELECT r.status
-		FROM approval_requests r WHERE r.organization_id=$1 AND r.id=$2 FOR UPDATE`, command.OrganizationID, command.RequestID).Scan(&requestStatus)
+	var requestCreatedAt time.Time
+	err = tx.QueryRow(ctx, `SELECT r.status, r.created_at
+		FROM approval_requests r WHERE r.organization_id=$1 AND r.id=$2 FOR UPDATE`, command.OrganizationID, command.RequestID).Scan(&requestStatus, &requestCreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.DecisionOperation{}, domain.ErrNotFound
 	}
@@ -307,6 +309,7 @@ func (s *Store) ApplyDecision(ctx context.Context, input application.ApplyDecisi
 	if err := tx.Commit(ctx); err != nil {
 		return domain.DecisionOperation{}, err
 	}
+	telemetry.ApprovalResolved(ctx, string(command.Status), string(domain.DecisionSourceHuman), requestCreatedAt, now)
 	return s.GetDecisionOperation(ctx, application.GetDecisionOperationInput{
 		OrganizationID: command.OrganizationID,
 		OperationID:    command.OperationID,

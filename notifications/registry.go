@@ -10,9 +10,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/withHumanAI/withHuman/application"
 	"github.com/withHumanAI/withHuman/loggermdc"
+	"github.com/withHumanAI/withHuman/telemetry"
 )
 
 // Registry dispatches one message to every registered channel.
@@ -49,7 +51,7 @@ func (r *Registry) SendApprovalPrompt(ctx context.Context, input application.Sen
 	if err := input.Validate(); err != nil {
 		return err
 	}
-	_ = r.dispatch(ctx, "approval prompt", func(channel application.NotificationChannel) error {
+	_ = r.dispatch(ctx, telemetry.NotificationPrompt, "approval prompt", func(channel application.NotificationChannel) error {
 		err := channel.SendApprovalPrompt(ctx, input)
 		var unavailable *application.SlackUnavailableRecipients
 		if errors.As(err, &unavailable) {
@@ -75,7 +77,7 @@ func (r *Registry) SendApprovalDigest(ctx context.Context, input application.Sen
 	if err := input.Validate(); err != nil {
 		return err
 	}
-	_ = r.dispatch(ctx, "approval digest", func(channel application.NotificationChannel) error {
+	_ = r.dispatch(ctx, telemetry.NotificationDigest, "approval digest", func(channel application.NotificationChannel) error {
 		return channel.SendApprovalDigest(ctx, input)
 	})
 	return nil
@@ -85,15 +87,18 @@ func (r *Registry) SendTransactional(ctx context.Context, input application.Send
 	if err := input.Validate(); err != nil {
 		return err
 	}
-	return r.dispatch(ctx, "transactional message", func(channel application.NotificationChannel) error {
+	return r.dispatch(ctx, telemetry.NotificationTransactional, "transactional message", func(channel application.NotificationChannel) error {
 		return channel.SendTransactional(ctx, input)
 	})
 }
 
-func (r *Registry) dispatch(ctx context.Context, description string, send func(application.NotificationChannel) error) error {
+func (r *Registry) dispatch(ctx context.Context, message, description string, send func(application.NotificationChannel) error) error {
 	var failures []error
 	for _, channel := range r.channels {
-		if err := send(channel); err != nil {
+		started := time.Now()
+		err := send(channel)
+		telemetry.NotificationDispatched(ctx, string(channel.Key()), message, err != nil, time.Since(started))
+		if err != nil {
 			failures = append(failures, fmt.Errorf("%s channel: %w", channel.Key(), err))
 			if r.logger != nil {
 				r.logger.WarnContext(ctx, fmt.Sprintf("notification delivery failed - %s via %s", description, channel.Key()),
