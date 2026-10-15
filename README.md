@@ -3,13 +3,29 @@
   <img src=".github/readme/logo-dark.svg#gh-dark-mode-only" alt="withHuman" width="320">
 </p>
 
-<p align="center"><strong>Approval layer for AI Agents</strong></p>
+<p align="center"><strong>Approval layer for AI Agents</strong><br>
+Put your most consequential agent actions behind human approvals, so your
+agents can do real work.</p>
 
-[![Latest release](https://img.shields.io/github/v/tag/withHumanAI/withHuman?sort=semver&label=release)](https://github.com/withHumanAI/withHuman/tags)
-[![Docker image](https://img.shields.io/badge/docker-quay.io%2Fwithhuman%2Fbundle-2496ED?logo=docker&logoColor=white)](https://quay.io/repository/withhuman/bundle)
-[![License: Elastic 2.0](https://img.shields.io/badge/license-Elastic%202.0-blue)](LICENSE)
-[![Documentation](https://img.shields.io/badge/docs-withhuman.ai-brightgreen)](https://withhuman.ai/docs)
-[![Agent Approval Protocol](https://img.shields.io/badge/protocol-AAP-6c47ff)](https://agentapprovalprotocol.io)
+<p align="center">
+  <a href="https://github.com/withHumanAI/withHuman/tags"><img src="https://img.shields.io/github/v/tag/withHumanAI/withHuman?sort=semver&label=release" alt="Latest release"></a>
+  <a href="https://github.com/withHumanAI/withHuman/actions/workflows/release.yml"><img src="https://github.com/withHumanAI/withHuman/actions/workflows/release.yml/badge.svg" alt="Release build"></a>
+  <a href="https://quay.io/repository/withhuman/bundle"><img src="https://img.shields.io/badge/docker-quay.io%2Fwithhuman%2Fbundle-2496ED?logo=docker&logoColor=white" alt="Docker image"></a>
+  <a href="go.mod"><img src="https://img.shields.io/github/go-mod/go-version/withHumanAI/withHuman" alt="Go version"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Elastic%202.0-blue" alt="License: Elastic 2.0"></a>
+  <a href="https://agentapprovalprotocol.io"><img src="https://img.shields.io/badge/protocol-AAP-6c47ff" alt="Agent Approval Protocol"></a>
+  <a href="https://x.com/withHumanAI"><img src="https://img.shields.io/badge/follow-%40withHumanAI-000000?logo=x&logoColor=white" alt="Follow @withHumanAI on X"></a>
+</p>
+
+<p align="center">
+  <a href="https://withhuman.ai">Website</a> ·
+  <a href="https://withhuman.ai/docs">Docs</a> ·
+  <a href="#quickstart">Quickstart</a> ·
+  <a href="https://agentapprovalprotocol.io">Protocol</a> ·
+  <a href="CONTRIBUTING.md">Contributing</a>
+</p>
+
+---
 
 We want agents to do more than read data and suggest what to do next. They
 should be able to roll back a deployment, issue a refund, or merge code.
