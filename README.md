@@ -95,135 +95,29 @@ This repository contains:
 
 ```mermaid
 sequenceDiagram
-    participant Agent as Agent
-    participant Adapter as AAP adapter (hook or SDK)
+    participant Agent as Your agent
     participant WH as withHuman
-    participant Reviewer as Reviewer
-    Agent->>Adapter: issue_refund(amount: 75)
-    Adapter->>WH: POST /api/aap/v1/requests
-    WH->>WH: Run the entry pipeline
-    alt Pipeline decides
-        WH-->>Adapter: 201 approved or denied
-    else Needs a person
-        WH-->>Adapter: 201 pending
-        WH->>Reviewer: Notify through the escalation path
-        Reviewer->>WH: Approve with a note
-        Adapter->>WH: GET /requests/{id}?wait=30s
-        WH-->>Adapter: approved
-    end
-    Adapter->>WH: POST /requests/{id}/consume
-    Adapter->>Agent: Run the call
-    Adapter->>WH: POST /requests/{id}/outcome
+    participant You as You
+    Agent->>WH: Wants to call issue_refund(amount: 75)
+    WH->>WH: Checks your approval pipeline
+    WH->>You: Asks for approval by email, Slack or Discord
+    You->>WH: Approve
+    WH->>Agent: Go ahead
+    Agent->>Agent: Runs issue_refund
 ```
 
-1. **Intercept.** The adapter turns the tool call into an approval request:
-   `tool`, `server` (the MCP server alias), `arguments`, `agent_reasoning`
-   and a `timeout` between 1 second and 7 days. The request carries the
-   agent and the instance that made it.
-2. **Decide.** The server runs the organization's `entry` pipeline
-   synchronously in the request path. An automatic `approve` or `deny`
-   commits with the request and returns in the same response.
-3. **Route.** If a person is needed, the request commits as `pending` and
-   is pinned to an escalation path. A Temporal workflow walks the path's
-   levels and sends notifications.
-4. **Wait.** The adapter long-polls `GET /requests/{id}?wait=30s`, or
-   receives a signed `request.resolved` webhook if the instance registered
-   a receiver.
-5. **Execute.** An approved call must be consumed before it runs, once per
-   approval, within 5 minutes of the decision (30 with a webhook
-   receiver). The adapter reports `succeeded` or `failed` afterwards.
+Calls your rules approve go straight through, and calls they deny never
+run. Learn the concepts behind it:
 
-A request ends in one of `approved`, `denied`, `expired` or `cancelled`
-and never changes after that. An adapter that stops waiting withdraws its
-own pending request with `DELETE /requests/{id}`.
-
-Creating a request:
-
-```sh
-curl -X POST "$WITHHUMAN_URL/api/aap/v1/requests" \
-  -H "Authorization: Bearer $AAP_INSTANCE_TOKEN" \
-  -H "Idempotency-Key: 6f1c2f0e-call-1" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "tool": "issue_refund",
-    "server": "stripe",
-    "arguments": { "customer": "cus_123", "amount": 75, "currency": "USD" },
-    "agent_reasoning": "The customer was charged twice for order 4411.",
-    "timeout": "30m"
-  }'
-```
-
-The [AAP reference](https://withhuman.ai/docs/reference/agent-approval-protocol)
-covers every endpoint, status and error code.
-
-## Approval pipelines
-
-A pipeline is an ordered list of blocks. The first block that answers
-`approve`, `deny` or `human` ends the run, and `next` passes the request
-on. Every request starts in the reserved `entry` pipeline.
-
-| Block | What it does |
-|---|---|
-| `outcome` | Answers `approve`, `deny` or `human` for every request that reaches it. |
-| `branch` | Runs its own blocks only for requests its condition matches. |
-| `delegate` | Hands matching requests to another pipeline, owned by another team. |
-| `webhook` | Posts a signed request to a service you run and maps its answer to an outcome. |
-
-Conditions are JSON pointers into the request (`/request/tool`,
-`/request/server`, `/request/arguments/...`, `/agent/slug`) with
-operators such as `equals`, `in`, `regex`, `greater_than` and `some`.
-A refund policy looks like this:
-
-```text
-entry
-├─ branch   tool = issue_refund and amount > 500   → deny
-├─ branch   tool = issue_refund and amount > 20    → human, path support-refunds
-└─ outcome                                          → approve
-```
-
-Pipelines are append-only numbered revisions with
-exactly one active. You can test a revision against sample requests
-before you activate it, and roll back to any earlier one.
-
-## Escalation paths
-
-An escalation path decides who is asked and when. It is a document of
-levels that page people or teams, with `if_else` on working hours,
-urgency or request fields, `defer`, `raise_urgency` and `repeat`. A team
-can keep its own policy for which members are paged. Reviewers can claim
-a request so others know it is taken. Each person chooses how they are
-reached: [email](https://withhuman.ai/docs/web-app/email-notifications),
-[Slack](https://withhuman.ai/docs/web-app/slack-notifications) or
-[Discord](https://withhuman.ai/docs/web-app/discord-notifications).
-
-Only the targets the path reaches for a request, and reviewers they add,
-can decide it. Holders of `request.decide.unrouted` (owners) can decide
-outside routing with an explicit, audited `outside_routing: true`.
-
-## Connect agents
-
-**Coding agents.** The `withhuman` CLI installs the AAP hooks into Claude
-Code, Codex, OpenClaw, Pi, Hermes Agent and DeepSeek Harness. Every
-built-in and MCP tool call the hook intercepts becomes a request.
-
-```sh
-curl -fsSL https://downloads.withhuman.ai/install.sh | sh
-withhuman agent install --url https://approvals.example.com
-```
-
-**Agents you build.** The AAP SDKs for Python and TypeScript wrap a
-framework's tools. The [examples](examples/) run the same refund agent on
-LangGraph, Deep Agents, Pydantic AI, Google ADK, the OpenAI Agents SDK,
-the Claude Agent SDK, CrewAI, the Vercel AI SDK and Mastra.
-
-**Management MCP server.** `POST /api/mcp/v1` exposes the management API
-as MCP tools, authenticated by API key or OAuth 2.1. The
-[agent skills](skills/) teach a coding agent to write pipelines and paths
-through it:
-
-```sh
-npx skills add https://withhuman.ai
-```
+- [How withHuman works](https://withhuman.ai/docs/concepts/how-withhuman-works): the three core
+  concepts and how they fit together.
+- [Agents](https://withhuman.ai/docs/concepts/agents): what agents and instances are.
+- [Approval pipelines](https://withhuman.ai/docs/concepts/approval-pipelines): how a request
+  gets its decision.
+- [Escalation paths](https://withhuman.ai/docs/concepts/escalation-paths): who reviews a request,
+  when they're contacted, and what happens if nobody decides.
+- [Requests and decisions](https://withhuman.ai/docs/concepts/requests-and-decisions): what
+  happens next for the agent.
 
 ## Quickstart
 
@@ -249,13 +143,20 @@ setup**, and enter the secret.
 
 **3. Connect your agent**
 
-The welcome page walks you through connecting a coding agent and choosing
-which calls need your approval. It ends with a test call for you to
-approve.
+The welcome page walks you through connecting your first agent and choosing
+which calls need your approval. It ends with a test call for you to approve.
+
+To connect another machine later, install the CLI there and point it at
+your server:
+
+```sh
+curl -fsSL https://downloads.withhuman.ai/install.sh | sh
+withhuman agent install --url https://approvals.example.com
+```
 
 The [quickstart guide](https://withhuman.ai/docs/getting-started/quickstart)
-covers each step, and the [CLI guide](deployment/cli/README.md) covers
-every command.
+covers each step in detail, and the [CLI guide](deployment/cli/README.md)
+covers every command.
 
 <details>
 <summary><strong>Run from source instead</strong></summary>
@@ -273,35 +174,14 @@ first start downloads PostgreSQL (about 32 MB); later starts work offline.
 
 </details>
 
-## Architecture
+## Let your coding agent set it up
 
-`withhuman` is one Go binary. It runs the HTTP server, the embedded React
-app, a Temporal server and worker, and PostgreSQL as a child process. The
-server and worker talk to Temporal and PostgreSQL through the same client
-interfaces they would use against external services.
+withHuman publishes [agent skills](skills/) that teach a coding agent how
+to connect runtimes and write approval pipelines for you:
 
-- **Pipelines run in the request path.** Synchronous blocks execute in the
-  server. The request, any automatic decision and,
-  for pending requests only, a workflow-start outbox row commit in one
-  transaction. Automatic decisions never touch Temporal.
-- **Asynchronous blocks suspend.** A `webhook` block parks the pipeline
-  with its pinned revisions, and a worker activity resumes it.
-- **Temporal owns the waiting.** One workflow per pending request walks
-  the pinned escalation path, arms notification timers, enforces the
-  deadline and lapses claims. Activities are idempotent; workflow code
-  performs no I/O.
-- **PostgreSQL is the read model.** The API, the review queue's event
-  stream and AAP long polls read PostgreSQL only, never Temporal.
-- **Decisions are checked atomically.** Deciding re-checks membership,
-  permissions, routing and the request's state in the same transaction
-  that writes the append-only decision.
-- **Permissions are a code-owned registry.** Roles (owner, admin,
-  reviewer, auditor) grant `resource.action` permissions at organization,
-  team, agent or pipeline scope.
-
-The HTTP contract is [`internal/httpapi/openapi.yaml`](internal/httpapi/openapi.yaml),
-also served at `/api/openapi.yaml`. The architecture rules live in
-[CLAUDE.md](CLAUDE.md).
+```sh
+npx skills add https://withhuman.ai
+```
 
 ## Configuration
 
@@ -319,7 +199,7 @@ your own machine.
 | `WITHHUMAN_DATA_DIR` | Where all state lives. Default `~/.withhuman`, or `/data` in the image. |
 | `WITHHUMAN_BOOTSTRAP_SECRET` | The secret for creating the first owner. Generated into the data directory when unset. |
 | `WITHHUMAN_TRUSTED_PROXIES` | CIDRs of reverse proxies whose forwarded headers to trust. |
-| `WITHHUMAN_SECRETS_KEY` | Encrypts stored secrets. Required for webhook blocks, Slack and webhook delivery to agents. |
+| `WITHHUMAN_SECRETS_KEY` | Encrypts stored secrets. Required for webhook blocks, Slack and asynchronous agent replies. |
 | `WITHHUMAN_SMTP_HOST`, `_PORT`, `_USERNAME`, `_PASSWORD`, `_FROM` | Email delivery for invitations, password resets and notifications. |
 | `WITHHUMAN_SLACK_APP_ID`, `_CLIENT_ID`, `_CLIENT_SECRET`, `_SIGNING_SECRET` | Slack notifications. See [deployment/slack](deployment/slack). |
 | `WITHHUMAN_DISCORD_CLIENT_ID`, `_CLIENT_SECRET`, `_BOT_TOKEN` | Discord notifications. See [deployment/discord](deployment/discord). |
@@ -353,11 +233,10 @@ once a day. Set `WITHHUMAN_NO_UPDATE_CHECK=1` to turn that off.
 
 ## Hosted edition
 
-[withhuman.ai](https://withhuman.ai) is built on this module from a
-separate repository. It adds the MCP gateway, the AI judge block, the
-audit log and request timeline, SMS, WhatsApp and push notifications,
-organization API keys, and SSO with SCIM directory sync. None of these are
-in this repository.
+Don't want to run it yourself? [withhuman.ai](https://withhuman.ai) runs
+it for you, and adds the audit log, the AI judge block, the MCP gateway,
+text message, WhatsApp and phone app notifications, organization API keys,
+and single sign-on with directory sync.
 
 ## Contributing
 
@@ -379,29 +258,36 @@ make smoke       # run one real approval against a running server
 `webapp/assets` is generated and not committed, so use the Make targets
 rather than plain `go test` or `go build` from a clean checkout. The smoke
 test signs in as `owner@example.com` with `local-development-password`
-(set `WITHHUMAN_SMOKE_PASSWORD` to change it).
+(set `WITHHUMAN_SMOKE_PASSWORD` to change it). The HTTP API contract is
+served at `/api/openapi.yaml` and lives in
+[`internal/httpapi/openapi.yaml`](internal/httpapi/openapi.yaml).
 
 ```text
-cmd/withhuman/               the single binary
-cmd/withhuman-cli/           the agent-side CLI that installs AAP hooks
-runtime/, singlebinary/      server and worker composition shared by both editions
-domain/, application/        provider-neutral types and storage ports
-approvalblock/, blockruntime/  pipeline block grammar and execution contract
-internal/approvalpipeline/   pipeline executor and condition engine
-internal/approvals/          request use cases behind the AAP routes
-internal/aapdelivery/        signed request.resolved webhooks to agents
-internal/escalation/         the escalation path state machine
-internal/reviewrouting/      pins a request to its path and reviewers
-internal/orchestration/      Temporal workflows and activities
-internal/postgres/           the product read model and atomic authorization
-db/migrations/               embedded schema migrations
-authn/, authz/               sessions, credentials and permission checks
-notifications/               the channel registry: email, Slack, Discord
-internal/httpapi/            HTTP boundary, OpenAPI contract, management MCP server
+cmd/                         process composition only
+domain/                      provider-neutral identity and approval types
+application/                 focused storage and orchestration ports
+approvalblock/               serializable CEL block definitions and Go authoring DSL
+authn/                       human sessions, agent enrollment and credentials
+entitlements/                open plan-gating adapters (unlimited by default)
+loggermdc/                   shared logging bootstrap and immutable correlation context
+internal/approvalpipeline/   safe block execution contract and compiled CEL runtime
+internal/approvals/          use-case validation and long-poll behavior
+internal/orchestration/      Temporal client, workflow, and activities
+internal/postgres/           canonical product storage and atomic authorization
+sealbox/                     AES-GCM sealing for secrets at rest
+authz/                       the permission checks every service uses
+internal/httpapi/            Gin boundary and embedded frontend
 frontend/                    React web application
-skills/                      published agent skills
-examples/                    agent framework examples
+db/migrations/               application-owned migrations
+deployment/temporal/         Temporal-owned migration and namespace setup
 ```
+
+The server evaluates the active pipeline synchronously, then atomically
+commits the request, its state, any automatic decision and a pending-only
+workflow-start outbox item. Temporal coordinates human approvals, deadlines
+and retries, and is never used for policy evaluation or as the read model:
+API reads, the queue stream and long polls read PostgreSQL only. The
+architecture rules live in [CLAUDE.md](CLAUDE.md).
 
 </details>
 
