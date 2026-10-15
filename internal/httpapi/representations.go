@@ -77,6 +77,7 @@ type requestApprovalPipelineRevisionSummaryResponse struct {
 	DefaultAskAgentOwner  bool       `json:"default_ask_agent_owner,omitempty"`
 	CreatedByActorID      domain.ID  `json:"created_by_actor_id"`
 	CreatedAt             time.Time  `json:"created_at"`
+	ActivatedAt           *time.Time `json:"activated_at,omitempty"`
 	ArchivedAt            *time.Time `json:"archived_at,omitempty"`
 }
 
@@ -117,7 +118,7 @@ func newRequestApprovalPipelineRevisionSummaryResponse(revision domain.RequestAp
 		Revision: revision.Revision, IsActive: revision.IsActive, BlockCount: len(revision.BlockIDs),
 		DefaultEscalationPath: revision.DefaultEscalationPath, DefaultAskAgentOwner: revision.DefaultAskAgentOwner,
 		CreatedByActorID: revision.CreatedByActorID, CreatedAt: revision.CreatedAt,
-		ArchivedAt: revision.ArchivedAt,
+		ActivatedAt: revision.ActivatedAt, ArchivedAt: revision.ArchivedAt,
 	}
 }
 

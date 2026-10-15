@@ -15,7 +15,7 @@ import (
 )
 
 const escalationPathSelect = `SELECT id::text, organization_id::text, path_key, revision, is_active,
-	name, document, document_version, created_by_actor_id::text, created_at, archived_at
+	name, document, document_version, created_by_actor_id::text, created_at, archived_at, activated_at
 	FROM escalation_paths `
 
 // routingQuerier is what the snapshot reads need from a pool or a
@@ -42,6 +42,64 @@ func (s *Store) CreateEscalationPathRevision(ctx context.Context, input applicat
 		return domain.EscalationPathRevision{}, err
 	}
 	return s.insertEscalationPathRevision(ctx, input, true, "escalation_path.revision_created")
+}
+
+// UpdateEscalationPathRevision replaces a draft revision's name and
+// document in place under the path's lock, which activation also takes,
+// so a draft cannot change while it is being activated.
+func (s *Store) UpdateEscalationPathRevision(ctx context.Context, input application.UpdateEscalationPathRevisionInput) (domain.EscalationPathRevision, error) {
+	if err := input.Validate(); err != nil {
+		return domain.EscalationPathRevision{}, err
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.EscalationPathRevision{}, err
+	}
+	defer tx.Rollback(ctx)
+	if err := lockEscalationPath(ctx, tx, input.OrganizationID, input.PathKey); err != nil {
+		return domain.EscalationPathRevision{}, err
+	}
+	revision, err := scanEscalationPathRevision(tx.QueryRow(ctx, escalationPathSelect+
+		`WHERE organization_id = $1 AND path_key = $2 AND revision = $3`,
+		input.OrganizationID, input.PathKey, input.Revision))
+	if err != nil {
+		return domain.EscalationPathRevision{}, err
+	}
+	if revision.ArchivedAt != nil {
+		return domain.EscalationPathRevision{}, domain.ErrEscalationPathArchived
+	}
+	if revision.IsActive || revision.ActivatedAt != nil {
+		return domain.EscalationPathRevision{}, domain.ErrRevisionNotDraft
+	}
+	actorID, err := managementActorID(ctx, tx, input.OrganizationID, input.ActorID)
+	if err != nil {
+		return domain.EscalationPathRevision{}, err
+	}
+	var changed bool
+	if err := tx.QueryRow(ctx, `UPDATE escalation_paths SET name = $3, document = $4, document_version = $5
+		WHERE organization_id = $1 AND id = $2
+		  AND (name, document, document_version) IS DISTINCT FROM ($3, $4::jsonb, $5)
+		RETURNING true`, input.OrganizationID, revision.ID, input.Name, input.Document, input.DocumentVersion).Scan(&changed); err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return domain.EscalationPathRevision{}, err
+		}
+	}
+	revision.Name, revision.Document, revision.DocumentVersion = input.Name, input.Document, input.DocumentVersion
+	if changed {
+		data, _ := json.Marshal(map[string]any{"path_key": revision.PathKey, "revision": revision.Revision})
+		if err := s.appendManagementAuditEvent(ctx, tx, domain.AuditEvent{
+			OrganizationID: input.OrganizationID, EventType: "escalation_path.revision_updated",
+			ActorType: domain.ActorHuman, ActorID: actorID,
+			SubjectType: "escalation_path", SubjectID: revision.ID,
+			Data: data, OccurredAt: input.Now,
+		}); err != nil {
+			return domain.EscalationPathRevision{}, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.EscalationPathRevision{}, err
+	}
+	return revision, nil
 }
 
 // insertEscalationPathRevision writes the next revision of the key under
@@ -233,8 +291,9 @@ func (s *Store) ActivateEscalationPathRevision(ctx context.Context, input applic
 			return domain.EscalationPathRevision{}, err
 		}
 	}
-	if _, err := tx.Exec(ctx, `UPDATE escalation_paths SET is_active = true
-		WHERE organization_id = $1 AND id = $2`, input.OrganizationID, target.ID); err != nil {
+	// The trigger stamps a draft's first activation.
+	if err := tx.QueryRow(ctx, `UPDATE escalation_paths SET is_active = true
+		WHERE organization_id = $1 AND id = $2 RETURNING activated_at`, input.OrganizationID, target.ID).Scan(&target.ActivatedAt); err != nil {
 		return domain.EscalationPathRevision{}, err
 	}
 	data, _ := json.Marshal(map[string]any{
@@ -726,7 +785,7 @@ func scanEscalationPathRevision(row rowScanner) (domain.EscalationPathRevision, 
 	var id, organizationID, membershipID string
 	err := row.Scan(&id, &organizationID, &revision.PathKey, &revision.Revision, &revision.IsActive,
 		&revision.Name, &revision.Document, &revision.DocumentVersion, &membershipID, &revision.CreatedAt,
-		&revision.ArchivedAt)
+		&revision.ArchivedAt, &revision.ActivatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.EscalationPathRevision{}, domain.ErrNotFound
 	}

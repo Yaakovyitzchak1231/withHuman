@@ -20,6 +20,7 @@ func (a *API) installTeamEscalationRoutes(router *gin.RouterGroup) {
 	a.handle(router, http.MethodGet, "/teams/:id/escalation-policy/revisions", read, a.listTeamEscalationPolicyRevisions)
 	a.handle(router, http.MethodPost, "/teams/:id/escalation-policy/revisions", write, a.createTeamEscalationPolicyRevision)
 	a.handle(router, http.MethodGet, "/teams/:id/escalation-policy/revisions/:revision", read, a.getTeamEscalationPolicyRevision)
+	a.handle(router, http.MethodPut, "/teams/:id/escalation-policy/revisions/:revision", write, a.updateTeamEscalationPolicyRevision)
 	a.handle(router, http.MethodPost, "/teams/:id/escalation-policy/revisions/:revision/activate", activate, a.activateTeamEscalationPolicyRevision)
 	a.handle(router, http.MethodDelete, "/teams/:id/escalation-policy/active", activate, a.archiveTeamEscalationPolicy)
 }
@@ -41,12 +42,13 @@ func (request teamEscalationPolicyDocumentRequest) document() routing.TeamPolicy
 }
 
 type teamEscalationPolicyRevisionSummaryResponse struct {
-	ID               domain.ID `json:"id"`
-	TeamID           domain.ID `json:"team_id"`
-	Revision         int64     `json:"revision"`
-	IsActive         bool      `json:"is_active"`
-	CreatedByActorID domain.ID `json:"created_by_actor_id"`
-	CreatedAt        time.Time `json:"created_at"`
+	ID               domain.ID  `json:"id"`
+	TeamID           domain.ID  `json:"team_id"`
+	Revision         int64      `json:"revision"`
+	IsActive         bool       `json:"is_active"`
+	CreatedByActorID domain.ID  `json:"created_by_actor_id"`
+	CreatedAt        time.Time  `json:"created_at"`
+	ActivatedAt      *time.Time `json:"activated_at,omitempty"`
 }
 
 type teamEscalationPolicyRevisionResponse struct {
@@ -110,6 +112,7 @@ func newTeamEscalationPolicyRevisionSummaryResponse(revision domain.TeamEscalati
 	return teamEscalationPolicyRevisionSummaryResponse{
 		ID: revision.ID, TeamID: revision.TeamID, Revision: revision.Revision, IsActive: revision.IsActive,
 		CreatedByActorID: revision.CreatedByActorID, CreatedAt: revision.CreatedAt,
+		ActivatedAt: revision.ActivatedAt,
 	}
 }
 
@@ -168,6 +171,31 @@ func (a *API) createTeamEscalationPolicyRevision(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusCreated, newTeamEscalationPolicyRevisionResponse(revision))
+}
+
+// updateTeamEscalationPolicyRevision replaces a draft revision's document
+// in place with the same body a new revision takes.
+func (a *API) updateTeamEscalationPolicyRevision(c *gin.Context) {
+	revisionNumber, err := parsePipelineRevision(c.Param("revision"))
+	if err != nil {
+		a.writeError(c, err)
+		return
+	}
+	var request teamEscalationPolicyDocumentRequest
+	if !bindStrict(c, &request) {
+		return
+	}
+	if request.Nodes == nil {
+		a.writeError(c, fmt.Errorf("nodes are required: %w", domain.ErrInvalid))
+		return
+	}
+	revision, err := a.teamEscalation.UpdateRevision(c.Request.Context(), currentPrincipal(c),
+		domain.ID(c.Param("id")), revisionNumber, request.document())
+	if err != nil {
+		a.writeError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, newTeamEscalationPolicyRevisionResponse(revision))
 }
 
 func (a *API) getTeamEscalationPolicyRevision(c *gin.Context) {

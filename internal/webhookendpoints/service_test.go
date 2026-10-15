@@ -51,6 +51,25 @@ func (m *memoryEndpoints) CreateWebhookEndpointRevision(_ context.Context, input
 	return application.CreatedWebhookEndpointRevision{Revision: revision, SecretCreated: !exists}, nil
 }
 
+func (m *memoryEndpoints) UpdateWebhookEndpointRevision(_ context.Context, input application.UpdateWebhookEndpointRevisionInput) (domain.WebhookEndpointRevision, error) {
+	if err := input.Validate(); err != nil {
+		return domain.WebhookEndpointRevision{}, err
+	}
+	revisions := m.revisions[input.EndpointKey]
+	for index := range revisions {
+		revision := &revisions[index]
+		if revision.Revision != input.Revision {
+			continue
+		}
+		if revision.IsActive || revision.ActivatedAt != nil {
+			return domain.WebhookEndpointRevision{}, domain.ErrRevisionNotDraft
+		}
+		revision.Name, revision.URL = input.Name, input.URL
+		return *revision, nil
+	}
+	return domain.WebhookEndpointRevision{}, domain.ErrNotFound
+}
+
 func (m *memoryEndpoints) ListWebhookEndpointSummaries(context.Context, application.ListWebhookEndpointSummariesInput) ([]domain.WebhookEndpointSummary, error) {
 	out := []domain.WebhookEndpointSummary{}
 	for key, revisions := range m.revisions {
@@ -96,6 +115,10 @@ func (m *memoryEndpoints) ActivateWebhookEndpointRevision(_ context.Context, inp
 	for index := range revisions {
 		revisions[index].IsActive = revisions[index].Revision == input.Revision
 		if revisions[index].IsActive {
+			if revisions[index].ActivatedAt == nil {
+				activatedAt := input.Now
+				revisions[index].ActivatedAt = &activatedAt
+			}
 			activated = revisions[index]
 		}
 	}

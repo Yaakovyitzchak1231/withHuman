@@ -5,8 +5,15 @@ import { Button } from "@/ds/components/button";
 import { Callout } from "@/ds/components/callout";
 import { Card, CardBody, CardHeader, CardTitle, CardDescription } from "@/ds/components/card";
 import { ConfirmDialog } from "@/ds/components/confirm-dialog";
-import { Dialog, DialogBody, DialogContent, DialogDescription, DialogTitle } from "@/ds/components/dialog";
-import { RevisionHistory } from "@/ds/components/revision-history";
+import {
+  Dialog,
+  DialogBody,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogTitle,
+} from "@/ds/components/dialog";
+import { RevisionHistory, isDraftRevision } from "@/ds/components/revision-history";
 import { EmptyState } from "@/ds/components/empty-state";
 import { PathTree } from "@/ds/components/escalation-tree";
 import { type ReviewerTarget } from "@/ds/components/reviewer-target";
@@ -39,8 +46,8 @@ import { useRevisionActivation } from "./use-revision-activation";
  * A team's escalation policy: what the team does with a request once an
  * escalation path hands it over. The same document grammar as a path,
  * whose levels name members of the team or everyone on it. Save creates
- * a new immutable revision and offers activation when the person may;
- * requests already routed keep the revision they pinned.
+ * a new revision, or changes a draft in place, and offers activation when
+ * the person may; requests already routed keep the revision they pinned.
  */
 
 export interface TeamEscalationPolicyPage {
@@ -49,7 +56,17 @@ export interface TeamEscalationPolicyPage {
   /* The active revision, or the latest saved revision for an archived team. */
   policy: TeamEscalationPolicyRevisionWire | null;
   revisions: TeamEscalationPolicyRevisionSummary[];
+  /* With no active revision, the latest revision when it is a draft: the
+   * editor starts on it and changes it in place. */
+  draft: TeamEscalationPolicyRevisionWire | null;
   error: string;
+}
+
+/* A draft revision the editor changes in place, and its saved document:
+ * the baseline the unsaved count measures against. */
+interface DraftSource {
+  revision: number;
+  saved: EscalationDocument;
 }
 
 export async function loadTeamEscalationPolicyPage(teamId: string): Promise<TeamEscalationPolicyPage> {
@@ -63,16 +80,30 @@ export async function loadTeamEscalationPolicyPage(teamId: string): Promise<Team
       api.teamEscalationPolicyRevisions(teamId),
     ]);
     const latestRevision = detail.team.escalation_policy.latest_revision;
-    const displayedPolicy = detail.team.archived_at && latestRevision !== null
-      ? await api.teamEscalationPolicyRevision(teamId, latestRevision)
-      : policy;
-    return { team: detail.team, members: detail.members, policy: displayedPolicy, revisions: history.revisions, error: "" };
+    const latestSummary = history.revisions.find((revision) => revision.revision === latestRevision);
+    const [displayedPolicy, draft] = await Promise.all([
+      detail.team.archived_at && latestRevision !== null
+        ? api.teamEscalationPolicyRevision(teamId, latestRevision)
+        : policy,
+      !detail.team.archived_at && policy === null && latestSummary && isDraftRevision(latestSummary)
+        ? api.teamEscalationPolicyRevision(teamId, latestSummary.revision)
+        : null,
+    ]);
+    return {
+      team: detail.team,
+      members: detail.members,
+      policy: displayedPolicy,
+      revisions: history.revisions,
+      draft,
+      error: "",
+    };
   } catch (reason) {
     return {
       team: null,
       members: [],
       policy: null,
       revisions: [],
+      draft: null,
       error: reason instanceof Error ? reason.message : "Unable to load the escalation policy.",
     };
   }
@@ -162,14 +193,17 @@ export function TeamEscalationPolicyScreen({
     teamId: string;
     warnings: TeamEscalationPolicyWarning[];
   } | null>(null);
-  const warnings = created?.teamId === teamId ? created.warnings : (policy?.warnings ?? []);
+  /* What the editor starts on: the active revision, else a draft nobody
+   * activated yet. */
+  const start = policy ?? page.draft;
+  const warnings = created?.teamId === teamId ? created.warnings : (start?.warnings ?? []);
   const directory = useMemo(
-    () => [...vocabulary.targets, ...departedOf(policy?.warnings ?? [])],
-    [vocabulary, policy],
+    () => [...vocabulary.targets, ...departedOf(start?.warnings ?? [])],
+    [vocabulary, start],
   );
   const saved = useMemo<EscalationDocument | null>(
-    () => (team ? (policy ? fromWire(policy, directory) : newDraft()) : null),
-    [team, policy, directory],
+    () => (team ? (start ? fromWire(start, directory) : newDraft()) : null),
+    [team, start, directory],
   );
   const tree = useMemo(
     () => (team && policy ? teamPolicyTreeFromWire(team, policy, directory) : null),
@@ -177,28 +211,53 @@ export function TeamEscalationPolicyScreen({
   );
 
   /* The draft belongs to the page it was edited from: a save or archive
-   * reloads the page and the editor shows the saved document again. */
-  const [edit, setEdit] = useState<{ base: TeamEscalationPolicyPage; draft: EscalationDocument } | null>(
-    null,
-  );
-  const draft = edit?.base === page ? edit.draft : saved;
-  const setDraft = (next: EscalationDocument) => setEdit({ base: page, draft: next });
+   * reloads the page and the editor shows the saved document again.
+   * source is the draft revision being changed in place, if any; with
+   * none, saving creates a new revision. */
+  const [edit, setEdit] = useState<{
+    base: TeamEscalationPolicyPage;
+    draft: EscalationDocument;
+    source: DraftSource | null;
+  } | null>(null);
+  const current = edit?.base === page ? edit : null;
+  const draft = current ? current.draft : saved;
+  const source: DraftSource | null = current
+    ? current.source
+    : page.draft && saved
+      ? { revision: page.draft.revision, saved }
+      : null;
+  const baseline = source?.saved ?? saved;
+  const setDraft = (next: EscalationDocument) => setEdit({ base: page, draft: next, source });
   const [saving, setSaving] = useState(false);
   const [archiving, setArchiving] = useState(false);
   const [viewing, setViewing] = useState<TeamEscalationPolicyRevisionWire | null>(null);
   const [activating, setActivating] = useState<number | null>(null);
 
-  async function openRevision(revision: TeamEscalationPolicyRevisionSummary, edit: boolean) {
+  /* view opens the revision read-only; copy starts a new revision from
+   * it; draft edits the draft revision in place. */
+  async function openRevision(revision: TeamEscalationPolicyRevisionSummary, mode: "view" | "copy" | "draft") {
     try {
       const savedRevision = await api.teamEscalationPolicyRevision(teamId, revision.revision);
-      if (edit) {
-        setDraft(fromWire(savedRevision, [...vocabulary.targets, ...departedOf(savedRevision.warnings)]));
-      } else {
+      if (mode === "view") {
         setViewing(savedRevision);
+      } else if (mode === "draft") {
+        editDraft(savedRevision);
+        toast.add({ title: `Editing draft revision ${revision.revision}` });
+      } else {
+        setEdit({
+          base: page,
+          draft: fromWire(savedRevision, [...vocabulary.targets, ...departedOf(savedRevision.warnings)]),
+          source: null,
+        });
       }
     } catch (reason) {
       toast.add({ type: "deny", title: "The revision could not be loaded", description: reason instanceof Error ? reason.message : undefined });
     }
+  }
+
+  function editDraft(revision: TeamEscalationPolicyRevisionWire) {
+    const next = fromWire(revision, [...vocabulary.targets, ...departedOf(revision.warnings)]);
+    setEdit({ base: page, draft: next, source: { revision: revision.revision, saved: next } });
   }
 
   async function activateRevision(revision: TeamEscalationPolicyRevisionSummary) {
@@ -216,25 +275,38 @@ export function TeamEscalationPolicyScreen({
   }
 
   const dirtyCount = useMemo(
-    () => (draft && saved ? countChanges(draft, saved, activeRevision !== null) : 0),
-    [draft, saved, activeRevision],
+    () => (draft && baseline ? countChanges(draft, baseline, activeRevision !== null || source !== null) : 0),
+    [draft, baseline, activeRevision, source],
   );
 
+  /* Saving creates a revision, or replaces the draft being edited in
+   * place. An untouched draft skips the save and goes straight to the
+   * activation offer. */
   async function save(current: EscalationDocument) {
     if (!team) return;
+    const target = source?.revision ?? null;
+    const unchanged = target !== null && dirtyCount === 0;
     setSaving(true);
     try {
-      const revision = await api.createTeamEscalationPolicyRevision(teamId, toWire(current));
+      const revision =
+        target === null
+          ? await api.createTeamEscalationPolicyRevision(teamId, toWire(current))
+          : unchanged
+            ? null
+            : await api.updateTeamEscalationPolicyRevision(teamId, target, toWire(current));
+      const number = revision?.revision ?? target ?? 0;
       await revisionActivation.offer({
-        revision: revision.revision,
+        revision: number,
         activeRevision,
         canActivate,
         activationDescription: "Once active, new requests reaching this team use this policy revision.",
-        activate: () => api.activateTeamEscalationPolicyRevision(teamId, revision.revision, activeRevision),
+        unchanged,
+        activate: () => api.activateTeamEscalationPolicyRevision(teamId, number, activeRevision),
       });
-      setCreated({ teamId, warnings: revision.warnings });
+      if (revision) setCreated({ teamId, warnings: revision.warnings });
       await router.invalidate();
     } catch (reason) {
+      if (revisionActivation.refusedDraft(reason)) return;
       toast.add({
         title: "Save failed",
         description: reason instanceof Error ? reason.message : "Unable to save the escalation policy.",
@@ -264,7 +336,7 @@ export function TeamEscalationPolicyScreen({
     }
   }
 
-  if (error || !team || !draft || !saved) {
+  if (error || !team || !draft || !saved || !baseline) {
     return (
       <Page width="narrow" className="gap-3">
         <PageHeader
@@ -278,6 +350,15 @@ export function TeamEscalationPolicyScreen({
       </Page>
     );
   }
+
+  const writable = canWrite && !team.archived_at;
+  /* The latest revision, when it is a draft the editor is not on yet:
+   * the header offers to continue it. */
+  const latestSummary = page.revisions.find((revision) => revision.revision === latestRevision);
+  const latestDraft =
+    writable && latestSummary && isDraftRevision(latestSummary) && source?.revision !== latestSummary.revision
+      ? latestSummary
+      : null;
 
   return (
     <Page width="narrow">
@@ -296,11 +377,18 @@ export function TeamEscalationPolicyScreen({
               Who on {team.name} is asked when an escalation path hands a request to the team.
             </p>
           </div>
-          {canActivate && activeRevision !== null ? (
-            <Button variant="ghost" size="sm" onClick={() => setArchiving(true)}>
-              Archive policy
-            </Button>
-          ) : null}
+          <div className="flex shrink-0 items-center gap-2">
+            {latestDraft ? (
+              <Button size="sm" onClick={() => void openRevision(latestDraft, "draft")}>
+                Edit draft
+              </Button>
+            ) : null}
+            {canActivate && activeRevision !== null ? (
+              <Button variant="ghost" size="sm" onClick={() => setArchiving(true)}>
+                Archive policy
+              </Button>
+            ) : null}
+          </div>
         </div>
       </PageHeader>
 
@@ -312,7 +400,10 @@ export function TeamEscalationPolicyScreen({
         ) : (
           <Badge>No active revision</Badge>
         )}
-        {latestRevision !== null && latestRevision > (activeRevision ?? 0) ? (
+        {source ? (
+          <Badge tone="accent">Draft revision {source.revision}</Badge>
+        ) : null}
+        {latestRevision !== null && latestRevision > (activeRevision ?? 0) && source?.revision !== latestRevision ? (
           <Badge>Revision {latestRevision} saved, not active</Badge>
         ) : null}
       </div>
@@ -374,8 +465,9 @@ export function TeamEscalationPolicyScreen({
           hasMore={false}
           activeRevision={activeRevision}
           description="Saved drafts stay here until you choose to activate them."
-          onOpen={(revision) => void openRevision(revision, false)}
-          onCreateFrom={canWrite && !team.archived_at ? (revision) => void openRevision(revision, true) : undefined}
+          onOpen={(revision) => void openRevision(revision, "view")}
+          onCreateFrom={writable ? (revision) => void openRevision(revision, "copy") : undefined}
+          onEditDraft={writable ? (revision) => void openRevision(revision, "draft") : undefined}
           onActivate={canActivate && !team.archived_at ? (revision) => void activateRevision(revision) : undefined}
           activating={activating}
           authorName={(id) => members.find((member) => member.membership_id === id)?.display_name}
@@ -396,6 +488,19 @@ export function TeamEscalationPolicyScreen({
                 return <PathTree nodes={viewedTree.nodes} repeat={viewedTree.repeat} />;
               })()}
             </DialogBody>
+            {writable && isDraftRevision(viewing) ? (
+              <DialogFooter>
+                <Button
+                  variant="primary"
+                  onClick={() => {
+                    editDraft(viewing);
+                    setViewing(null);
+                  }}
+                >
+                  Edit draft
+                </Button>
+              </DialogFooter>
+            ) : null}
           </DialogContent>
         </Dialog>
       ) : null}
@@ -414,8 +519,11 @@ export function TeamEscalationPolicyScreen({
       {canWrite ? (
         <SaveBar
           count={dirtyCount}
+          saveLabel={source === null ? "Save" : dirtyCount === 0 ? "Activate" : "Save draft"}
+          idle={source && canActivate ? `Draft revision ${source.revision}` : undefined}
+          idleDiscardLabel={source && source.revision !== page.draft?.revision ? "Cancel" : undefined}
           saving={saving}
-          onDiscard={() => setDraft(saved)}
+          onDiscard={() => (dirtyCount === 0 ? setEdit(null) : setDraft(baseline))}
           onSave={() => void save(draft)}
         />
       ) : null}

@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { useNavigate, useRouter } from "@tanstack/react-router";
+import { Badge } from "@/ds/components/badge";
 import { Button } from "@/ds/components/button";
 import { Callout } from "@/ds/components/callout";
 import { Card, CardBody, CardHeader, CardTitle, CardDescription } from "@/ds/components/card";
@@ -20,7 +21,7 @@ import { TextField } from "@/ds/components/text-field";
 import { useToast } from "@/ds/components/toast";
 import { Page } from "@/ds/components/page";
 import { PageHeader, PageBackLink } from "@/ds/components/page-header";
-import { RevisionHistory } from "@/ds/components/revision-history";
+import { RevisionHistory, isDraftRevision } from "@/ds/components/revision-history";
 import { AlertIcon } from "@/ds/icons";
 import { api, RequestError } from "../api";
 import type {
@@ -50,9 +51,9 @@ import { useRevisionActivation } from "./use-revision-activation";
 /*
  * The organization escalation path screen: the name and key, the
  * shared document editor, the warnings the server attached, the
- * revision history, archiving, and saving. Save creates a new immutable
- * revision and offers activation. Requests already routed to the path keep
- * the revision they pinned.
+ * revision history, archiving, and saving. Save creates a new revision,
+ * or changes a draft in place, and offers activation. Requests already
+ * routed to the path keep the revision they pinned.
  */
 
 /* The key is what pipelines reference; it is fixed once the path exists.
@@ -70,6 +71,13 @@ export interface EscalationPathDraft {
   pathKey: string;
   name: string;
   document: EscalationDocument;
+}
+
+/* A draft revision the editor changes in place, and its saved content:
+ * the baseline the unsaved count measures against. */
+interface DraftSource {
+  revision: number;
+  saved: EscalationPathDraft;
 }
 
 /* What the escalation path route loader delivers: the reviewer directory
@@ -100,6 +108,9 @@ export interface EscalationPathPage {
    * page shows its latest revision as saved. */
   archivedAt: string | null;
   archivedRevision: EscalationPathRevisionWire | null;
+  /* With no active revision, the latest revision when it is a draft:
+   * saved holds it and the editor changes it in place. */
+  draftRevision: number | null;
   error: string;
 }
 
@@ -149,6 +160,7 @@ export async function loadNewEscalationPathPage(): Promise<EscalationPathPage> {
     isNew: true,
     archivedAt: null,
     archivedRevision: null,
+    draftRevision: null,
     error: "",
   };
 }
@@ -188,13 +200,16 @@ export async function loadEscalationPathPage(pathKey: string): Promise<Escalatio
       isNew: false,
       archivedAt,
       archivedRevision: null,
+      draftRevision: null,
       error: revision.error,
     };
   }
   if (!revision.revision) {
-    /* An archived path has no active revision; show its latest one. */
+    /* An archived path has no active revision; show its latest one. So
+     * does a path whose latest revision is a draft nobody activated. */
+    const draft = revisions[0] && isDraftRevision(revisions[0]) ? revisions[0] : null;
     const latest =
-      archivedAt && revisions.length > 0
+      (archivedAt || draft) && revisions.length > 0
         ? await api.escalationPathRevision(pathKey, revisions[0].revision).catch(() => null)
         : null;
     return {
@@ -202,12 +217,13 @@ export async function loadEscalationPathPage(pathKey: string): Promise<Escalatio
       teamPaths,
       activeRevision: null,
       saved: latest ? draftFromWire(latest, directory) : newPathDraft(pathKey),
-      warnings: [],
+      warnings: draft ? (latest?.warnings ?? []) : [],
       uses,
       history,
       isNew: false,
       archivedAt,
-      archivedRevision: latest,
+      archivedRevision: archivedAt ? latest : null,
+      draftRevision: draft && latest ? latest.revision : null,
       error: "",
     };
   }
@@ -222,6 +238,7 @@ export async function loadEscalationPathPage(pathKey: string): Promise<Escalatio
     isNew: false,
     archivedAt,
     archivedRevision: null,
+    draftRevision: null,
     error: "",
   };
 }
@@ -263,13 +280,23 @@ export function EscalationPathScreen({
   const router = useRouter();
   const navigate = useNavigate();
   /* The draft belongs to the page it was edited from: a save or archive
-   * reloads the page and the editor shows the saved document again. */
+   * reloads the page and the editor shows the saved document again.
+   * source is the draft revision being changed in place, if any; with
+   * none, saving creates a new revision. */
   const [edit, setEdit] = useState<{
     base: EscalationPathPage;
     draft: EscalationPathDraft;
+    source: DraftSource | null;
   } | null>(null);
-  const draft = edit?.base === page ? edit.draft : saved;
-  const setDraft = (next: EscalationPathDraft) => setEdit({ base: page, draft: next });
+  const current = edit?.base === page ? edit : null;
+  const draft = current ? current.draft : saved;
+  const source: DraftSource | null = current
+    ? current.source
+    : page.draftRevision !== null && saved
+      ? { revision: page.draftRevision, saved }
+      : null;
+  const baseline = source?.saved ?? saved;
+  const setDraft = (next: EscalationPathDraft) => setEdit({ base: page, draft: next, source });
   /* The warnings of the revision saved last, shown even when it is not
    * the active one the reloaded page describes. */
   const [created, setCreated] = useState<{
@@ -340,11 +367,31 @@ export function EscalationPathScreen({
   async function startFrom(revision: EscalationPathRevisionSummary) {
     try {
       const wire = await api.escalationPathRevision(pathKey, revision.revision);
-      setDraft(draftFromWire(wire, directory));
+      setEdit({ base: page, draft: draftFromWire(wire, directory), source: null });
       toast.add({
         title: `Editing from revision ${revision.revision}`,
         description: "Save to create a new revision.",
       });
+    } catch (reason) {
+      toast.add({
+        title: "The revision could not be loaded",
+        description: reason instanceof Error ? reason.message : undefined,
+        type: "deny",
+      });
+    }
+  }
+
+  /* The editor takes a draft revision as itself: saving changes it in
+   * place. */
+  function editDraft(wire: EscalationPathRevisionWire) {
+    const next = draftFromWire(wire, directory);
+    setEdit({ base: page, draft: next, source: { revision: wire.revision, saved: next } });
+  }
+
+  async function openDraft(revision: EscalationPathRevisionSummary) {
+    try {
+      editDraft(await api.escalationPathRevision(pathKey, revision.revision));
+      toast.add({ title: `Editing draft revision ${revision.revision}` });
     } catch (reason) {
       toast.add({
         title: "The revision could not be loaded",
@@ -373,25 +420,38 @@ export function EscalationPathScreen({
     }
   }
 
+  /* Saving creates a revision, or replaces the draft being edited in
+   * place. An untouched draft skips the save and goes straight to the
+   * activation offer. */
   async function save(current: EscalationPathDraft) {
+    const target = source?.revision ?? null;
+    const unchanged = target !== null && dirtyCount === 0;
     setSaving(true);
     try {
-      const created = await createRevision(current);
-      const key = created.path_key;
+      const created =
+        target === null
+          ? await createRevision(current)
+          : unchanged
+            ? null
+            : await api.updateEscalationPathRevision(pathKey, target, { name: current.name, ...toWire(current.document) });
+      const key = created?.path_key ?? pathKey;
+      const number = created?.revision ?? target ?? 0;
       await revisionActivation.offer({
-        revision: created.revision,
+        revision: number,
         activeRevision,
         canActivate,
         activationDescription: "New requests will use this revision.",
-        activate: () => api.activateEscalationPathRevision(key, created.revision, activeRevision),
+        unchanged,
+        activate: () => api.activateEscalationPathRevision(key, number, activeRevision),
       });
-      setCreated({ pathKey: key, warnings: created.warnings });
+      if (created) setCreated({ pathKey: key, warnings: created.warnings });
       if (isNew) {
         await navigate({ to: "/escalation-paths/$pathKey", params: { pathKey: key }, replace: true });
       } else {
         await router.invalidate();
       }
     } catch (reason) {
+      if (revisionActivation.refusedDraft(reason)) return;
       toast.add({
         title: "Save failed",
         description: reason instanceof Error ? reason.message : "Unable to save the escalation path.",
@@ -432,12 +492,12 @@ export function EscalationPathScreen({
   }
 
   const dirtyCount = useMemo(() => {
-    if (!draft || !saved) return 0;
+    if (!draft || !baseline) return 0;
     return (
-      (draft.name !== saved.name ? 1 : 0) +
-      countChanges(draft.document, saved.document, activeRevision !== null)
+      (draft.name !== baseline.name ? 1 : 0) +
+      countChanges(draft.document, baseline.document, activeRevision !== null || source !== null)
     );
-  }, [draft, saved, activeRevision]);
+  }, [draft, baseline, activeRevision, source]);
 
   /* A path being created also needs a name and a usable key; the save
    * bar waits for both. */
@@ -451,6 +511,13 @@ export function EscalationPathScreen({
           : "";
   const canSave =
     !isNew || (draft !== null && draft.name.trim() !== "" && validPathKey(draft.pathKey));
+  /* The latest revision, when it is a draft the editor is not on yet:
+   * the header offers to continue it. */
+  const latestSummary = history.items[0];
+  const latestDraft =
+    editable && latestSummary && isDraftRevision(latestSummary) && source?.revision !== latestSummary.revision
+      ? latestSummary
+      : null;
 
   if (error || !draft) {
     return (
@@ -467,9 +534,12 @@ export function EscalationPathScreen({
       <PageHeader back={<PageBackLink to="/escalation-paths">Escalation paths</PageBackLink>}>
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h1 className="text-title-lg text-ink">
-              {isNew ? "New escalation path" : "Escalation path"}
-            </h1>
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="text-title-lg text-ink">
+                {isNew ? "New escalation path" : "Escalation path"}
+              </h1>
+              {source ? <Badge tone="accent">Draft revision {source.revision}</Badge> : null}
+            </div>
             <p className="mt-1.5 max-w-[560px] text-body text-ink-muted">
               Which humans get asked when an approval pipeline routes a request to this path.{" "}
               {archived || canActivate
@@ -479,11 +549,18 @@ export function EscalationPathScreen({
                   : "Someone with the activate permission must make new revisions active."}
             </p>
           </div>
-          {canActivate && !isNew && !archived ? (
-            <Button variant="ghost" size="sm" onClick={() => setArchiving(true)}>
-              Archive path
-            </Button>
-          ) : null}
+          <div className="flex shrink-0 items-center gap-2">
+            {latestDraft ? (
+              <Button size="sm" onClick={() => void openDraft(latestDraft)}>
+                Edit draft
+              </Button>
+            ) : null}
+            {canActivate && !isNew && !archived ? (
+              <Button variant="ghost" size="sm" onClick={() => setArchiving(true)}>
+                Archive path
+              </Button>
+            ) : null}
+          </div>
         </div>
       </PageHeader>
 
@@ -603,6 +680,7 @@ export function EscalationPathScreen({
             onActivate={switchable ? (revision) => void activateRevision(revision) : undefined}
             activating={activating}
             onCreateFrom={editable ? (revision) => void startFrom(revision) : undefined}
+            onEditDraft={editable ? (revision) => void openDraft(revision) : undefined}
           />
         </Card>
       ) : null}
@@ -616,7 +694,9 @@ export function EscalationPathScreen({
             <DialogDescription>
               {viewing.is_active
                 ? "This revision is active."
-                : "This revision is inactive."}
+                : isDraftRevision(viewing)
+                  ? "This revision is a draft."
+                  : "This revision is inactive."}
             </DialogDescription>
             <DialogBody>
               {viewing.nodes.length === 0 ? (
@@ -630,6 +710,17 @@ export function EscalationPathScreen({
             </DialogBody>
             <DialogFooter>
               <DialogClose render={<Button variant="ghost">Close</Button>} />
+              {editable && isDraftRevision(viewing) ? (
+                <Button
+                  variant="primary"
+                  onClick={() => {
+                    editDraft(viewing);
+                    setViewing(null);
+                  }}
+                >
+                  Edit draft
+                </Button>
+              ) : null}
             </DialogFooter>
           </DialogContent>
         </Dialog>
@@ -666,8 +757,11 @@ export function EscalationPathScreen({
       {editable ? (
         <SaveBar
           count={canSave ? dirtyCount : 0}
+          saveLabel={source === null ? "Save" : dirtyCount === 0 ? "Activate" : "Save draft"}
+          idle={source && switchable ? `Draft revision ${source.revision}` : undefined}
+          idleDiscardLabel={source && source.revision !== page.draftRevision ? "Cancel" : undefined}
           saving={saving}
-          onDiscard={() => saved && setDraft(saved)}
+          onDiscard={() => (dirtyCount === 0 ? setEdit(null) : baseline && setDraft(baseline))}
           onSave={() => void save(draft)}
         />
       ) : null}

@@ -876,6 +876,8 @@ export interface WebhookEndpointRevision {
   endpoint_key: string;
   revision: number;
   is_active: boolean;
+  /* When the revision first became active; absent for a draft. */
+  activated_at?: string;
   name: string;
   url: string;
   created_by_actor_id: string;
@@ -987,6 +989,8 @@ export interface RequestApprovalPipelineRevisionSummary {
   name: string;
   revision: number;
   is_active: boolean;
+  /* When the revision first became active; absent for a draft. */
+  activated_at?: string;
   /* Every block, including the blocks inside branches. */
   block_count: number;
   default_escalation_path?: string;
@@ -1202,6 +1206,8 @@ export interface EscalationPathRevisionSummary {
   path_key: string;
   revision: number;
   is_active: boolean;
+  /* When the revision first became active; absent for a draft. */
+  activated_at?: string;
   name: string;
   created_by_actor_id: string;
   created_at: string;
@@ -1213,6 +1219,8 @@ export interface EscalationPathRevisionWire extends EscalationDocumentBodyWire {
   path_key: string;
   revision: number;
   is_active: boolean;
+  /* When the revision first became active; absent for a draft. */
+  activated_at?: string;
   name: string;
   document_version: number;
   created_by_actor_id: string;
@@ -1242,6 +1250,8 @@ export interface TeamEscalationPolicyRevisionSummary {
   team_id: string;
   revision: number;
   is_active: boolean;
+  /* When the revision first became active; absent for a draft. */
+  activated_at?: string;
   created_by_actor_id: string;
   created_at: string;
 }

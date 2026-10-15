@@ -10,6 +10,12 @@ export interface SaveBarProps {
   /* Commit verb when plain "Save" undersells it, e.g. an immutable
    * pipeline revision saves as "Create revision". */
   saveLabel?: string;
+  /* What the bar says with nothing unsaved. Given, the bar stays up so
+   * the save still runs, e.g. to activate a draft as it is. */
+  idle?: string;
+  /* With nothing unsaved, the Discard button appears under this label
+   * (a way out of the idle state) only when it is given. */
+  idleDiscardLabel?: string;
   saving?: boolean;
   className?: string;
 }
@@ -23,10 +29,12 @@ export function SaveBar({
   onDiscard,
   onSave,
   saveLabel = "Save",
+  idle,
+  idleDiscardLabel,
   saving = false,
   className,
 }: SaveBarProps) {
-  if (count === 0) return null;
+  if (count === 0 && idle === undefined) return null;
   return (
     <div
       className={cn(
@@ -38,13 +46,15 @@ export function SaveBar({
       )}
     >
       <span className="text-body font-medium whitespace-nowrap text-ink">
-        {count} unsaved {count === 1 ? "change" : "changes"}
+        {count === 0 ? idle : `${count} unsaved ${count === 1 ? "change" : "changes"}`}
       </span>
       <span className="mx-1.5 h-4 w-px shrink-0 bg-edge" />
       <div className="flex items-center gap-1.5">
-        <Button size="sm" variant="ghost" disabled={saving} onClick={onDiscard}>
-          Discard
-        </Button>
+        {count > 0 || idleDiscardLabel ? (
+          <Button size="sm" variant="ghost" disabled={saving} onClick={onDiscard}>
+            {count > 0 ? "Discard" : idleDiscardLabel}
+          </Button>
+        ) : null}
         <Button size="sm" variant="primary" loading={saving} onClick={onSave}>
           {saveLabel}
         </Button>

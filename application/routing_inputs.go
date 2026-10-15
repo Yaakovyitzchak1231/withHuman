@@ -77,7 +77,7 @@ func (input CreateEscalationPathInput) Validate() error {
 }
 
 // CreateEscalationPathRevisionInput persists one validated escalation path
-// document as the next immutable revision for an existing path key. The
+// document as the next revision, a draft, for an existing path key. The
 // document arrives canonicalized by the routing management service.
 type CreateEscalationPathRevisionInput struct {
 	ID               domain.ID
@@ -99,6 +99,34 @@ func (input CreateEscalationPathRevisionInput) Validate() error {
 		validJSON("escalation path document", input.Document),
 		positiveDocumentVersion(input.DocumentVersion),
 		requiredID("creator membership ID", input.CreatedByActorID),
+		requiredTime("current time", input.Now),
+	})
+}
+
+// UpdateEscalationPathRevisionInput replaces the name and document of a
+// draft revision, one that was never active, keeping its number. An
+// activated revision refuses with domain.ErrRevisionNotDraft and an
+// archived path with domain.ErrEscalationPathArchived.
+type UpdateEscalationPathRevisionInput struct {
+	OrganizationID  domain.ID
+	PathKey         string
+	Revision        int64
+	Name            string
+	Document        json.RawMessage
+	DocumentVersion int
+	ActorID         domain.ID
+	Now             time.Time
+}
+
+func (input UpdateEscalationPathRevisionInput) Validate() error {
+	return firstError([]error{
+		requiredID("organization ID", input.OrganizationID),
+		validEscalationPathKey(input.PathKey),
+		positiveRevision(input.Revision),
+		requiredString("escalation path name", input.Name),
+		validJSON("escalation path document", input.Document),
+		positiveDocumentVersion(input.DocumentVersion),
+		requiredID("actor ID", input.ActorID),
 		requiredTime("current time", input.Now),
 	})
 }

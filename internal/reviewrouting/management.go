@@ -146,7 +146,7 @@ func (service *ManagementService) CreatePath(ctx context.Context, principal doma
 	return PathRevision{Revision: stored, Document: document, Warnings: warnings}, nil
 }
 
-// CreatePathRevision appends the next inactive revision to a live path;
+// CreatePathRevision appends the next revision, a draft, to a live path;
 // an unknown key is domain.ErrNotFound and an archived one
 // domain.ErrEscalationPathArchived.
 func (service *ManagementService) CreatePathRevision(ctx context.Context, principal domain.Principal, pathKey, name string, document routing.PathDocument) (PathRevision, error) {
@@ -155,6 +155,32 @@ func (service *ManagementService) CreatePathRevision(ctx context.Context, princi
 		return PathRevision{}, err
 	}
 	stored, err := service.paths.CreateEscalationPathRevision(ctx, input)
+	if err != nil {
+		return PathRevision{}, err
+	}
+	return PathRevision{Revision: stored, Document: document, Warnings: warnings}, nil
+}
+
+// UpdatePathRevision replaces a draft revision's name and document in
+// place, checked exactly as a new revision's; the revision keeps its
+// number. A revision that was ever active refuses with
+// domain.ErrRevisionNotDraft and an archived path with
+// domain.ErrEscalationPathArchived.
+func (service *ManagementService) UpdatePathRevision(ctx context.Context, principal domain.Principal, pathKey string, revision int64, name string, document routing.PathDocument) (PathRevision, error) {
+	input, warnings, err := service.revisionInput(ctx, principal, pathKey, name, document)
+	if err != nil {
+		return PathRevision{}, err
+	}
+	stored, err := service.paths.UpdateEscalationPathRevision(ctx, application.UpdateEscalationPathRevisionInput{
+		OrganizationID:  input.OrganizationID,
+		PathKey:         input.PathKey,
+		Revision:        revision,
+		Name:            input.Name,
+		Document:        input.Document,
+		DocumentVersion: input.DocumentVersion,
+		ActorID:         input.CreatedByActorID,
+		Now:             input.Now,
+	})
 	if err != nil {
 		return PathRevision{}, err
 	}

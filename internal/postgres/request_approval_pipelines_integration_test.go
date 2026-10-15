@@ -112,8 +112,16 @@ func TestRequestApprovalPipelinesAgainstRealPostgres(t *testing.T) {
 			"append-only", firstRevision.BlockIDs[0])
 		assertSQLRejected(t, ctx, store, `DELETE FROM request_approval_blocks WHERE id = $1`,
 			"append-only", firstRevision.BlockIDs[0])
-		assertSQLRejected(t, ctx, store, `UPDATE request_approval_pipelines SET block_ids = '{}' WHERE id = $1`,
-			"immutable", firstRevision.ID)
+		// A draft's content may change; a revision that was active may not.
+		var activeID string
+		if err := store.Pool().QueryRow(ctx, `SELECT id::text FROM request_approval_pipelines
+			WHERE organization_id = $1 AND pipeline_key = 'billing' AND is_active`, firstOrg).Scan(&activeID); err != nil {
+			t.Fatalf("read the active revision: %v", err)
+		}
+		assertSQLRejected(t, ctx, store, `UPDATE request_approval_pipelines SET name = 'Changed' WHERE id = $1`,
+			"only a draft request approval pipeline revision may change its content", activeID)
+		assertSQLRejected(t, ctx, store, `UPDATE request_approval_pipelines SET pipeline_key = 'moved' WHERE id = $1`,
+			"identity is immutable", firstRevision.ID)
 		assertSQLRejected(t, ctx, store, `DELETE FROM request_approval_pipelines WHERE id = $1`,
 			"append-only", firstRevision.ID)
 	})

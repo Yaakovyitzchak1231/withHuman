@@ -3,7 +3,7 @@ import { useState } from "react";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { RequestError } from "../api";
-import { useRevisionActivation } from "./use-revision-activation";
+import { isRevisionNotDraft, useRevisionActivation } from "./use-revision-activation";
 
 const { toast } = vi.hoisted(() => ({ toast: vi.fn() }));
 vi.mock("@/ds/components/toast", () => ({ useToast: () => ({ add: toast }) }));
@@ -18,6 +18,7 @@ function setup({
   activeRevision = 2 as number | null,
   activate = vi.fn<() => Promise<unknown>>().mockResolvedValue(undefined),
   save = vi.fn().mockResolvedValue({ revision: 3 }),
+  unchanged = false,
 } = {}) {
   function Editor() {
     const activation = useRevisionActivation();
@@ -35,6 +36,7 @@ function setup({
               activeRevision,
               canActivate,
               activationDescription: "Once active, new requests use this revision.",
+              unchanged,
               activate,
             });
             setFinished(true);
@@ -145,5 +147,53 @@ describe("saved revision activation", () => {
     await screen.findByText("Save failed");
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(activate).not.toHaveBeenCalled();
+  });
+
+  it("offers an untouched draft as it is and keeps it without a toast", async () => {
+    const { activate } = setup({ unchanged: true });
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog.textContent).toContain("Revision 3 is a draft.");
+    expect(dialog.textContent).not.toContain("Your changes are saved as a draft.");
+    fireEvent.click(screen.getByRole("button", { name: "Keep as draft" }));
+    await screen.findByText("Save flow finished");
+    expect(activate).not.toHaveBeenCalled();
+    expect(toast).not.toHaveBeenCalled();
+  });
+
+  it("activates an untouched draft", async () => {
+    const { activate } = setup({ unchanged: true });
+    fireEvent.click(await screen.findByRole("button", { name: "Make active" }));
+    await screen.findByText("Save flow finished");
+    expect(activate).toHaveBeenCalledTimes(1);
+    expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Revision 3 active" }));
+  });
+});
+
+describe("a draft activated by someone else", () => {
+  it("recognizes only the revision_not_draft conflict", () => {
+    expect(isRevisionNotDraft(new RequestError("Conflict", 409, "revision_not_draft"))).toBe(true);
+    expect(isRevisionNotDraft(new RequestError("Conflict", 409, "already_terminal"))).toBe(false);
+    expect(isRevisionNotDraft(new Error("revision_not_draft"))).toBe(false);
+  });
+
+  it("says the changes were not saved and leaves the rest to the caller", () => {
+    const outcomes: boolean[] = [];
+    function Editor() {
+      const activation = useRevisionActivation();
+      return (
+        <button onClick={() => {
+          outcomes.push(activation.refusedDraft(new RequestError("Conflict", 409, "revision_not_draft")));
+          outcomes.push(activation.refusedDraft(new Error("Invalid document")));
+        }}>Save</button>
+      );
+    }
+    render(<Editor />);
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(outcomes).toEqual([true, false]);
+    expect(toast).toHaveBeenCalledTimes(1);
+    expect(toast).toHaveBeenCalledWith(expect.objectContaining({
+      type: "deny",
+      description: "Someone else activated it. Your changes were not saved.",
+    }));
   });
 });

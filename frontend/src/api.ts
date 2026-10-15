@@ -437,6 +437,17 @@ export const api = {
       `${APP_API_BASE}/webhook_endpoints/${encodeURIComponent(endpointKey)}/revisions`,
       { method: "POST", body: JSON.stringify(document) },
     ),
+  /* Replaces a draft revision in place; 409 revision_not_draft once it
+   * has been active. */
+  updateWebhookEndpointRevision: (
+    endpointKey: string,
+    revision: number,
+    document: { name: string; url: string },
+  ) =>
+    request<WebhookEndpointRevision>(
+      `${APP_API_BASE}/webhook_endpoints/${encodeURIComponent(endpointKey)}/revisions/${revision}`,
+      { method: "PUT", body: JSON.stringify(document) },
+    ),
   activateWebhookEndpointRevision: (
     endpointKey: string,
     revision: number,
@@ -495,6 +506,13 @@ export const api = {
     request<TeamEscalationPolicyRevisionWire>(
       `${APP_API_BASE}/teams/${teamId}/escalation-policy/revisions`,
       { method: "POST", body: JSON.stringify(document) },
+    ),
+  /* Replaces a draft revision in place; 409 revision_not_draft once it
+   * has been active. */
+  updateTeamEscalationPolicyRevision: (teamId: string, revision: number, document: EscalationDocumentBodyWire) =>
+    request<TeamEscalationPolicyRevisionWire>(
+      `${APP_API_BASE}/teams/${teamId}/escalation-policy/revisions/${revision}`,
+      { method: "PUT", body: JSON.stringify(document) },
     ),
   activateTeamEscalationPolicyRevision: (
     teamId: string,
@@ -663,6 +681,17 @@ export const api = {
       `${pipelinePath(pipelineKey)}/revisions`,
       { method: "POST", body: JSON.stringify(document) },
     ),
+  /* Replaces a draft revision in place; 409 revision_not_draft once it
+   * has been active. */
+  updateRequestApprovalPipelineRevision: (
+    pipelineKey: string,
+    revision: number,
+    document: RequestApprovalPipelineDocument,
+  ) =>
+    request<RequestApprovalPipelineRevision>(
+      `${pipelinePath(pipelineKey)}/revisions/${revision}`,
+      { method: "PUT", body: JSON.stringify(document) },
+    ),
   /* The live state of everything a revision depends on, so a rollback
    * can be explained before it is attempted. */
   requestApprovalPipelineRevisionReferences: (pipelineKey: string, revision: number) =>
@@ -829,6 +858,13 @@ export const api = {
     request<EscalationPathRevisionWire>(
       `${APP_API_BASE}/escalation-paths/${encodeURIComponent(pathKey)}/revisions`,
       { method: "POST", body: JSON.stringify(document) },
+    ),
+  /* Replaces a draft revision in place; 409 revision_not_draft once it
+   * has been active. */
+  updateEscalationPathRevision: (pathKey: string, revision: number, document: EscalationPathDocumentWire) =>
+    request<EscalationPathRevisionWire>(
+      `${APP_API_BASE}/escalation-paths/${encodeURIComponent(pathKey)}/revisions/${revision}`,
+      { method: "PUT", body: JSON.stringify(document) },
     ),
   activateEscalationPathRevision: (
     pathKey: string,

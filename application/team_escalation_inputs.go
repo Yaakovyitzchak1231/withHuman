@@ -14,6 +14,9 @@ import (
 // active revision as their optimistic concurrency precondition.
 type TeamEscalationPolicyRepository interface {
 	CreateTeamEscalationPolicyRevision(context.Context, CreateTeamEscalationPolicyRevisionInput) (domain.TeamEscalationPolicyRevision, error)
+	// UpdateTeamEscalationPolicyRevision replaces a draft revision's
+	// document; an activated one refuses with domain.ErrRevisionNotDraft.
+	UpdateTeamEscalationPolicyRevision(context.Context, UpdateTeamEscalationPolicyRevisionInput) (domain.TeamEscalationPolicyRevision, error)
 	ListTeamEscalationPolicyRevisions(context.Context, ListTeamEscalationPolicyRevisionsInput) ([]domain.TeamEscalationPolicyRevision, error)
 	GetTeamEscalationPolicyRevision(context.Context, GetTeamEscalationPolicyRevisionInput) (domain.TeamEscalationPolicyRevision, error)
 	GetActiveTeamEscalationPolicyRevision(context.Context, GetActiveTeamEscalationPolicyRevisionInput) (domain.TeamEscalationPolicyRevision, error)
@@ -22,7 +25,7 @@ type TeamEscalationPolicyRepository interface {
 }
 
 // CreateTeamEscalationPolicyRevisionInput persists one validated team
-// policy document as the next immutable revision for its team. The
+// policy document as the next revision, a draft, for its team. The
 // document arrives canonicalized by the team escalation service.
 type CreateTeamEscalationPolicyRevisionInput struct {
 	ID               domain.ID
@@ -42,6 +45,30 @@ func (input CreateTeamEscalationPolicyRevisionInput) Validate() error {
 		validJSON("team escalation policy document", input.Document),
 		positiveDocumentVersion(input.DocumentVersion),
 		requiredID("creator membership ID", input.CreatedByActorID),
+		requiredTime("current time", input.Now),
+	})
+}
+
+// UpdateTeamEscalationPolicyRevisionInput replaces the document of a
+// draft revision, one that was never active, keeping its number.
+type UpdateTeamEscalationPolicyRevisionInput struct {
+	OrganizationID  domain.ID
+	TeamID          domain.ID
+	Revision        int64
+	Document        json.RawMessage
+	DocumentVersion int
+	ActorID         domain.ID
+	Now             time.Time
+}
+
+func (input UpdateTeamEscalationPolicyRevisionInput) Validate() error {
+	return firstError([]error{
+		requiredID("organization ID", input.OrganizationID),
+		requiredID("team ID", input.TeamID),
+		positiveRevision(input.Revision),
+		validJSON("team escalation policy document", input.Document),
+		positiveDocumentVersion(input.DocumentVersion),
+		requiredID("actor ID", input.ActorID),
 		requiredTime("current time", input.Now),
 	})
 }

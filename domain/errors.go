@@ -134,6 +134,10 @@ var (
 	// archiving again a path that was archived. Archived paths are read
 	// only.
 	ErrEscalationPathArchived = errors.New("this escalation path is archived")
+	// ErrRevisionNotDraft refuses changing a revision of a pipeline,
+	// escalation path, webhook endpoint or team escalation policy that
+	// has been active or is archived. Only drafts change in place.
+	ErrRevisionNotDraft = errors.New("only a draft revision can be changed. This one was activated or archived")
 	// ErrEscalationPathInactive refuses activating a pipeline revision that
 	// names a path with no active revision.
 	ErrEscalationPathInactive = errors.New("escalation path has no active revision")

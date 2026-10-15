@@ -665,9 +665,15 @@ Examples:
 - Pipelines are keyed objects:
   `request_approval_pipelines.pipeline_key` (the agent slug pattern,
   chosen once, never reused) with a `name` on every revision (renaming is
-  a revision), append-only numbered revisions, `default_escalation_path`,
+  a revision), numbered revisions, `default_escalation_path`,
   and exactly one active revision per live key at all times (a deferred
-  constraint trigger refuses leaving a key without an active row). Every
+  constraint trigger refuses leaving a key without an active row). A
+  revision that was never active is a draft and changes in place
+  (`PUT .../revisions/{n}`, the create body, keeping its number); its
+  first activation stamps `activated_at` (the table trigger does it) and
+  freezes it for good, 409 `revision_not_draft` after that. Escalation
+  paths, webhook endpoints and team escalation policies follow the same
+  draft rule. Every
   organization has the reserved `entry` pipeline (`domain.EntryPipelineKey`,
   seeded active in the activation transaction by `ensureEntryPipeline`
   with one outcome block, `approve-every-call`, so an agent connected
@@ -822,9 +828,10 @@ Examples:
   `evaluated` event carries `delivery` evidence (endpoint key and
   revision, host, status, latency, the endpoint's reason) and never a
   body or the secret. Endpoints are revisioned exactly like escalation
-  paths: `webhook_endpoint_revisions` holds append-only numbered
-  revisions of a name and URL per key with at most one active
-  (`is_active` the only mutable field, advisory lock
+  paths: `webhook_endpoint_revisions` holds numbered revisions of a
+  name and URL per key with at most one active (a draft's name and URL
+  change in place until its first activation, then `is_active` is the
+  only mutable field, advisory lock
   `webhook_endpoint:<org>:<key>`), and `webhook_endpoint_secrets` holds
   the key's one signing secret, sealed with `internal/secrets` under
   `WITHHUMAN_SECRETS_KEY` and bound to `(organization_id, endpoint_key)`,

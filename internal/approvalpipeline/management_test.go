@@ -128,6 +128,47 @@ func TestManagementCreatesInactiveRevisionAndValidatesBeforeWriting(t *testing.T
 	}
 }
 
+func TestManagementUpdatesADraftInPlaceUntilItIsActivated(t *testing.T) {
+	repository := newMemoryPipelineRepository()
+	service := NewManagementService(repository, NewCompiledPipelineState(repository, NewBlockRegistry()), fixedPipelineClock{now: time.Unix(250, 0).UTC()})
+	principal := pipelineManagerPrincipal("organization-1")
+	draft, err := service.CreateRevision(context.Background(), principal, "release", pipelineName("release"), []approvalblock.Definition{
+		decideWhen("first", approvalblock.Approve, approvalblock.Field("/request/tool").Equals("deploy")),
+	}, Route{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	updated, err := service.UpdateRevision(context.Background(), principal, "release", draft.Revision.Revision, "", []approvalblock.Definition{
+		decideWhen("second", approvalblock.Deny, approvalblock.Field("/request/tool").Equals("drop")),
+	}, Route{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Revision.Revision != draft.Revision.Revision || updated.Revision.Name != draft.Revision.Name ||
+		len(updated.Blocks) != 1 || updated.Blocks[0].Definition.ID != "second" {
+		t.Fatalf("the draft was not changed in place, keeping its name: %+v", updated)
+	}
+	if repository.createCalls != 1 {
+		t.Fatalf("an update created a revision: %d create calls", repository.createCalls)
+	}
+	// An invalid document never reaches the draft.
+	invalid := []approvalblock.Definition{decideWhen("third", approvalblock.Approve, approvalblock.Field("/request/tool").Equals("x"))}
+	invalid[0].Enabled = false
+	if _, err := service.UpdateRevision(context.Background(), principal, "release", draft.Revision.Revision, "", invalid, Route{}); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("invalid document returned %v, want invalid", err)
+	}
+
+	if _, err := service.Activate(context.Background(), principal, "release", draft.Revision.Revision, 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.UpdateRevision(context.Background(), principal, "release", draft.Revision.Revision, "", []approvalblock.Definition{
+		decideWhen("second", approvalblock.Deny, approvalblock.Field("/request/tool").Equals("drop")),
+	}, Route{}); !errors.Is(err, domain.ErrRevisionNotDraft) {
+		t.Fatalf("update after activation returned %v, want ErrRevisionNotDraft", err)
+	}
+}
+
 func TestManagementActivationCompilesThenUsesExpectedActiveRevision(t *testing.T) {
 	repository := newMemoryPipelineRepository()
 	service := NewManagementService(repository, NewCompiledPipelineState(repository, NewBlockRegistry()), fixedPipelineClock{now: time.Unix(300, 0).UTC()})
@@ -249,6 +290,27 @@ func (repository *memoryPipelineRepository) CreateRequestApprovalPipelineRevisio
 	return revision, nil
 }
 
+func (repository *memoryPipelineRepository) UpdateRequestApprovalPipelineRevision(_ context.Context, input application.UpdateRequestApprovalPipelineRevisionInput) (domain.RequestApprovalPipelineRevision, error) {
+	revisions := repository.revisions[input.PipelineKey]
+	for index := range revisions {
+		revision := &revisions[index]
+		if revision.Revision != input.Revision {
+			continue
+		}
+		if revision.ArchivedAt != nil {
+			return domain.RequestApprovalPipelineRevision{}, domain.ErrRequestApprovalPipelineArchived
+		}
+		if revision.IsActive || revision.ActivatedAt != nil {
+			return domain.RequestApprovalPipelineRevision{}, domain.ErrRevisionNotDraft
+		}
+		revision.Name = input.Name
+		revision.BlockIDs = repository.storeBlocks(input.OrganizationID, input.ActorID, input.Now, input.Blocks)
+		revision.DefaultEscalationPath, revision.DefaultAskAgentOwner = input.DefaultEscalationPath, input.DefaultAskAgentOwner
+		return *revision, nil
+	}
+	return domain.RequestApprovalPipelineRevision{}, domain.ErrNotFound
+}
+
 func (repository *memoryPipelineRepository) storeBlocks(organizationID, actorID domain.ID, now time.Time, inputs []application.RequestApprovalBlockSnapshotInput) []domain.ID {
 	ids := make([]domain.ID, len(inputs))
 	for index, inputBlock := range inputs {
@@ -362,6 +424,10 @@ func (repository *memoryPipelineRepository) ActivateRequestApprovalPipelineRevis
 	}
 	for index := range revisions {
 		revisions[index].IsActive = revisions[index].Revision == input.Revision
+		if revisions[index].IsActive && revisions[index].ActivatedAt == nil {
+			activatedAt := input.Now
+			revisions[index].ActivatedAt = &activatedAt
+		}
 	}
 	repository.revisions[input.PipelineKey] = revisions
 	for _, revision := range revisions {
