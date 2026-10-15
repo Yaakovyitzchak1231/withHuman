@@ -62,6 +62,35 @@ This repository contains:
   <img src=".github/readme/request-dark.png#gh-dark-mode-only" alt="The review page for a pending issue_refund request: its arguments, the agent's explanation, and Deny and Approve buttons" width="720">
 </p>
 
+## What you can do
+
+- **Keep the agents you already use.** Connect Claude Code, Codex,
+  OpenClaw, Pi, Hermes or DeepSeek with
+  [one command](https://withhuman.ai/docs/web-app/agents). Their tools don't change: withHuman
+  sees each call before it runs.
+- **Connect the agents you build.** Agents built with LangGraph, Pydantic
+  AI, the OpenAI Agents SDK, CrewAI, Mastra and other frameworks connect
+  through the Agent Approval Protocol SDKs. See the [examples](examples/).
+- **Decide what needs a person.**
+  [Approval pipelines](https://withhuman.ai/docs/concepts/approval-pipelines) approve, deny or ask
+  someone based on the tool and its arguments, such as "approve refunds up
+  to $20, ask payments above that".
+- **Reach the right people.**
+  [Escalation paths](https://withhuman.ai/docs/concepts/escalation-paths) choose who is asked and
+  when, by team, level and working hours. People are notified by
+  [email](https://withhuman.ai/docs/web-app/email-notifications),
+  [Slack](https://withhuman.ai/docs/web-app/slack-notifications) or
+  [Discord](https://withhuman.ai/docs/web-app/discord-notifications).
+- **Decide with the full picture.** In the
+  [review queue](https://withhuman.ai/docs/web-app/review-queue), reviewers see the exact
+  arguments, the agent's explanation and why the request needs them, then
+  approve or deny with a note the agent reads.
+- **Run it yourself.** One binary with its database and workflow engine
+  built in. Start it with Docker or from source, with no other services.
+- **Build on an open protocol.** Agents talk to withHuman through the
+  [Agent Approval Protocol](https://agentapprovalprotocol.io), an open
+  specification.
+
 ## How a request flows
 
 ```mermaid
