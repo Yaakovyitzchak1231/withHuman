@@ -3,8 +3,8 @@
 This is the default engineering contract for every withHuman repository. Apply
 it to all new and changed code. A repository may deviate only when a local
 `CLAUDE.md` records the reason and the replacement rule. Prefer one canonical
-name across API, database, events, and logs. In prototype code, change all
-callers in the same change and delete the superseded form.
+name across API, database, events, and logs. When a name or interface changes,
+change all callers in the same change and delete the superseded form.
 
 ## Naming
 
@@ -111,9 +111,9 @@ File names follow the language and framework rather than one universal case:
 - Name explicit indexes `<table>_<purpose>_idx`. Index foreign keys and actual
   query shapes, and back every uniqueness or idempotency promise with a unique
   constraint. Avoid redundant indexes.
-- Application migrations never modify Temporal-owned schemas. During the
-  prototype, rewrite the current application migration and reset disposable
-  databases instead of preserving superseded schemas or compatibility paths.
+- Application migrations never modify Temporal-owned schemas. Never edit a
+  migration that has shipped in a tagged release; put schema changes in a new
+  numbered file.
 
 ## Boundary discipline
 
