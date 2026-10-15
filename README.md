@@ -49,6 +49,19 @@ An adapter (a runtime hook or an SDK wrapper) sends each tool call to
 withHuman before it runs, over the open
 [Agent Approval Protocol](https://agentapprovalprotocol.io).
 
+```mermaid
+sequenceDiagram
+    participant Agent as Your agent
+    participant WH as withHuman
+    participant You as You
+    Agent->>WH: Wants to call issue_refund(amount: 75)
+    WH->>WH: Checks your approval pipeline
+    WH->>You: Asks for approval by email, Slack or Discord
+    You->>WH: Approve
+    WH->>Agent: Go ahead
+    Agent->>Agent: Runs issue_refund
+```
+
 - **Approval pipelines** approve, deny or ask a person, based on the tool
   and its arguments. For example: approve refunds up to $20, ask payments
   above that.
