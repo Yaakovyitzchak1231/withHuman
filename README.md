@@ -3,7 +3,9 @@
   <img src=".github/readme/logo-dark.svg#gh-dark-mode-only" alt="withHuman" width="320">
 </p>
 
-<p align="center"><strong>Approval layer for AI Agents</strong></p>
+<p align="center"><strong>Approval layer for AI Agents</strong><br>
+Put your most consequential agent actions behind human approvals, so your
+agents can do real work.</p>
 
 <p align="center">
   <a href="https://github.com/withHumanAI/withHuman/tags"><img src="https://img.shields.io/github/v/tag/withHumanAI/withHuman?sort=semver&label=release" alt="Latest release"></a>
