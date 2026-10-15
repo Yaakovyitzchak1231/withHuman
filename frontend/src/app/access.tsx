@@ -56,7 +56,6 @@ const SOCIAL_ERRORS: Record<string, string> = {
 const LOGIN_ERRORS: Record<string, string> = {
   no_organizations: "This account does not belong to any organization yet",
   sso_required: "This organization signs in with single sign-on",
-  no_account: "No withHuman account uses this email yet.",
   email_unverified: "Your email address is not verified with this provider.",
   domain_captured: "Your team already uses withHuman. Sign in with your work email.",
   social_flow_invalid: "That sign-in attempt expired. Start again from this page.",
@@ -114,10 +113,6 @@ function stripArrivalParams() {
   }
 }
 
-function loginErrorCode(reason: unknown): string {
-  return reason instanceof RequestError ? reason.code : "";
-}
-
 function loginErrorMessage(reason: unknown): string {
   if (reason instanceof RequestError && LOGIN_ERRORS[reason.code]) {
     return LOGIN_ERRORS[reason.code];
@@ -136,11 +131,13 @@ function beginSSO(door: SSODoor, slug: string) {
  * server reveals the password field and the SSO routing for an email;
  * a verified password either completes the login or hands back a
  * single-use ticket plus the organization list. Social login joins at
- * the same two exits through the continue step. */
+ * the same two exits through the continue step, or, when the verified
+ * email has no account, asks for the organization to found. */
 type LoginStep =
   | { step: "email" }
   | { step: "methods"; password: boolean; ssoOrganizations: LoginOrganization[] }
-  | { step: "select"; ticket: string; organizations: LoginOrganization[] };
+  | { step: "select"; ticket: string; organizations: LoginOrganization[] }
+  | { step: "organization"; email: string };
 
 export function AccessScreen({
   onAuthenticated,
@@ -161,7 +158,6 @@ export function AccessScreen({
    * changes after a sign-in, which leaves this screen. */
   const [lastUsed] = useState(lastLoginMethod);
   const [error, setError] = useState(() => initialError || arrival.error);
-  const [errorCode, setErrorCode] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [continuing, setContinuing] = useState(arrival.continueSocial);
   const continueStarted = useRef(false);
@@ -186,6 +182,10 @@ export function AccessScreen({
   function applyLoginResponse(result: LoginResponse) {
     if (result.status === "complete") {
       onAuthenticated(result.principal);
+      return;
+    }
+    if (result.status === "organization_required") {
+      setLogin({ step: "organization", email: result.email });
       return;
     }
     if (result.status === "sso_required") {
@@ -213,14 +213,12 @@ export function AccessScreen({
 
   function failLogin(reason: unknown) {
     setError(loginErrorMessage(reason));
-    setErrorCode(loginErrorCode(reason));
   }
 
   /* The organization signs in only through SSO and this edition serves
    * no SSO door: the same sentence the server's refusal would carry. */
   function showSSORequired() {
     setError(LOGIN_ERRORS.sso_required);
-    setErrorCode("sso_required");
   }
 
   /* Returning from a social provider: the callback stored the assertion
@@ -245,7 +243,6 @@ export function AccessScreen({
 
   function clearError() {
     setError("");
-    setErrorCode("");
   }
 
   async function submitLogin(event: FormEvent<HTMLFormElement>) {
@@ -311,6 +308,24 @@ export function AccessScreen({
     }
   }
 
+  async function submitOrganization(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    clearError();
+    const name = String(new FormData(event.currentTarget).get("organization_name") ?? "");
+    setSubmitting(true);
+    try {
+      applyLoginResponse(await api.socialFoundOrganization(name));
+    } catch (reason) {
+      failLogin(reason);
+      /* Only a missing name leaves the flow for another try. */
+      if (!(reason instanceof RequestError && reason.code === "invalid_request")) {
+        setLogin({ step: "email" });
+      }
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   async function submitBootstrap(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     clearError();
@@ -351,15 +366,6 @@ export function AccessScreen({
   const errorCallout = error ? (
     <Callout tone="deny" icon={<AlertIcon width={15} height={15} />}>
       {error}
-      {errorCode === "no_account" && doors?.signup ? (
-        <>
-          {" "}
-          <a href={doors.signup.href} className="underline decoration-current underline-offset-2">
-            Create an organization
-          </a>{" "}
-          to get started.
-        </>
-      ) : null}
     </Callout>
   ) : null;
 
@@ -426,6 +432,38 @@ export function AccessScreen({
             Use a different account
           </button>
         </div>
+      ) : mode === "login" && login.step === "organization" ? (
+        <form
+          key="organization"
+          onSubmit={submitOrganization}
+          className="flex w-full max-w-[360px] flex-col gap-4 rounded-lg border-hairline border-edge bg-surface p-6 shadow-sm"
+        >
+          <div>
+            <h1 className="text-title text-ink">Create an organization</h1>
+            <p className="mt-1 text-body text-ink-muted">
+              <span className="text-ink">{login.email}</span> is new to withHuman. Name your
+              organization to get started.
+            </p>
+          </div>
+          <TextField
+            name="organization_name"
+            label="Organization name"
+            autoComplete="organization"
+            autoFocus
+            required
+          />
+          {errorCallout}
+          <Button type="submit" variant="primary" size="lg" loading={submitting}>
+            Create organization
+          </Button>
+          <button
+            type="button"
+            onClick={resetToEmail}
+            className="cursor-pointer self-start text-label font-normal text-ink-muted underline decoration-edge-strong underline-offset-2 hover:decoration-ink"
+          >
+            Use a different account
+          </button>
+        </form>
       ) : mode === "login" ? (
         <>
           <form
