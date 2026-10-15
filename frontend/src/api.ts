@@ -224,6 +224,13 @@ export const api = {
     ),
   socialContinue: () =>
     request<LoginResponse>("/auth/social/continue", { method: "POST" }),
+  /* Founds the organization a continue answered organization_required
+   * for, with the identity the provider already verified. */
+  socialFoundOrganization: (organizationName: string) =>
+    request<LoginResponse>("/auth/social/organization", {
+      method: "POST",
+      body: JSON.stringify({ organization_name: organizationName }),
+    }),
   /* One layer of the review queue: what the reader was told about, what
    * they may decide, or everything they may see. */
   approvals: (scope: QueueScope) =>

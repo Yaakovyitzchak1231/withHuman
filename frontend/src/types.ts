@@ -647,7 +647,10 @@ export type LoginResponse =
     }
   /* Every organization signs in through enterprise SSO: no ticket, the
    * client continues through the SSO flow for one of them. */
-  | { status: "sso_required"; organizations: LoginOrganization[] };
+  | { status: "sso_required"; organizations: LoginOrganization[] }
+  /* A social sign-in whose verified email has no account yet: naming an
+   * organization founds it with that identity. */
+  | { status: "organization_required"; email: string; expires_at: string };
 
 /* A social login provider the edition registered (Google, GitHub). The
  * open edition registers none and the buttons never render. */
