@@ -91,7 +91,7 @@ This repository contains:
   [Agent Approval Protocol](https://agentapprovalprotocol.io), an open
   specification.
 
-## How a request flows
+## How it works
 
 ```mermaid
 sequenceDiagram
