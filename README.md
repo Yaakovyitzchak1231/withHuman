@@ -3,7 +3,7 @@
   <img src=".github/readme/logo-dark.svg#gh-dark-mode-only" alt="withHuman" width="320">
 </p>
 
-<p align="center"><strong>The approval layer for AI agents.</strong><br>
+<p align="center"><strong>Approval layer for AI Agents</strong><br>
 Put your most consequential agent actions behind human approvals, so your
 agents can do real work.</p>
 
@@ -21,21 +21,45 @@ agents can do real work.</p>
   <a href="https://withhuman.ai">Website</a> ·
   <a href="https://withhuman.ai/docs">Docs</a> ·
   <a href="#quickstart">Quickstart</a> ·
-  <a href="https://withhuman.ai/docs/concepts/how-withhuman-works">How it works</a> ·
+  <a href="https://agentapprovalprotocol.io">Protocol</a> ·
   <a href="CONTRIBUTING.md">Contributing</a>
 </p>
 
 ---
 
-withHuman gives your whole organization one place to oversee what its AI
-agents do. Every agent's tool calls come to withHuman before they run.
-Automated policies approve or deny the routine ones. Escalation policies
-send the rest to the right team or person, who decides in a review queue
-the whole team shares.
+withHuman lets you decide which actions agents can take automatically,
+which they can't, and which need a human's approval first.
+
+Connect your agents and manage their approval rules, reviewers, and
+decision history in one place.
+
+An adapter (a runtime hook or an SDK wrapper) intercepts each call before it executes
+and sends the tool name and arguments to withHuman over the
+[Agent Approval Protocol](https://agentapprovalprotocol.io) (AAP). The
+server runs the organization's approval pipeline and answers `approved` or
+`denied`, or holds the request as `pending` and notifies reviewers along an
+escalation path.
+
+Pipelines and escalation paths are configured per organization, not per
+agent, so every connected agent is gated by the same rules.
+
+This repository contains:
+
+- **`withhuman`** ([`cmd/withhuman`](cmd/withhuman)): the server. One Go
+  binary with embedded PostgreSQL and Temporal, the product and AAP HTTP
+  APIs, the review web app, and a management MCP server.
+- **`withhuman` CLI** ([`cmd/withhuman-cli`](cmd/withhuman-cli)): installs
+  AAP hooks into coding agent runtimes and enrolls them as agent instances.
+- **[Agent skills](skills/)** for coding agents that set withHuman up.
+- **[Examples](examples/)**: the same refund support agent built on nine
+  frameworks (LangGraph, Deep Agents, Pydantic AI, Google ADK, OpenAI
+  Agents SDK, Claude Agent SDK, CrewAI, Vercel AI SDK and Mastra). Each
+  wraps its tools with an AAP SDK, so every tool call, including calls
+  from sub-agents, waits for withHuman before it runs.
 
 <p align="center">
-  <img src=".github/readme/request-light.png#gh-light-mode-only" alt="A request in withHuman: an agent wants to call issue_refund for 75 USD, with its arguments, its explanation, and Deny and Approve buttons" width="720">
-  <img src=".github/readme/request-dark.png#gh-dark-mode-only" alt="A request in withHuman: an agent wants to call issue_refund for 75 USD, with its arguments, its explanation, and Deny and Approve buttons" width="720">
+  <img src=".github/readme/request-light.png#gh-light-mode-only" alt="The review page for a pending issue_refund request: its arguments, the agent's explanation, and Deny and Approve buttons" width="720">
+  <img src=".github/readme/request-dark.png#gh-dark-mode-only" alt="The review page for a pending issue_refund request: its arguments, the agent's explanation, and Deny and Approve buttons" width="720">
 </p>
 
 ## What you can do
