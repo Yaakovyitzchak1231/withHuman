@@ -3,6 +3,8 @@
   <img src=".github/readme/logo-dark.svg#gh-dark-mode-only" alt="withHuman" width="320">
 </p>
 
+<p align="center"><strong>Approval layer for AI Agents</strong></p>
+
 [![Latest release](https://img.shields.io/github/v/tag/withHumanAI/withHuman?sort=semver&label=release)](https://github.com/withHumanAI/withHuman/tags)
 [![Docker image](https://img.shields.io/badge/docker-quay.io%2Fwithhuman%2Fbundle-2496ED?logo=docker&logoColor=white)](https://quay.io/repository/withhuman/bundle)
 [![License: Elastic 2.0](https://img.shields.io/badge/license-Elastic%202.0-blue)](LICENSE)
