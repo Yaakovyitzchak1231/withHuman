@@ -117,8 +117,4 @@ notifications and single sign-on.
 
 ## License
 
-withHuman is licensed under the [Elastic License 2.0](LICENSE): you may
-use, modify and self-host it, but not offer it to others as a hosted
-service. The Agent Approval Protocol specification and its Go library are
-licensed under Apache 2.0. withHuman and its logo are trademarks of
-Metoro, Inc.
+withHuman is licensed under the [Elastic License 2.0](LICENSE).
