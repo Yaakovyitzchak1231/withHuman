@@ -739,6 +739,12 @@ function ChooseAgentsStep({
   onSaved: (next: OnboardingSession) => void;
 }) {
   const installed = session.detections.filter((detection) => detection.installed);
+  /* The agents on the machine first, then the ones it lacks, each group
+   * in the order the CLI reported them. */
+  const ordered = [
+    ...installed,
+    ...session.detections.filter((detection) => !detection.installed),
+  ];
   const [selected, setSelected] = useState<Set<string>>(
     () =>
       new Set(
@@ -793,7 +799,7 @@ function ChooseAgentsStep({
         </div>
       </CardHeader>
       <CardBody className="flex flex-col gap-2">
-        {session.detections.map((detection) => (
+        {ordered.map((detection) => (
           <DetectionOption
             key={detection.runtime}
             detection={detection}
