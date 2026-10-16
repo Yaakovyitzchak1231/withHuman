@@ -161,6 +161,9 @@ export const api = {
       slack_enabled: boolean;
       discord_enabled: boolean;
       social_providers: SocialProvider[];
+      /* A refused password login for an email without an account mails
+       * the address a link to create one. */
+      password_login_offers_signup: boolean;
       cli_download_url: string;
       /* MCP servers this deployment offers every enrolled agent (the
        * hosted gateway); the CLI registers them at install. */

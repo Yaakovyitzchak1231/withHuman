@@ -63,6 +63,12 @@ const LOGIN_ERRORS: Record<string, string> = {
   unauthenticated: "The sign-in expired. Try again.",
 };
 
+/* The refusal where the edition mails a signup link to an email without
+ * an account. Every refused password reads the same, so the form never
+ * says which emails have accounts. */
+const INVALID_CREDENTIALS_SIGNUP_OFFERED =
+  "That email and password do not match. If you're new to withHuman, check your inbox for a link to create an account.";
+
 /* What the reset page leaves in the query string after a new password is
  * set, so the sign-in form can say so. */
 const RESET_NOTICE = "Your password is updated. Sign in with it.";
@@ -137,7 +143,7 @@ type LoginStep =
   | { step: "email" }
   | { step: "methods"; password: boolean; ssoOrganizations: LoginOrganization[] }
   | { step: "select"; ticket: string; organizations: LoginOrganization[] }
-  | { step: "organization"; email: string };
+  | { step: "organization"; email: string; confirmed: boolean };
 
 export function AccessScreen({
   onAuthenticated,
@@ -185,7 +191,7 @@ export function AccessScreen({
       return;
     }
     if (result.status === "organization_required") {
-      setLogin({ step: "organization", email: result.email });
+      setLogin({ step: "organization", email: result.email, confirmed: false });
       return;
     }
     if (result.status === "sso_required") {
@@ -212,6 +218,14 @@ export function AccessScreen({
   }
 
   function failLogin(reason: unknown) {
+    if (
+      runtime.config?.password_login_offers_signup &&
+      reason instanceof RequestError &&
+      reason.code === "invalid_credentials"
+    ) {
+      setError(INVALID_CREDENTIALS_SIGNUP_OFFERED);
+      return;
+    }
     setError(loginErrorMessage(reason));
   }
 
@@ -431,6 +445,27 @@ export function AccessScreen({
           >
             Use a different account
           </button>
+        </div>
+      ) : mode === "login" && login.step === "organization" && !login.confirmed ? (
+        <div className="flex w-full max-w-[360px] flex-col gap-4 rounded-lg border-hairline border-edge bg-surface p-6 shadow-sm">
+          <div>
+            <h1 className="text-title text-ink">Create a new account?</h1>
+            <p className="mt-1 text-body text-ink-muted">
+              <span className="text-ink">{login.email}</span> isn't registered with withHuman.
+            </p>
+          </div>
+          {errorCallout}
+          <Button
+            variant="primary"
+            size="lg"
+            autoFocus
+            onClick={() => setLogin({ ...login, confirmed: true })}
+          >
+            Yes, create an account
+          </Button>
+          <Button variant="ghost" size="md" onClick={resetToEmail}>
+            No, use a different account
+          </Button>
         </div>
       ) : mode === "login" && login.step === "organization" ? (
         <form

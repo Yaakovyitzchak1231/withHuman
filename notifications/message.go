@@ -170,6 +170,31 @@ func signupVerificationMessage(message application.TransactionalMessage, address
 	}
 }
 
+// signupOfferMessage answers a password login for an address with no
+// account. The link is the credential that proves the address, so it
+// appears here and nowhere else.
+func signupOfferMessage(message application.TransactionalMessage, address string) mailMessage {
+	lines := []string{
+		"Hello,",
+		"",
+		"Somebody tried to sign in to withHuman with this email address.",
+		"There is no withHuman account for it yet.",
+		"",
+		"Create your account here:",
+		message.VerifyURL,
+		"",
+		fmt.Sprintf("The link expires on %s.", message.ExpiresAt.UTC().Format(time.RFC1123)),
+		"",
+		"If this was not you, you can ignore this message. Nothing is",
+		"created until the link is opened.",
+	}
+	return mailMessage{
+		To:      address,
+		Subject: "Create your withHuman account",
+		Body:    strings.Join(lines, "\r\n"),
+	}
+}
+
 // passwordResetMessage renders the reset link. The link is the credential,
 // so it appears here and nowhere else, and only to the address on the
 // account.
