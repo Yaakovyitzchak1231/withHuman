@@ -445,6 +445,25 @@ func TestFrontendFallbackSeparatesProductRoutesFromAPIs(t *testing.T) {
 	}
 }
 
+func TestFrontendShellIsNotIndexed(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	(&API{frontend: webapp.Assets()}).installFrontend(router)
+
+	for _, path := range []string{"/", "/signup", "/welcome", "/requests/example"} {
+		t.Run(path, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+			if response.Code != http.StatusOK {
+				t.Fatalf("got status %d", response.Code)
+			}
+			if response.Header().Get("X-Robots-Tag") != "noindex" {
+				t.Fatalf("got X-Robots-Tag %q, want noindex", response.Header().Get("X-Robots-Tag"))
+			}
+		})
+	}
+}
+
 func TestFrontendRouteChunksAreEmbeddedAndImmutable(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
