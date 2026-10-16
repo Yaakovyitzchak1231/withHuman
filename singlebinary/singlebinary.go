@@ -205,7 +205,7 @@ func Start(ctx context.Context, cfg Config) (_ *Instance, err error) {
 	workerConfig := base
 	workerOptions := cfg.Worker
 	workerReady := make(chan struct{})
-	workerOptions.Logger, workerOptions.Config = logger, &workerConfig
+	workerOptions.Logger, workerOptions.Version, workerOptions.Config = logger, version(cfg.Version), &workerConfig
 	workerOptions.Ready = func() { close(workerReady) }
 	workerCtx, stopWorker := context.WithCancel(context.Background())
 	workerDone := make(chan error, 1)

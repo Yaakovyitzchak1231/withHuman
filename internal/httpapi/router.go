@@ -29,6 +29,7 @@ import (
 	"github.com/withHumanAI/withHuman/internal/authorization"
 	"github.com/withHumanAI/withHuman/internal/contacts"
 	"github.com/withHumanAI/withHuman/internal/discordconnect"
+	"github.com/withHumanAI/withHuman/internal/heartbeat"
 	"github.com/withHumanAI/withHuman/internal/mcpoauth"
 	"github.com/withHumanAI/withHuman/internal/members"
 	"github.com/withHumanAI/withHuman/internal/onboarding"
@@ -72,6 +73,10 @@ type Config struct {
 	// runtime it installs. Reported as agent_mcp_servers, empty in the
 	// open edition.
 	AgentMCPServers []domain.AgentMCPServer
+	// UpdateChecks says the deployment's heartbeat reports which release
+	// is newest, so administrators get a Version page. Reported as
+	// update_checks_enabled.
+	UpdateChecks bool
 }
 
 type pipelineReadiness interface {
@@ -94,6 +99,8 @@ type Dependencies struct {
 	Onboarding       *onboarding.Service
 	// OrgSettings reads and changes the organization policy.
 	OrgSettings *orgsettings.Service
+	// Installation reads the running release's update status.
+	Installation *heartbeat.StatusReader
 	// ToolPresentations resolves how each request's arguments are shown
 	// and manages the organization's own presentations.
 	ToolPresentations *toolpresentations.Service
@@ -141,6 +148,7 @@ type API struct {
 	webhooks           *webhookendpoints.Service
 	onboarding         *onboarding.Service
 	orgSettings        *orgsettings.Service
+	installation       *heartbeat.StatusReader
 	toolPresentations  *toolpresentations.Service
 	roles              application.RoleRepository
 	permissionPolicies application.PermissionPolicyRepository
@@ -183,7 +191,7 @@ func newAPI(dependencies Dependencies) *API {
 		permissionPolicies: policies, auth: dependencies.Auth, approvals: dependencies.Approvals, members: dependencies.Members,
 		contacts: dependencies.Contacts, slack: dependencies.Slack, discord: dependencies.Discord,
 		teams:    dependencies.Teams,
-		webhooks: dependencies.WebhookEndpoints, onboarding: dependencies.Onboarding, orgSettings: dependencies.OrgSettings,
+		webhooks: dependencies.WebhookEndpoints, onboarding: dependencies.Onboarding, orgSettings: dependencies.OrgSettings, installation: dependencies.Installation,
 		toolPresentations: dependencies.ToolPresentations, toolCatalog: dependencies.ToolCatalog,
 		identities: dependencies.Identities, roles: dependencies.Roles, approvalRepo: dependencies.ApprovalRepo,
 		orchestrator:      dependencies.Orchestrator,
@@ -307,6 +315,7 @@ func (a *API) router() *gin.Engine {
 	a.installRequestApprovalPipelineRoutes(appAPI)
 	a.installRoutingRoutes(appAPI)
 	a.installOrganizationRoutes(appAPI)
+	a.installInstallationRoutes(appAPI)
 	a.installToolPresentationRoutes(appAPI)
 	a.installTeamRoutes(appAPI)
 	a.installTeamEscalationRoutes(appAPI)
@@ -457,6 +466,7 @@ func (a *API) runtimeConfig(c *gin.Context) {
 		"password_login_offers_signup": offersSignup,
 		"cli_download_url":             a.config.CLIDownloadURL,
 		"agent_mcp_servers":            agentMCPServers,
+		"update_checks_enabled":        a.config.UpdateChecks,
 	}
 	for key, value := range a.config.Extras {
 		payload[key] = value
@@ -472,6 +482,7 @@ var runtimeConfigKeys = map[string]bool{
 	"slack_enabled": true, "discord_enabled": true,
 	"social_providers": true, "password_login_offers_signup": true,
 	"cli_download_url": true, "agent_mcp_servers": true,
+	"update_checks_enabled": true,
 }
 
 // RuntimeConfigExtras validates an edition's runtime-config entries for

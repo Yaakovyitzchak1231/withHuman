@@ -16,6 +16,7 @@ import (
 	"github.com/withHumanAI/withHuman/internal/aapdelivery"
 	"github.com/withHumanAI/withHuman/internal/approvalpipeline"
 	"github.com/withHumanAI/withHuman/internal/discord"
+	"github.com/withHumanAI/withHuman/internal/heartbeat"
 	"github.com/withHumanAI/withHuman/internal/orchestration"
 	"github.com/withHumanAI/withHuman/internal/postgres"
 	"github.com/withHumanAI/withHuman/internal/reviewrouting"
@@ -35,6 +36,13 @@ import (
 
 type WorkerOptions struct {
 	Logger *slog.Logger
+	// Version is the release the heartbeat reports.
+	Version string
+	// HeartbeatURL is where the daily installation heartbeat goes; empty
+	// sends none. The open edition's main sets it, the hosted edition
+	// leaves it empty, and an operator turns it off with
+	// WITHHUMAN_TELEMETRY=off. Development builds never send.
+	HeartbeatURL string
 	// Config is the deployment configuration to compose with. Nil loads
 	// it from the environment; the single-process topology supplies one
 	// it derived from its embedded services.
@@ -183,6 +191,7 @@ func RunWorker(ctx context.Context, options WorkerOptions) error {
 			return err
 		}
 	}
+	startHeartbeat(ctx, options, cfg, store, clock, logger)
 	dispatcher := orchestration.NewApprovalWorkflowDispatcher(store, store, orchestrator, clock, logger)
 	go dispatcher.Run(ctx)
 	if cfg.WebhookConfigured() {
@@ -242,4 +251,21 @@ func RunWorker(ctx context.Context, options WorkerOptions) error {
 		return nil
 	}
 	return err
+}
+
+// startHeartbeat runs the installation heartbeat when the edition asks for
+// it, the operator has not turned telemetry off, and the build is a
+// release. Every replica runs one; the database claim sends once a day.
+func startHeartbeat(ctx context.Context, options WorkerOptions, cfg config.Config, store *postgres.Store, clock application.Clock, logger *slog.Logger) {
+	switch {
+	case options.HeartbeatURL == "":
+	case !cfg.Telemetry:
+		logger.Info("telemetry is off; no installation heartbeat is sent")
+	case !heartbeat.ReleaseVersion(options.Version):
+		logger.Info("telemetry skipped for a development build", "version", options.Version)
+	default:
+		logger.Info("telemetry is on: a daily heartbeat sends this installation's random ID and version; set WITHHUMAN_TELEMETRY=off to turn it off",
+			"url", options.HeartbeatURL)
+		go heartbeat.NewReporter(store, clock, logger, options.HeartbeatURL, options.Version).Run(ctx)
+	}
 }

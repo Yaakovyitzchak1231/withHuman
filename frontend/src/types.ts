@@ -1552,6 +1552,26 @@ export type MFAMode = "optional" | "reviewers_required" | "everyone_required";
 export type UnroutedRequestsPolicy = "any_reviewer" | "break_glass_only";
 export type RequestVisibilityPolicy = "all_readers" | "routed_only";
 
+/* The running release and what the last heartbeat said about newer
+ * ones. latest_version and checked_at are null until one is answered. */
+export interface Installation {
+  id: string;
+  version: string;
+  latest_version: string | null;
+  update_available: boolean;
+  advisories: SecurityAdvisory[];
+  checked_at: string | null;
+}
+
+export interface SecurityAdvisory {
+  id: string;
+  summary: string;
+  severity: string;
+  url: string;
+  /* Empty when no release has the fix yet. */
+  fixed_in: string;
+}
+
 /* The organization's approval policy knobs. Durations are Go duration
  * strings ("24h0m0s"); src/app/duration.ts converts them. */
 export interface OrganizationPolicy {

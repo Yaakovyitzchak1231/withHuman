@@ -10,6 +10,7 @@ import { NavItem } from "./nav-item";
 import type { OrganizationPolicyDraft } from "./organization";
 import type { TestStep } from "./pipeline-replay";
 import { type RuntimeConfig, useRuntimeConfig } from "./use-runtime-config";
+import { useUpdateTodos } from "./installation";
 
 /* Extension points an edition's frontend fills before the router
  * renders. Core's screens never link to a route only an edition ships:
@@ -636,13 +637,16 @@ export function ExtensionSettingsNav({ entries }: { entries: SettingsEntry[] }) 
   );
 }
 
-/* Every registered source's items, or null when no edition registered
- * a source and the bell has nothing it could ever say. The sources are
+/* Core's update item and every registered source's items, or null when
+ * the deployment never checks for updates and no edition registered a
+ * source, so the bell has nothing it could ever say. The sources are
  * fixed before the router renders, so calling each hook in a loop keeps
  * the call order stable. */
 export function useTodos(): TodoItem[] | null {
+  const updates = useUpdateTodos();
   const items = extensions.todoSources.flatMap((source) => source());
-  return extensions.todoSources.length === 0 ? null : items;
+  if (updates === null && extensions.todoSources.length === 0) return null;
+  return [...(updates ?? []), ...items];
 }
 
 export function ExtensionBanners() {

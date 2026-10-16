@@ -63,6 +63,7 @@ var (
 	_ application.ToolPresentationRepository        = (*Store)(nil)
 	_ application.TeamEscalationPolicyRepository    = (*Store)(nil)
 	_ application.EscalationRepository              = (*Store)(nil)
+	_ application.InstallationRepository            = (*Store)(nil)
 )
 
 func Open(ctx context.Context, databaseURL string) (*Store, error) {

@@ -45,6 +45,7 @@ import type {
   OnboardingBegin,
   OnboardingOutcome,
   OnboardingSession,
+  Installation,
   OrganizationPolicy,
   Member,
   Principal,
@@ -168,6 +169,9 @@ export const api = {
       /* MCP servers this deployment offers every enrolled agent (the
        * hosted gateway); the CLI registers them at install. */
       agent_mcp_servers: { name: string; url: string; label: string }[];
+      /* The daily heartbeat reports newer releases, so administrators
+       * get the Version page. */
+      update_checks_enabled: boolean;
     }>("/api/runtime-config"),
   bootstrap: (input: Record<string, string>) =>
     request<{ principal: Principal }>("/auth/bootstrap", {
@@ -805,6 +809,7 @@ export const api = {
   organizationAPIKeys: (kind: APIKey["kind"]) => request<{ keys: APIKey[] }>(`${APP_API_BASE}/api_keys?kind=${kind}`),
   revokeAPIKey: (id: string) =>
     request<void>(`${APP_API_BASE}/api_keys/${id}`, { method: "DELETE" }),
+  installation: () => request<Installation>(`${APP_API_BASE}/installation`),
   organizationPolicy: () =>
     request<{ policy: OrganizationPolicy }>(`${APP_API_BASE}/organization/policy`),
   setOrganizationPolicy: (patch: Partial<OrganizationPolicy>) =>

@@ -40,3 +40,36 @@ func TestLoadDefaultsDiscordToDisabled(t *testing.T) {
 		t.Fatalf("Discord configured by default: %v, %v", config.DiscordConfigured(), err)
 	}
 }
+
+// Telemetry is on unless the operator turns it off, by our variable or
+// the cross-tool DO_NOT_TRACK, and a typo stops startup.
+func TestLoadTelemetrySwitch(t *testing.T) {
+	for _, tc := range []struct {
+		telemetry, doNotTrack string
+		want                  bool
+	}{
+		{"", "", true},
+		{"on", "", true},
+		{"off", "", false},
+		{"FALSE", "", false},
+		{"0", "", false},
+		{"", "1", false},
+		{"on", "true", false},
+		{"", "0", true},
+	} {
+		t.Setenv("WITHHUMAN_TELEMETRY", tc.telemetry)
+		t.Setenv("DO_NOT_TRACK", tc.doNotTrack)
+		config, err := Load()
+		if err != nil {
+			t.Fatalf("Load(%q, %q): %v", tc.telemetry, tc.doNotTrack, err)
+		}
+		if config.Telemetry != tc.want {
+			t.Fatalf("Telemetry with WITHHUMAN_TELEMETRY=%q DO_NOT_TRACK=%q = %v, want %v", tc.telemetry, tc.doNotTrack, config.Telemetry, tc.want)
+		}
+	}
+	t.Setenv("DO_NOT_TRACK", "")
+	t.Setenv("WITHHUMAN_TELEMETRY", "nope")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "WITHHUMAN_TELEMETRY") {
+		t.Fatalf("unrecognized value = %v, want an error naming WITHHUMAN_TELEMETRY", err)
+	}
+}

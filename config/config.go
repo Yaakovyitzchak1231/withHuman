@@ -69,6 +69,10 @@ type Config struct {
 	// deployments deliver to public HTTPS only.
 	WebhookAllowInsecure        bool
 	WebhookAllowPrivateNetworks bool
+	// Telemetry lets an edition that reports its installation send the
+	// daily heartbeat. WITHHUMAN_TELEMETRY=off or DO_NOT_TRACK=1 turns it
+	// off.
+	Telemetry bool
 }
 
 // WebhookConfigured reports whether webhook endpoints can be stored and
@@ -135,6 +139,9 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	config.SMTPPort = smtpPort
+	if config.Telemetry, err = envTelemetry(); err != nil {
+		return Config{}, err
+	}
 	if !strings.HasPrefix(config.PublicOrigin, "http://") && !strings.HasPrefix(config.PublicOrigin, "https://") {
 		return Config{}, fmt.Errorf("WITHHUMAN_PUBLIC_ORIGIN must be an absolute HTTP(S) origin")
 	}
@@ -162,6 +169,25 @@ func Load() (Config, error) {
 		}
 	}
 	return config, nil
+}
+
+// envTelemetry is on unless WITHHUMAN_TELEMETRY turns it off or
+// DO_NOT_TRACK (the cross-tool convention) is set. An unrecognized value
+// fails startup rather than guessing which way the operator meant.
+func envTelemetry() (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("DO_NOT_TRACK"))) {
+	case "", "0", "false":
+	default:
+		return false, nil
+	}
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("WITHHUMAN_TELEMETRY"))) {
+	case "", "on", "true", "1":
+		return true, nil
+	case "off", "false", "0":
+		return false, nil
+	default:
+		return false, fmt.Errorf("WITHHUMAN_TELEMETRY must be on or off")
+	}
 }
 
 // envPort reads a TCP port, refusing an unusable value instead of silently

@@ -495,6 +495,20 @@ Examples:
   own read off it, and `Server.PrincipalAuthAdmittingOrganizationKeys`
   is `PrincipalAuth` for an edition management route that admits
   organization keys through a permission naming that holder.
+- The open edition reports itself once a day (`internal/heartbeat`): a
+  random installation ID from the one `installations` row, the version,
+  OS, architecture and deployment kind, nothing else. `cmd/withhuman`
+  sets `WorkerOptions.HeartbeatURL` (sending) and
+  `ServerOptions.UpdateChecks` (the Version settings page and the to-do
+  bell's update item, runtime-config `update_checks_enabled`); other
+  editions leave both unset. `WITHHUMAN_TELEMETRY=off` or `DO_NOT_TRACK=1`
+  (`config.Telemetry`) turns both off, and a version that is not
+  major.minor.patch never sends. Replicas claim each send on the row,
+  once per `application.HeartbeatInterval` or straight after an upgrade;
+  the answer (latest release, advisories) is validated before it is
+  stored, because its advisory links are rendered to administrators.
+  Never add a field to the heartbeat without updating the Updates and
+  telemetry docs page that lists every field.
 - Enterprise SSO, directory sync (SCIM) and verified email domains are
   the hosted edition's line (its `enterprise` package, over the Ory
   Polis connector). Core keeps the generic concept of directory-managed

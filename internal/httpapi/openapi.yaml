@@ -4867,6 +4867,22 @@ paths:
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
+  /api/v1/installation:
+    get:
+      summary: Read the installation's update status
+      operationId: getInstallation
+      x-withhuman-permission: organization.settings.write
+      x-withhuman-credential-kinds: [session, personal_api_key]
+      security: [{ cookieAuth: [] }, { apiKeyAuth: [] }]
+      description: Requires organization.settings.write. The running version, the latest release and the security advisories that affect this version, as the last daily heartbeat reported them. latest_version and checked_at are null until a heartbeat has been answered, which never happens with telemetry turned off.
+      responses:
+        "200":
+          description: The installation's update status
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Installation" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
   /api/v1/tool_presentations:
     get:
       summary: List tool presentations
@@ -6418,6 +6434,30 @@ components:
           type: string
           enum: [all_readers, routed_only]
           description: Who sees a request. all_readers shows every request to everyone holding request.read; routed_only shows readers what was routed to them (directly, through a team, or by being added) plus unrouted requests. Anyone holding request.read.unrouted (owners and auditors) sees everything either way.
+    Installation:
+      type: object
+      additionalProperties: false
+      required: [id, version, latest_version, update_available, advisories, checked_at]
+      properties:
+        id: { type: string, format: uuid, description: The random installation ID the heartbeat reports. }
+        version: { type: string, description: The running version. }
+        latest_version: { type: [string, "null"], description: "The latest release, or null before a heartbeat has been answered." }
+        update_available: { type: boolean, description: Whether latest_version is newer than the running version. }
+        advisories:
+          type: array
+          description: Security advisories that affect the running version.
+          items: { $ref: "#/components/schemas/SecurityAdvisory" }
+        checked_at: { type: [string, "null"], format: date-time, description: When the last heartbeat was answered. }
+    SecurityAdvisory:
+      type: object
+      additionalProperties: false
+      required: [id, summary, severity, url, fixed_in]
+      properties:
+        id: { type: string, description: "The advisory's identifier, such as a GHSA ID." }
+        summary: { type: string }
+        severity: { type: string, description: "low, medium, high or critical." }
+        url: { type: string, format: uri, description: Where the advisory is published. }
+        fixed_in: { type: string, description: "The first release with the fix, or empty when none is released yet." }
     OrganizationPolicyEnvelope:
       type: object
       additionalProperties: false
@@ -8233,7 +8273,7 @@ components:
       type: object
       description: "What the frontend needs to know about this deployment before anyone signs in. An edition adds entries of its own (the hosted edition's signup_enabled, billing_enabled, and the phone and push channel flags); it never changes the ones listed here."
       additionalProperties: true
-      required: [public_origin, version, bootstrap_enabled, custom_permissions_enabled, social_providers, password_login_offers_signup, webhook_enabled, slack_enabled, discord_enabled, agent_mcp_servers]
+      required: [public_origin, version, bootstrap_enabled, custom_permissions_enabled, social_providers, password_login_offers_signup, webhook_enabled, slack_enabled, discord_enabled, agent_mcp_servers, update_checks_enabled]
       properties:
         public_origin: { type: string, format: uri }
         version: { type: string }
@@ -8252,6 +8292,7 @@ components:
           type: array
           description: "MCP servers this deployment offers every enrolled agent (the hosted edition's gateway), which the withhuman CLI registers with each runtime it installs as its own relay, authenticated with the instance credential. Empty in the open edition."
           items: { $ref: "#/components/schemas/AgentMCPServer" }
+        update_checks_enabled: { type: boolean, description: "The deployment's daily heartbeat reports the latest release and security advisories, which administrators read at /api/v1/installation. False in the hosted edition and when the operator turned telemetry off." }
     AgentMCPServer:
       type: object
       additionalProperties: false
