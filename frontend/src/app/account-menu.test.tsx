@@ -52,7 +52,7 @@ describe("account menu", () => {
     await renderMenu();
     fireEvent.click(await screen.findByRole("button", { name: "Account menu" }));
     const link = await screen.findByRole("menuitem", { name: "Join our Discord" });
-    expect(link.getAttribute("href")).toBe("https://discord.gg/fwSryh9p8");
+    expect(link.getAttribute("href")).toBe("https://discord.gg/3QWECnEvrk");
     expect(link.getAttribute("target")).toBe("_blank");
   });
 });

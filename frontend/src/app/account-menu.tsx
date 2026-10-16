@@ -28,7 +28,7 @@ import type { ThemePreference } from "@/ds/theme/theme";
 import { useTheme } from "@/ds/theme/theme-provider";
 import { useSession } from "./principal";
 
-const DISCORD_URL = "https://discord.gg/fwSryh9p8";
+const DISCORD_URL = "https://discord.gg/3QWECnEvrk";
 
 /*
  * The sidebar's account row and its menu. The row is the only thing
