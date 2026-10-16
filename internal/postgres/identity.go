@@ -78,7 +78,7 @@ func (s *Store) GetOrganization(ctx context.Context, input application.GetOrgani
 		return domain.Organization{}, err
 	}
 	return s.scanOrganization(s.pool.QueryRow(ctx, `SELECT id::text, slug, name, status, status_reason,
-        suspended_at, deletion_scheduled_for, onboarding_completed_at, onboarding_finished_at, created_at, updated_at
+        suspended_at, deletion_scheduled_for, onboarding_completed_at, created_at, updated_at
         FROM organizations WHERE id = $1`, input.OrganizationID))
 }
 
@@ -87,7 +87,7 @@ func (s *Store) FindOrganizationBySlug(ctx context.Context, input application.Fi
 		return domain.Organization{}, err
 	}
 	return s.scanOrganization(s.pool.QueryRow(ctx, `SELECT id::text, slug, name, status, status_reason,
-        suspended_at, deletion_scheduled_for, onboarding_completed_at, onboarding_finished_at, created_at, updated_at
+        suspended_at, deletion_scheduled_for, onboarding_completed_at, created_at, updated_at
         FROM organizations WHERE slug = $1`, input.OrganizationSlug))
 }
 
@@ -95,7 +95,7 @@ func (s *Store) scanOrganization(row rowScanner) (domain.Organization, error) {
 	var organization domain.Organization
 	var id, status string
 	err := row.Scan(&id, &organization.Slug, &organization.Name, &status, &organization.StatusReason,
-		&organization.SuspendedAt, &organization.DeletionScheduledFor, &organization.OnboardingCompletedAt, &organization.OnboardingFinishedAt,
+		&organization.SuspendedAt, &organization.DeletionScheduledFor, &organization.OnboardingCompletedAt,
 		&organization.CreatedAt, &organization.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.Organization{}, domain.ErrNotFound

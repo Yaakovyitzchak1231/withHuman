@@ -137,6 +137,9 @@ type OnboardingRepository interface {
 	UpdateOnboardingSession(ctx context.Context, input UpdateOnboardingSessionInput) (domain.OnboardingSession, error)
 	WaitOnboardingSession(ctx context.Context, input WaitOnboardingSessionInput) (domain.OnboardingSession, error)
 	CompleteOnboarding(ctx context.Context, input CompleteOnboardingInput) error
+	// GetSetupProgress reads the checklist items the store can answer
+	// alone: AgentConnected and Tested. RulesWritten is left false.
+	GetSetupProgress(ctx context.Context, input GetSetupProgressInput) (domain.SetupChecklist, error)
 }
 
 // ApprovalRepository is the PostgreSQL product read model and atomic approval

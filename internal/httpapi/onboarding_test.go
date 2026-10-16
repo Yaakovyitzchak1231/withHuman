@@ -162,6 +162,10 @@ func (s *onboardingSessionsStub) CompleteOnboarding(_ context.Context, input app
 	return nil
 }
 
+func (s *onboardingSessionsStub) GetSetupProgress(context.Context, application.GetSetupProgressInput) (domain.SetupChecklist, error) {
+	return domain.SetupChecklist{}, nil
+}
+
 type onboardingClock struct{}
 
 func (onboardingClock) Now() time.Time { return time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC) }

@@ -1212,10 +1212,17 @@ paths:
                   onboarding:
                     type: object
                     description: Whether the product's guided setup should open for this person.
-                    required: [required, skipped, completed_at]
+                    required: [required, checklist, completed_at]
                     properties:
                       required: { type: boolean, example: false, description: "`true` while nobody in the organization has finished or skipped the guided setup and this person has the permissions to run it." }
-                      skipped: { type: boolean, example: false, description: "`true` while the organization skipped the guided setup, nobody has finished it since, and this person has the permissions to run it." }
+                      checklist:
+                        type: [object, "null"]
+                        description: "What the organization has set up, however it was set up. Reported once the guided setup no longer opens on its own, to a person with the permissions to run it; `null` otherwise. The app offers the setup again while any item is `false`."
+                        required: [agent_connected, rules_written, tested]
+                        properties:
+                          agent_connected: { type: boolean, example: true, description: "An active agent has an active instance holding an unrevoked, unexpired credential." }
+                          rules_written: { type: boolean, example: false, description: "The entry pipeline can hold or deny a call instead of approving every one." }
+                          tested: { type: boolean, example: false, description: "A person has decided one of the organization's requests." }
                       completed_at: { type: [string, "null"], format: date-time, description: "When the organization finished or skipped the guided setup. `null` until then." }
         "401": { description: "No session cookie, or the session has expired or been signed out" }
   /api/v1/requests/{id}:

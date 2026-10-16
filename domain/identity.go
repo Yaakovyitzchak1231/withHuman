@@ -125,11 +125,8 @@ type Organization struct {
 	// guided setup; while it is null the product opens on /welcome for
 	// members who hold OnboardingPermissions.
 	OnboardingCompletedAt *time.Time `json:"onboarding_completed_at,omitempty"`
-	// OnboardingFinishedAt is set once a person finishes it; an
-	// organization that only skipped is offered the setup again.
-	OnboardingFinishedAt *time.Time `json:"onboarding_finished_at,omitempty"`
-	CreatedAt            time.Time  `json:"created_at"`
-	UpdatedAt            time.Time  `json:"updated_at"`
+	CreatedAt             time.Time  `json:"created_at"`
+	UpdatedAt             time.Time  `json:"updated_at"`
 }
 
 type Membership struct {

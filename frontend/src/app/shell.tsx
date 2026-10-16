@@ -126,7 +126,7 @@ export function Shell({
   /* What the person should do, under the bell in the sidebar header;
    * null when no edition can ever list anything, and then no bell. */
   const todos = useTodos();
-  /* A skipped setup is offered again from a card at the sidebar's foot. */
+  /* An unfinished setup is offered again from a card at the sidebar's foot. */
   const setupReminder = useSetupReminder();
   const attention = (todos !== null && todos.length > 0) || setupReminder.visible;
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -529,7 +529,7 @@ export function Shell({
           {!collapsed ? (
             <div className="mt-auto flex flex-col gap-2 px-2 pb-2" style={{ minWidth: MIN_WIDTH }}>
               {setupReminder.visible && !inSettings ? (
-                <SetupReminderCard onDismiss={setupReminder.dismiss} />
+                <SetupReminderCard items={setupReminder.items} onDismiss={setupReminder.dismiss} />
               ) : null}
               <div>
                 <DocsLink key={docs.href} {...docs} />

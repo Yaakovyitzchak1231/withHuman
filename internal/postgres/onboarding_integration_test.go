@@ -164,17 +164,16 @@ func TestOnboardingRepositoryAgainstRealPostgres(t *testing.T) {
 		t.Fatalf("closed session: %v %+v", err, closed)
 	}
 	organization, err = store.GetOrganization(ctx, application.GetOrganizationInput{OrganizationID: orgID})
-	if err != nil || organization.OnboardingCompletedAt == nil || organization.OnboardingFinishedAt != nil {
-		t.Fatalf("organization should be marked onboarded but not finished: %v %+v", err, organization)
+	if err != nil || organization.OnboardingCompletedAt == nil {
+		t.Fatalf("organization should be marked onboarded: %v %+v", err, organization)
 	}
-	// Finishing after a skip marks the organization finished and keeps
-	// the first completion.
+	// Finishing after a skip keeps the first completion.
 	if err := store.CompleteOnboarding(ctx, application.CompleteOnboardingInput{OrganizationID: orgID, MembershipID: membershipID, Outcome: domain.OnboardingFinished, Now: now.Add(10 * time.Second)}); err != nil {
 		t.Fatalf("finish after skip: %v", err)
 	}
 	finished, err := store.GetOrganization(ctx, application.GetOrganizationInput{OrganizationID: orgID})
-	if err != nil || finished.OnboardingFinishedAt == nil || !finished.OnboardingCompletedAt.Equal(*organization.OnboardingCompletedAt) {
-		t.Fatalf("organization should be finished: %v %+v", err, finished)
+	if err != nil || !finished.OnboardingCompletedAt.Equal(*organization.OnboardingCompletedAt) {
+		t.Fatalf("finishing should keep the first completion: %v %+v", err, finished)
 	}
 	if _, err := store.UpdateOnboardingSession(ctx, application.UpdateOnboardingSessionInput{
 		OrganizationID: orgID, SessionID: second, Patch: domain.OnboardingSessionPatch{ClearLastError: true}, Now: now.Add(6 * time.Second),

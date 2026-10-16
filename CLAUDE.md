@@ -1092,11 +1092,16 @@ Examples:
   agent's job, through the skills and the MCP server.
   `organizations.onboarding_completed_at` drives the `/welcome` redirect
   through `/me`'s `onboarding.required`; finishing or skipping sets it.
-  Only finishing sets `onboarding_finished_at`: while an organization
-  has skipped and nobody has finished since, `/me`'s `onboarding.skipped`
-  puts a Finish setup card at the sidebar's foot (`app/setup-reminder.tsx`)
-  for the people who can run the setup, hidden per browser with its
-  close button.
+  After that, `/me`'s `onboarding.checklist` (for the people who can run
+  the setup, `onboarding.Service.Checklist`) says what the organization
+  has set up, however it was set up: `agent_connected` (a live instance
+  of an active agent), `rules_written` (the active entry pipeline,
+  through its delegates, can hold or deny a call; the seeded pipeline and
+  the setup's starting branches approve every call, so they do not
+  count) and `tested` (a person decided a request). While an item is
+  left, a Finish setup card at the sidebar's foot
+  (`app/setup-reminder.tsx`) lists them and opens `/welcome`; it is
+  hidden per browser with its close button.
   No adapter policy exists: every call an adapter or the gateway
   intercepts becomes a request, and the pipeline decides. The CLI checks
   a saved instance credential against `GET /api/v1/agent_instances/self`

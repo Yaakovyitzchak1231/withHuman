@@ -311,8 +311,7 @@ func (s *Store) WaitOnboardingSession(ctx context.Context, input application.Wai
 }
 
 // CompleteOnboarding closes the member's open session with the outcome
-// and marks the organization done the first time, and finished the
-// first time someone finishes. Finished requires the
+// and marks the organization done the first time. Finished requires the
 // open session, when one exists, to have reached tested.
 func (s *Store) CompleteOnboarding(ctx context.Context, input application.CompleteOnboardingInput) error {
 	if err := input.Validate(); err != nil {
@@ -344,10 +343,8 @@ func (s *Store) CompleteOnboarding(ctx context.Context, input application.Comple
 			return err
 		}
 	}
-	if _, err := tx.Exec(ctx, `UPDATE organizations SET onboarding_completed_at = COALESCE(onboarding_completed_at, $2),
-		onboarding_finished_at = CASE WHEN $3 THEN COALESCE(onboarding_finished_at, $2) ELSE onboarding_finished_at END,
-		updated_at = $2
-		WHERE id = $1`, input.OrganizationID, input.Now, terminal == domain.OnboardingCompleted); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE organizations SET onboarding_completed_at = COALESCE(onboarding_completed_at, $2), updated_at = $2
+		WHERE id = $1`, input.OrganizationID, input.Now); err != nil {
 		return err
 	}
 	actor := input.ActorMembershipID
@@ -364,4 +361,21 @@ func (s *Store) CompleteOnboarding(ctx context.Context, input application.Comple
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// GetSetupProgress answers the setup checklist's agent and test items.
+func (s *Store) GetSetupProgress(ctx context.Context, input application.GetSetupProgressInput) (domain.SetupChecklist, error) {
+	if err := input.Validate(); err != nil {
+		return domain.SetupChecklist{}, err
+	}
+	var checklist domain.SetupChecklist
+	err := s.pool.QueryRow(ctx, `SELECT
+		EXISTS (SELECT 1 FROM agent_instances ai
+			JOIN agents a ON a.id = ai.agent_id AND a.organization_id = ai.organization_id
+			WHERE ai.organization_id = $1 AND ai.status = 'active' AND a.status = 'active'
+			AND EXISTS (SELECT 1 FROM agent_credentials c
+				WHERE c.agent_instance_id = ai.id AND c.revoked_at IS NULL AND c.expires_at > $2)),
+		EXISTS (SELECT 1 FROM decisions d WHERE d.organization_id = $1 AND d.source = 'human')`,
+		input.OrganizationID, input.Now).Scan(&checklist.AgentConnected, &checklist.Tested)
+	return checklist, err
 }

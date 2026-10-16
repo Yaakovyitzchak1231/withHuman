@@ -366,3 +366,22 @@ func (s OnboardingSession) MarshalJSON() ([]byte, error) {
 	}
 	return json.Marshal(copy)
 }
+
+// SetupChecklist is what an organization has set up, whether or not the
+// guided setup did it. The sidebar's Finish setup card shows until all
+// three are true.
+type SetupChecklist struct {
+	// AgentConnected: an active agent has an active instance holding an
+	// unrevoked, unexpired credential.
+	AgentConnected bool `json:"agent_connected"`
+	// RulesWritten: the entry pipeline can hold or deny a call instead of
+	// approving every one.
+	RulesWritten bool `json:"rules_written"`
+	// Tested: a person has decided a request.
+	Tested bool `json:"tested"`
+}
+
+// Complete reports whether nothing on the checklist is left.
+func (c SetupChecklist) Complete() bool {
+	return c.AgentConnected && c.RulesWritten && c.Tested
+}

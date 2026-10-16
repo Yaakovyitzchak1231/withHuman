@@ -32,6 +32,8 @@ type memorySessions struct {
 	codes    map[string]domain.ID // hex of setup code hash -> session
 	secrets  map[domain.ID]string // session -> hex of credential hash
 	complete []application.CompleteOnboardingInput
+	// progress answers the checklist's agent and test items.
+	progress domain.SetupChecklist
 }
 
 func newMemorySessions() *memorySessions {
@@ -187,6 +189,13 @@ func (m *memorySessions) WaitOnboardingSession(ctx context.Context, input applic
 	return m.GetOnboardingSession(ctx, application.GetOnboardingSessionInput{OrganizationID: input.OrganizationID, SessionID: input.SessionID})
 }
 
+func (m *memorySessions) GetSetupProgress(_ context.Context, input application.GetSetupProgressInput) (domain.SetupChecklist, error) {
+	if err := input.Validate(); err != nil {
+		return domain.SetupChecklist{}, err
+	}
+	return m.progress, nil
+}
+
 func (m *memorySessions) CompleteOnboarding(_ context.Context, input application.CompleteOnboardingInput) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -212,8 +221,8 @@ type identityStub struct {
 	application.IdentityRepository
 	membership domain.Membership
 	user       domain.User
-	// The organization's setup stamps.
-	completedAt, finishedAt *time.Time
+	// The organization's setup stamp.
+	completedAt *time.Time
 }
 
 // rolesStub answers the delegated principal's grant load with whatever
@@ -229,7 +238,7 @@ func (s *rolesStub) LoadGrants(context.Context, application.LoadGrantsInput) ([]
 
 func (s *identityStub) GetOrganization(_ context.Context, input application.GetOrganizationInput) (domain.Organization, error) {
 	return domain.Organization{ID: input.OrganizationID, Status: domain.OrganizationActive,
-		OnboardingCompletedAt: s.completedAt, OnboardingFinishedAt: s.finishedAt}, nil
+		OnboardingCompletedAt: s.completedAt}, nil
 }
 
 func (s *identityStub) GetUser(context.Context, application.GetUserInput) (domain.User, error) {
@@ -913,26 +922,79 @@ func TestAuthorization(t *testing.T) {
 	}
 }
 
-func TestStatusOffersASkippedSetupAgain(t *testing.T) {
+func TestStatusReportsTheChecklistOnceTheSetupIsClosed(t *testing.T) {
 	ctx := context.Background()
 	h := newHarness()
-	identities := h.identities
-	at := time.Date(2026, 9, 8, 10, 0, 0, 0, time.UTC)
+	h.pipelines.active[EntryPipelineKey] = activeRevision(*approvalblock.DefineOutcome("approve-every-call", approvalblock.Approve))
 
-	identities.completedAt = &at
 	status, err := h.service.Status(ctx, h.principal)
-	if err != nil || status.Required || !status.Skipped {
-		t.Fatalf("skipped setup: %v %+v", err, status)
+	if err != nil || !status.Required || status.Checklist != nil {
+		t.Fatalf("an open setup opens on /welcome and has no checklist: %v %+v", err, status)
+	}
+
+	at := time.Date(2026, 9, 8, 10, 0, 0, 0, time.UTC)
+	h.identities.completedAt = &at
+	status, err = h.service.Status(ctx, h.principal)
+	if err != nil || status.Required || status.Checklist == nil || *status.Checklist != (domain.SetupChecklist{}) {
+		t.Fatalf("a skipped setup with nothing set up: %v %+v", err, status)
 	}
 	reviewer := h.principal.WithGrants(domain.GrantsForRoles([]domain.Role{domain.RoleReviewer}))
-	if status, err := h.service.Status(ctx, reviewer); err != nil || status.Skipped {
+	if status, err := h.service.Status(ctx, reviewer); err != nil || status.Checklist != nil {
 		t.Fatalf("a reviewer cannot run the setup, so it is not offered: %v %+v", err, status)
 	}
 
-	identities.finishedAt = &at
-	if status, err := h.service.Status(ctx, h.principal); err != nil || status.Required || status.Skipped {
-		t.Fatalf("finished setup: %v %+v", err, status)
+	h.sessions.progress = domain.SetupChecklist{AgentConnected: true, Tested: true}
+	h.pipelines.active[EntryPipelineKey] = activeRevision(*approvalblock.DefineOutcome("ask", approvalblock.Human))
+	status, err = h.service.Status(ctx, h.principal)
+	if err != nil || status.Checklist == nil || !status.Checklist.Complete() {
+		t.Fatalf("everything set up, whether or not the setup finished: %v %+v", err, status)
 	}
+}
+
+func TestRulesAreWrittenOnceTheEntryPipelineCanHoldACall(t *testing.T) {
+	approve := *approvalblock.DefineOutcome("approve-every-call", approvalblock.Approve)
+	provisioned := EntryBlocks([]approvalblock.Definition{approve},
+		RuntimeBranch("claude-code", StartingBlocks("claude-code", nil, "notify-me"), "notify-me"))
+	gated := EntryBlocks([]approvalblock.Definition{approve},
+		RuntimeBranch("claude-code", StartingBlocks("claude-code", []string{"Bash"}, "notify-me"), "notify-me"))
+	delegate := *approvalblock.DefineDelegate("to-payments", "payments",
+		approvalblock.When(approvalblock.Field("/agent/slug").Equals("billing")))
+	for _, test := range []struct {
+		name     string
+		entry    []approvalblock.Definition
+		payments []approvalblock.Definition
+		written  bool
+	}{
+		{name: "the seeded entry pipeline", entry: []approvalblock.Definition{approve}},
+		{name: "the setup's starting branches", entry: provisioned},
+		{name: "a tool picked for approval", entry: gated, written: true},
+		{name: "a deny rule", entry: []approvalblock.Definition{*approvalblock.DefineOutcome("refuse", approvalblock.Deny)}, written: true},
+		{name: "no block decides", entry: []approvalblock.Definition{}, written: true},
+		{name: "a webhook", entry: []approvalblock.Definition{*approvalblock.DefineWebhook("ask-service"), approve}, written: true},
+		{name: "a delegate that approves", entry: []approvalblock.Definition{delegate, approve}, payments: []approvalblock.Definition{approve}},
+		{name: "a delegate that holds calls", entry: []approvalblock.Definition{delegate, approve}, payments: []approvalblock.Definition{}, written: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			h := newHarness()
+			h.pipelines.active[EntryPipelineKey] = activeRevision(test.entry...)
+			if test.payments != nil {
+				h.pipelines.active["payments"] = activeRevision(test.payments...)
+			}
+			checklist, err := h.service.Checklist(context.Background(), h.principal)
+			if err != nil || checklist.RulesWritten != test.written {
+				t.Fatalf("rules written = %v, want %v (%v)", checklist.RulesWritten, test.written, err)
+			}
+		})
+	}
+}
+
+// activeRevision is an active revision holding blocks.
+func activeRevision(blocks ...approvalblock.Definition) approvalpipeline.PipelineRevision {
+	revision := approvalpipeline.PipelineRevision{Revision: domain.RequestApprovalPipelineRevision{Revision: 2, IsActive: true}}
+	for _, block := range blocks {
+		revision.Blocks = append(revision.Blocks, approvalpipeline.PipelineBlock{Definition: block})
+	}
+	return revision
 }
 
 func TestExpiredSessionRefusesWrites(t *testing.T) {

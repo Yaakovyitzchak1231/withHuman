@@ -260,9 +260,10 @@ type Status struct {
 	// Required while nobody has finished or skipped the setup and the
 	// person can run it: the product opens on /welcome.
 	Required bool
-	// Skipped while the setup was skipped, nobody has finished it since,
-	// and the person can run it: the product offers it again.
-	Skipped     bool
+	// Checklist is what the organization has set up, for a person who can
+	// run the setup once it no longer opens on its own; nil otherwise.
+	// The product offers the setup again until every item is done.
+	Checklist   *domain.SetupChecklist
 	CompletedAt *time.Time
 }
 
@@ -273,11 +274,18 @@ func (s *Service) Status(ctx context.Context, principal domain.Principal) (Statu
 		return Status{}, err
 	}
 	authorized := Authorized(principal)
-	return Status{
+	status := Status{
 		Required:    organization.OnboardingCompletedAt == nil && authorized,
-		Skipped:     organization.OnboardingCompletedAt != nil && organization.OnboardingFinishedAt == nil && authorized,
 		CompletedAt: organization.OnboardingCompletedAt,
-	}, nil
+	}
+	if authorized && !status.Required {
+		checklist, err := s.Checklist(ctx, principal)
+		if err != nil {
+			return Status{}, err
+		}
+		status.Checklist = &checklist
+	}
+	return status, nil
 }
 
 // SelectAgents records which detected runtimes the person wants
@@ -448,13 +456,9 @@ func (s *Service) readEntry(ctx context.Context, principal domain.Principal) (en
 	if err != nil {
 		return entryRevision{}, err
 	}
-	blocks := make([]approvalblock.Definition, len(active.Blocks))
-	for index, block := range active.Blocks {
-		blocks[index] = block.Definition
-	}
 	return entryRevision{
 		revision: active.Revision.Revision, name: active.Revision.Name,
-		defaultPath: active.Revision.DefaultEscalationPath, askOwner: active.Revision.DefaultAskAgentOwner, blocks: blocks,
+		defaultPath: active.Revision.DefaultEscalationPath, askOwner: active.Revision.DefaultAskAgentOwner, blocks: storedDefinitions(active.Blocks),
 	}, nil
 }
 
