@@ -1890,6 +1890,9 @@ func (a *API) installFrontend(router *gin.Engine) {
 			return
 		}
 		c.Header("Cache-Control", "no-cache")
+		// The shell is the same empty page at every product path and has
+		// nothing for a search engine to index.
+		c.Header("X-Robots-Tag", "noindex")
 		c.Data(http.StatusOK, "text/html; charset=utf-8", contents)
 	})
 }
