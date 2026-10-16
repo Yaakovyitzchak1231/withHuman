@@ -10,7 +10,7 @@ import { NavItem } from "./nav-item";
 import type { OrganizationPolicyDraft } from "./organization";
 import type { TestStep } from "./pipeline-replay";
 import { type RuntimeConfig, useRuntimeConfig } from "./use-runtime-config";
-import { useUpdateTodos } from "./installation";
+import { useUpdateTodos } from "./update-todos";
 
 /* Extension points an edition's frontend fills before the router
  * renders. Core's screens never link to a route only an edition ships:
