@@ -102,6 +102,8 @@ import { TestRequestDialog } from "./test-request-dialog";
 export { TestRequestDialog } from "./test-request-dialog";
 
 const FIXED_FIELD_PATHS = new Set(FIXED_FIELDS.map((field) => field.path));
+/* The test sample as the dialogs first show it, before anyone edits it. */
+const PLACEHOLDER_SAMPLE = JSON.stringify(defaultSample(), null, 2);
 
 /*
  * One pipeline, viewed or edited in place. The rail keeps the same
@@ -405,6 +407,9 @@ export function PipelineViewScreen({
   const offered = usePipelineSuggestions() ?? NO_SUGGESTIONS;
   const [sampleDraft, setSampleText] = useState<string | null>(null);
   const sampleText = sampleDraft ?? JSON.stringify(offered.sample ?? defaultSample(), null, 2);
+  /* The placeholder sample names a made-up tool and arguments, so only a
+   * real request or a sample someone wrote feeds the editors. */
+  const sampleForSuggestions = sampleText === PLACEHOLDER_SAMPLE ? "" : sampleText;
   const settled = test !== null && cursor >= test.steps.length;
 
   /* Structural edits, drag reordering, and the confirmation before a
@@ -460,13 +465,13 @@ export function PipelineViewScreen({
   const suggestions = useMemo(() => [...new Set([
     ...offered.argumentPaths,
     ...conditionFieldPaths(savedConditions),
-    ...suggestPaths(sampleText),
-  ])].sort((a, b) => Number(FIXED_FIELD_PATHS.has(b)) - Number(FIXED_FIELD_PATHS.has(a))), [offered.argumentPaths, savedConditions, sampleText]);
+    ...suggestPaths(sampleForSuggestions),
+  ])].sort((a, b) => Number(FIXED_FIELD_PATHS.has(b)) - Number(FIXED_FIELD_PATHS.has(a))), [offered.argumentPaths, savedConditions, sampleForSuggestions]);
   const valueSuggestions = useMemo(() => mergeValueSuggestions(
     offered.valueSuggestions,
-    sampleValueSuggestions(sampleText),
+    sampleValueSuggestions(sampleForSuggestions),
     conditionValueSuggestions(savedConditions),
-  ), [offered.valueSuggestions, sampleText, savedConditions]);
+  ), [offered.valueSuggestions, sampleForSuggestions, savedConditions]);
   const railBlocks = editing ? (jsonDraft?.blocks ?? draft) : viewBlocks;
   const reachability = pipelineReachability(railBlocks);
 
