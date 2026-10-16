@@ -28,6 +28,7 @@ func (a *API) installRoutingRoutes(router *gin.RouterGroup) {
 	a.handle(router, http.MethodPost, "/escalation-paths/:path_key/revisions", write, a.createEscalationPathRevision)
 	a.handle(router, http.MethodGet, "/escalation-paths/:path_key/revisions", read, a.listEscalationPathRevisions)
 	a.handle(router, http.MethodGet, "/escalation-paths/:path_key/revisions/:revision", read, a.getEscalationPathRevision)
+	a.handle(router, http.MethodPut, "/escalation-paths/:path_key/revisions/:revision", write, a.updateEscalationPathRevision)
 	a.handle(router, http.MethodPost, "/escalation-paths/:path_key/revisions/:revision/activate", activate, a.activateEscalationPathRevision)
 	a.handle(router, http.MethodGet, "/escalation-paths/:path_key/uses", read, a.listEscalationPathUses)
 }
@@ -71,6 +72,7 @@ type escalationPathRevisionSummaryResponse struct {
 	Name             string     `json:"name"`
 	CreatedByActorID domain.ID  `json:"created_by_actor_id"`
 	CreatedAt        time.Time  `json:"created_at"`
+	ActivatedAt      *time.Time `json:"activated_at,omitempty"`
 	ArchivedAt       *time.Time `json:"archived_at,omitempty"`
 }
 
@@ -123,7 +125,7 @@ func newEscalationPathRevisionSummaryResponse(revision domain.EscalationPathRevi
 		ID: revision.ID, PathKey: revision.PathKey, Revision: revision.Revision,
 		IsActive: revision.IsActive, Name: revision.Name,
 		CreatedByActorID: revision.CreatedByActorID, CreatedAt: revision.CreatedAt,
-		ArchivedAt: revision.ArchivedAt,
+		ActivatedAt: revision.ActivatedAt, ArchivedAt: revision.ArchivedAt,
 	}
 }
 
@@ -369,6 +371,31 @@ func (a *API) createEscalationPathRevision(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusCreated, newEscalationPathRevisionResponse(revision))
+}
+
+// updateEscalationPathRevision replaces a draft revision's name and
+// document in place with the same body a new revision takes.
+func (a *API) updateEscalationPathRevision(c *gin.Context) {
+	revisionNumber, err := parsePipelineRevision(c.Param("revision"))
+	if err != nil {
+		a.writeError(c, err)
+		return
+	}
+	var request escalationPathDocumentRequest
+	if !bindStrict(c, &request) {
+		return
+	}
+	if request.Nodes == nil {
+		a.writeError(c, fmt.Errorf("nodes are required: %w", domain.ErrInvalid))
+		return
+	}
+	revision, err := a.routing.UpdatePathRevision(c.Request.Context(), currentPrincipal(c),
+		c.Param("path_key"), revisionNumber, request.Name, request.document())
+	if err != nil {
+		a.writeError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, newEscalationPathRevisionResponse(revision))
 }
 
 // archiveEscalationPath archives the whole path; the page's Archive

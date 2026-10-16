@@ -73,8 +73,8 @@ func (input CreateRequestApprovalPipelineInput) Validate() error {
 	return CreateRequestApprovalPipelineRevisionInput(input).Validate()
 }
 
-// CreateRequestApprovalPipelineRevisionInput appends the next immutable
-// revision of a live pipeline. Name is the pipeline's display name as of
+// CreateRequestApprovalPipelineRevisionInput appends the next revision of
+// a live pipeline, as a draft. Name is the pipeline's display name as of
 // this revision.
 type CreateRequestApprovalPipelineRevisionInput struct {
 	ID                    domain.ID
@@ -100,12 +100,46 @@ func (input CreateRequestApprovalPipelineRevisionInput) Validate() error {
 	}); err != nil {
 		return err
 	}
-	if len(input.Blocks) > maximumRequestApprovalPipelineBlocks {
+	return validPipelineBlocks(input.Blocks)
+}
+
+// UpdateRequestApprovalPipelineRevisionInput replaces the content of a
+// draft revision, one that was never active and is not archived, keeping
+// its number. Anything else refuses with domain.ErrRevisionNotDraft.
+type UpdateRequestApprovalPipelineRevisionInput struct {
+	OrganizationID        domain.ID
+	PipelineKey           string
+	Revision              int64
+	Name                  string
+	Blocks                []RequestApprovalBlockSnapshotInput
+	DefaultEscalationPath string
+	DefaultAskAgentOwner  bool
+	ActorID               domain.ID
+	Now                   time.Time
+}
+
+func (input UpdateRequestApprovalPipelineRevisionInput) Validate() error {
+	if err := firstError([]error{
+		requiredID("organization ID", input.OrganizationID),
+		validPipelineKey(input.PipelineKey),
+		positiveRevision(input.Revision),
+		validPipelineName(input.Name),
+		validOptionalEscalationPathKey(input.DefaultEscalationPath),
+		requiredID("actor ID", input.ActorID),
+		requiredTime("current time", input.Now),
+	}); err != nil {
+		return err
+	}
+	return validPipelineBlocks(input.Blocks)
+}
+
+func validPipelineBlocks(blocks []RequestApprovalBlockSnapshotInput) error {
+	if len(blocks) > maximumRequestApprovalPipelineBlocks {
 		return invalidField("request approval pipeline blocks", "must contain at most 1000 blocks")
 	}
-	seenIDs := make(map[domain.ID]struct{}, len(input.Blocks))
-	seenKeys := make(map[string]struct{}, len(input.Blocks))
-	for _, block := range input.Blocks {
+	seenIDs := make(map[domain.ID]struct{}, len(blocks))
+	seenKeys := make(map[string]struct{}, len(blocks))
+	for _, block := range blocks {
 		if err := block.Validate(); err != nil {
 			return err
 		}

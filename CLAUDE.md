@@ -42,7 +42,8 @@ own.
   anatomy of a component that also carries a label (toast, timeline rail).
   The one dot that is not a status is `IconButton`'s `attention` mark
   (the to-do bell, and the collapsed sidebar's way back while the bell
-  has items): it says something behind the control wants the person,
+  has items or the Finish setup card is showing): it says something
+  behind the control wants the person,
   and the control's label says the same in words.
   The review queue shows no connection state: once a snapshot has loaded,
   a failed refresh or a dropped stream leaves it on screen without a
@@ -402,7 +403,13 @@ Examples:
   client and device context supplied by an assertion-based native login. A wrong password or unknown
   email is 401 `invalid_credentials` (`authn.ErrInvalidCredentials`,
   still an `ErrUnauthenticated`), so the sign-in form can say so instead
-  of reporting an expired session. Whether an organization signs in
+  of reporting an expired session. A refused password for an email no
+  active user has is handed to the edition's `authn.SignupOffer`
+  (`Service.RegisterSignupOffer`; the hosted edition mails the address a
+  link to create an account). The answer stays `invalid_credentials`
+  either way, so the form never says which emails have accounts, and
+  runtime-config's `password_login_offers_signup` lets the form point
+  to the inbox in every refusal. Whether an organization signs in
   only through an external method is the edition's say, asked at every
   login-shaped door through `authn.LoginPolicy`
   (`Service.RegisterLoginPolicy`): `RequiresExternalLogin` (a password or
@@ -504,6 +511,20 @@ Examples:
   own read off it, and `Server.PrincipalAuthAdmittingOrganizationKeys`
   is `PrincipalAuth` for an edition management route that admits
   organization keys through a permission naming that holder.
+- The open edition reports itself once a day (`internal/heartbeat`): a
+  random installation ID from the one `installations` row, the version,
+  OS, architecture and deployment kind, nothing else. `cmd/withhuman`
+  sets `WorkerOptions.HeartbeatURL` (sending) and
+  `ServerOptions.UpdateChecks` (the Version settings page and the to-do
+  bell's update item, runtime-config `update_checks_enabled`); other
+  editions leave both unset. `WITHHUMAN_TELEMETRY=off` or `DO_NOT_TRACK=1`
+  (`config.Telemetry`) turns both off, and a version that is not
+  major.minor.patch never sends. Replicas claim each send on the row,
+  once per `application.HeartbeatInterval` or straight after an upgrade;
+  the answer (latest release, advisories) is validated before it is
+  stored, because its advisory links are rendered to administrators.
+  Never add a field to the heartbeat without updating the Updates and
+  telemetry docs page that lists every field.
 - Enterprise SSO, directory sync (SCIM) and verified email domains are
   the hosted edition's line (its `enterprise` package, over the Ory
   Polis connector). Core keeps the generic concept of directory-managed
@@ -681,9 +702,15 @@ Examples:
 - Pipelines are keyed objects:
   `request_approval_pipelines.pipeline_key` (the agent slug pattern,
   chosen once, never reused) with a `name` on every revision (renaming is
-  a revision), append-only numbered revisions, `default_escalation_path`,
+  a revision), numbered revisions, `default_escalation_path`,
   and exactly one active revision per live key at all times (a deferred
-  constraint trigger refuses leaving a key without an active row). Every
+  constraint trigger refuses leaving a key without an active row). A
+  revision that was never active is a draft and changes in place
+  (`PUT .../revisions/{n}`, the create body, keeping its number); its
+  first activation stamps `activated_at` (the table trigger does it) and
+  freezes it for good, 409 `revision_not_draft` after that. Escalation
+  paths, webhook endpoints and team escalation policies follow the same
+  draft rule. Every
   organization has the reserved `entry` pipeline (`domain.EntryPipelineKey`,
   seeded active in the activation transaction by `ensureEntryPipeline`
   with one outcome block, `approve-every-call`, so an agent connected
@@ -838,9 +865,10 @@ Examples:
   `evaluated` event carries `delivery` evidence (endpoint key and
   revision, host, status, latency, the endpoint's reason) and never a
   body or the secret. Endpoints are revisioned exactly like escalation
-  paths: `webhook_endpoint_revisions` holds append-only numbered
-  revisions of a name and URL per key with at most one active
-  (`is_active` the only mutable field, advisory lock
+  paths: `webhook_endpoint_revisions` holds numbered revisions of a
+  name and URL per key with at most one active (a draft's name and URL
+  change in place until its first activation, then `is_active` is the
+  only mutable field, advisory lock
   `webhook_endpoint:<org>:<key>`), and `webhook_endpoint_secrets` holds
   the key's one signing secret, sealed with `internal/secrets` under
   `WITHHUMAN_SECRETS_KEY` and bound to `(organization_id, endpoint_key)`,
@@ -1080,6 +1108,11 @@ Examples:
   agent's job, through the skills and the MCP server.
   `organizations.onboarding_completed_at` drives the `/welcome` redirect
   through `/me`'s `onboarding.required`; finishing or skipping sets it.
+  Only finishing sets `onboarding_finished_at`: while an organization
+  has skipped and nobody has finished since, `/me`'s `onboarding.skipped`
+  puts a Finish setup card at the sidebar's foot (`app/setup-reminder.tsx`)
+  for the people who can run the setup, hidden per browser with its
+  close button.
   No adapter policy exists: every call an adapter or the gateway
   intercepts becomes a request, and the pipeline decides. The CLI checks
   a saved instance credential against `GET /api/v1/agent_instances/self`

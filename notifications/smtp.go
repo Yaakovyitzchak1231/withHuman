@@ -132,6 +132,8 @@ func (c *SMTPChannel) SendTransactional(ctx context.Context, input application.S
 		return c.send(contactVerificationMessage(input.Message, input.Address))
 	case application.TransactionalSignupVerification:
 		return c.send(signupVerificationMessage(input.Message, input.Address))
+	case application.TransactionalSignupOffer:
+		return c.send(signupOfferMessage(input.Message, input.Address))
 	case application.TransactionalPasswordReset:
 		return c.send(passwordResetMessage(input.Message, input.Address))
 	default:

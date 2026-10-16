@@ -268,6 +268,11 @@ const (
 	// organization exists (design doc 07). Core renders it so the hosted
 	// module never grows a parallel email path.
 	TransactionalSignupVerification TransactionalKind = "signup_verification"
+	// TransactionalSignupOffer answers a password login for an address
+	// with no account: the link creates one, and opening it proves the
+	// address the way a signup verification does. It names no
+	// organization, since the person names it after opening the link.
+	TransactionalSignupOffer TransactionalKind = "signup_offer"
 	// TransactionalPasswordReset carries the single-use link that sets a
 	// new password. It goes only to the address on the account.
 	TransactionalPasswordReset TransactionalKind = "password_reset"
@@ -290,7 +295,7 @@ type TransactionalMessage struct {
 	OrganizationID   domain.ID
 	OrganizationName string
 	InviteURL        string
-	// VerifyURL is the signup verification link.
+	// VerifyURL is the signup verification or signup offer link.
 	VerifyURL string
 	// ResetURL is the password reset link.
 	ResetURL         string
@@ -315,6 +320,11 @@ func (message TransactionalMessage) Validate() error {
 	case TransactionalSignupVerification:
 		return firstError([]error{
 			requiredString("organization name", message.OrganizationName),
+			requiredString("verify URL", message.VerifyURL),
+			requiredTime("signup expiry time", message.ExpiresAt),
+		})
+	case TransactionalSignupOffer:
+		return firstError([]error{
 			requiredString("verify URL", message.VerifyURL),
 			requiredTime("signup expiry time", message.ExpiresAt),
 		})

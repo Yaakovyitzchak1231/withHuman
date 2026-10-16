@@ -45,6 +45,7 @@ import type {
   OnboardingBegin,
   OnboardingOutcome,
   OnboardingSession,
+  Installation,
   OrganizationPolicy,
   Member,
   Principal,
@@ -161,10 +162,16 @@ export const api = {
       slack_enabled: boolean;
       discord_enabled: boolean;
       social_providers: SocialProvider[];
+      /* A refused password login for an email without an account mails
+       * the address a link to create one. */
+      password_login_offers_signup: boolean;
       cli_download_url: string;
       /* MCP servers this deployment offers every enrolled agent (the
        * hosted gateway); the CLI registers them at install. */
       agent_mcp_servers: { name: string; url: string; label: string }[];
+      /* The daily heartbeat reports newer releases, so administrators
+       * get the Version page. */
+      update_checks_enabled: boolean;
     }>("/api/runtime-config"),
   bootstrap: (input: Record<string, string>) =>
     request<{ principal: Principal }>("/auth/bootstrap", {
@@ -224,6 +231,13 @@ export const api = {
     ),
   socialContinue: () =>
     request<LoginResponse>("/auth/social/continue", { method: "POST" }),
+  /* Founds the organization a continue answered organization_required
+   * for, with the identity the provider already verified. */
+  socialFoundOrganization: (organizationName: string) =>
+    request<LoginResponse>("/auth/social/organization", {
+      method: "POST",
+      body: JSON.stringify({ organization_name: organizationName }),
+    }),
   /* One layer of the review queue: what the reader was told about, what
    * they may decide, or everything they may see. */
   approvals: (scope: QueueScope) =>
@@ -430,6 +444,17 @@ export const api = {
       `${APP_API_BASE}/webhook_endpoints/${encodeURIComponent(endpointKey)}/revisions`,
       { method: "POST", body: JSON.stringify(document) },
     ),
+  /* Replaces a draft revision in place; 409 revision_not_draft once it
+   * has been active. */
+  updateWebhookEndpointRevision: (
+    endpointKey: string,
+    revision: number,
+    document: { name: string; url: string },
+  ) =>
+    request<WebhookEndpointRevision>(
+      `${APP_API_BASE}/webhook_endpoints/${encodeURIComponent(endpointKey)}/revisions/${revision}`,
+      { method: "PUT", body: JSON.stringify(document) },
+    ),
   activateWebhookEndpointRevision: (
     endpointKey: string,
     revision: number,
@@ -488,6 +513,13 @@ export const api = {
     request<TeamEscalationPolicyRevisionWire>(
       `${APP_API_BASE}/teams/${teamId}/escalation-policy/revisions`,
       { method: "POST", body: JSON.stringify(document) },
+    ),
+  /* Replaces a draft revision in place; 409 revision_not_draft once it
+   * has been active. */
+  updateTeamEscalationPolicyRevision: (teamId: string, revision: number, document: EscalationDocumentBodyWire) =>
+    request<TeamEscalationPolicyRevisionWire>(
+      `${APP_API_BASE}/teams/${teamId}/escalation-policy/revisions/${revision}`,
+      { method: "PUT", body: JSON.stringify(document) },
     ),
   activateTeamEscalationPolicyRevision: (
     teamId: string,
@@ -656,6 +688,17 @@ export const api = {
       `${pipelinePath(pipelineKey)}/revisions`,
       { method: "POST", body: JSON.stringify(document) },
     ),
+  /* Replaces a draft revision in place; 409 revision_not_draft once it
+   * has been active. */
+  updateRequestApprovalPipelineRevision: (
+    pipelineKey: string,
+    revision: number,
+    document: RequestApprovalPipelineDocument,
+  ) =>
+    request<RequestApprovalPipelineRevision>(
+      `${pipelinePath(pipelineKey)}/revisions/${revision}`,
+      { method: "PUT", body: JSON.stringify(document) },
+    ),
   /* The live state of everything a revision depends on, so a rollback
    * can be explained before it is attempted. */
   requestApprovalPipelineRevisionReferences: (pipelineKey: string, revision: number) =>
@@ -766,6 +809,7 @@ export const api = {
   organizationAPIKeys: (kind: APIKey["kind"]) => request<{ keys: APIKey[] }>(`${APP_API_BASE}/api_keys?kind=${kind}`),
   revokeAPIKey: (id: string) =>
     request<void>(`${APP_API_BASE}/api_keys/${id}`, { method: "DELETE" }),
+  installation: () => request<Installation>(`${APP_API_BASE}/installation`),
   organizationPolicy: () =>
     request<{ policy: OrganizationPolicy }>(`${APP_API_BASE}/organization/policy`),
   setOrganizationPolicy: (patch: Partial<OrganizationPolicy>) =>
@@ -822,6 +866,13 @@ export const api = {
     request<EscalationPathRevisionWire>(
       `${APP_API_BASE}/escalation-paths/${encodeURIComponent(pathKey)}/revisions`,
       { method: "POST", body: JSON.stringify(document) },
+    ),
+  /* Replaces a draft revision in place; 409 revision_not_draft once it
+   * has been active. */
+  updateEscalationPathRevision: (pathKey: string, revision: number, document: EscalationPathDocumentWire) =>
+    request<EscalationPathRevisionWire>(
+      `${APP_API_BASE}/escalation-paths/${encodeURIComponent(pathKey)}/revisions/${revision}`,
+      { method: "PUT", body: JSON.stringify(document) },
     ),
   activateEscalationPathRevision: (
     pathKey: string,

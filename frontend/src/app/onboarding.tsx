@@ -26,6 +26,7 @@ import { TextField } from "@/ds/components/text-field";
 import { Stepper, type Step } from "@/ds/components/stepper";
 import { useSidebar } from "@/ds/components/sidebar-reopen";
 import { useToast } from "@/ds/components/toast";
+import { UnsavedDialog, UnsavedGuard } from "@/ds/components/unsaved-guard";
 import { Page } from "@/ds/components/page";
 import {
   AgentIcon,
@@ -53,9 +54,10 @@ import type {
 import { ENTRY_PIPELINE_KEY } from "../types";
 import type { ChannelsPage } from "./contact-channels";
 import { definitionsFromStored } from "./pipeline-blocks";
-import { ladderLines } from "./notification-rules";
+import { ladderLines, useLadderDraft } from "./notification-rules";
 import { OnboardingApprovals, useTestActivity, type TestActivity } from "./onboarding-approvals";
 import { OnboardingContactStep, OnboardingRulesStep } from "./onboarding-contacts";
+import { refreshSession } from "./session-store";
 import { useOnboardingSession } from "./use-onboarding-session";
 import { useRuntimeConfig } from "./use-runtime-config";
 import { useTitle } from "./use-title";
@@ -203,6 +205,10 @@ function OnboardingFlow({ page }: { page: ChannelsPage }) {
    * session, which the CLI has to be run for again; that deserves a
    * confirmation. */
   const [confirmRestart, setConfirmRestart] = useState(false);
+  /* The rules step's ladders, held here so a way out of the step can
+   * ask before it drops their edits. */
+  const ladders = useLadderDraft(page.rules, page.methods, () => router.invalidate());
+  const [leaving, setLeaving] = useState<(() => void) | null>(null);
 
   const status = session?.status ?? null;
   const terminal = isTerminal(status);
@@ -291,7 +297,10 @@ function OnboardingFlow({ page }: { page: ChannelsPage }) {
       await api.onboardingComplete(outcome);
       /* Finished or skipped, the workspace is theirs: open the sidebar
        * so the queue arrives with its navigation, whatever they had
-       * before the setup held it closed. */
+       * before the setup held it closed. The session learns the outcome,
+       * so a skip brings the sidebar's Finish setup card and a finish
+       * removes it. */
+      void refreshSession();
       sidebar?.reopen();
       void navigate({ to: "/queue" });
     } catch (reason) {
@@ -312,6 +321,7 @@ function OnboardingFlow({ page }: { page: ChannelsPage }) {
     try {
       if (status === "installed") setSession(await api.onboardingRecordTest(requestId));
       await api.onboardingComplete("finished");
+      void refreshSession();
       sidebar?.reopen();
       void navigate({ to: "/queue" });
     } catch (reason) {
@@ -369,11 +379,27 @@ function OnboardingFlow({ page }: { page: ChannelsPage }) {
         return undefined;
     }
   }
-  const steps: Step[] = STEPS.map((step, index) => ({
-    ...step,
-    status: index < current ? "done" : index === current ? "current" : "upcoming",
-    onSelect: wayBack(index),
-  }));
+  /* Leaving the rules step with edits to the ladders asks first. */
+  function leaveRules(go: () => void) {
+    if (onRules && ladders.dirty.length > 0) setLeaving(() => go);
+    else go();
+  }
+  async function saveLadders() {
+    try {
+      await ladders.save();
+    } catch (reason) {
+      toast.add({ type: "deny", title: "Could not save your rules", description: errorMessage(reason, "") });
+      throw reason;
+    }
+  }
+  const steps: Step[] = STEPS.map((step, index) => {
+    const back = wayBack(index);
+    return {
+      ...step,
+      status: index < current ? "done" : index === current ? "current" : "upcoming",
+      onSelect: back && (() => leaveRules(back)),
+    };
+  });
 
   let pane: ReactNode;
   if (loading) {
@@ -471,6 +497,7 @@ function OnboardingFlow({ page }: { page: ChannelsPage }) {
     pane = (
       <OnboardingRulesStep
         page={page}
+        ladders={ladders}
         onChanged={() => router.invalidate()}
         error={channelsDone ? "" : advanceError}
         continuing={advancing}
@@ -522,6 +549,34 @@ function OnboardingFlow({ page }: { page: ChannelsPage }) {
       </div>
       <Stepper orientation="horizontal" steps={steps} />
 
+      <UnsavedDialog
+        open={leaving !== null}
+        saving={ladders.saving}
+        onKeepEditing={() => setLeaving(null)}
+        onDiscard={() => {
+          ladders.discard();
+          setLeaving(null);
+          leaving?.();
+        }}
+        onSave={() =>
+          void saveLadders().then(
+            () => {
+              setLeaving(null);
+              leaving?.();
+            },
+            () => setLeaving(null),
+          )
+        }
+      />
+      {onRules ? (
+        <UnsavedGuard
+          dirty={ladders.dirty.length > 0}
+          saving={ladders.saving}
+          onSave={saveLadders}
+          onDiscard={ladders.discard}
+        />
+      ) : null}
+
       <ConfirmDialog
         open={confirmRestart}
         onOpenChange={setConfirmRestart}
@@ -558,7 +613,7 @@ function OnboardingFlow({ page }: { page: ChannelsPage }) {
             variant="ghost"
             loading={closing === "skipped"}
             disabled={closing !== null}
-            onClick={() => void complete("skipped")}
+            onClick={() => leaveRules(() => void complete("skipped"))}
           >
             Skip for now
           </Button>

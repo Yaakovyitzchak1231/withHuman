@@ -20,7 +20,8 @@ import { Table, type TableColumn } from "./table";
  * paging, so no two histories can drift apart.
  *
  * Every row carries the table's menu: View, then Activate, Roll back,
- * and Create new revision from this. An entry the reader cannot take
+ * and Create new revision from this, or Edit draft on a revision that
+ * was never active. An entry the reader cannot take
  * right now (the active revision, a newer one under Roll back, a
  * missing permission) stays in place faded rather than vanishing.
  *
@@ -34,9 +35,23 @@ export interface RevisionRow {
   is_active: boolean;
   created_at: string;
   created_by_actor_id: string;
+  /* When the revision first became active. Absent for a draft, which
+   * can still be edited in place. */
+  activated_at?: string;
   /* Present when the revision was archived: readable history that can
    * never be activated again, though a new revision may start from it. */
   archived_at?: string;
+}
+
+/* A draft has never been active and is not archived: the one kind of
+ * revision that can still change in place. Once active it is frozen,
+ * even after another revision replaces it. */
+export function isDraftRevision(revision: {
+  is_active: boolean;
+  activated_at?: string;
+  archived_at?: string;
+}): boolean {
+  return !revision.is_active && !revision.activated_at && !revision.archived_at;
 }
 
 export interface RevisionHistoryProps<Item extends RevisionRow> {
@@ -73,6 +88,10 @@ export interface RevisionHistoryProps<Item extends RevisionRow> {
    * reader cannot write (permission, archived); the entry stays in the
    * menu, faded. */
   onCreateFrom?: (item: Item) => void;
+  /* Opens a draft revision in the editor to change it in place; on a
+   * draft row it takes the place of Create new revision from this.
+   * Absent when the reader cannot write; the entry stays, faded. */
+  onEditDraft?: (item: Item) => void;
   /* Extra entries a resource needs in the row menu (a webhook's Test
    * delivery), placed in their own group above the revision actions. */
   menuActions?: (item: Item) => MenuAction[];
@@ -113,6 +132,7 @@ export function RevisionHistory<Item extends RevisionRow>({
   onActivate,
   activating = null,
   onCreateFrom,
+  onEditDraft,
   menuActions,
   hasMore,
   onLoadMore,
@@ -140,6 +160,8 @@ export function RevisionHistory<Item extends RevisionRow>({
           <span className="text-ink-muted" title={new Date(item.archived_at).toLocaleString()}>
             Archived
           </span>
+        ) : isDraftRevision(item) ? (
+          <Badge>Draft</Badge>
         ) : (
           <span className="text-ink-muted">Inactive</span>
         ),
@@ -204,13 +226,21 @@ export function RevisionHistory<Item extends RevisionRow>({
         disabled: !onActivate || item.is_active || !earlier || busy || frozen,
         action: () => onActivate?.(item),
       },
-      {
-        id: "create-from",
-        group: "draft",
-        label: "Create new revision from this",
-        disabled: !onCreateFrom,
-        action: () => onCreateFrom?.(item),
-      },
+      isDraftRevision(item)
+        ? {
+            id: "edit-draft",
+            group: "draft",
+            label: "Edit draft",
+            disabled: !onEditDraft,
+            action: () => onEditDraft?.(item),
+          }
+        : {
+            id: "create-from",
+            group: "draft",
+            label: "Create new revision from this",
+            disabled: !onCreateFrom,
+            action: () => onCreateFrom?.(item),
+          },
     ];
   };
 

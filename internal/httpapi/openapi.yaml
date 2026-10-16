@@ -1202,9 +1202,10 @@ paths:
                   onboarding:
                     type: object
                     description: Whether the product's guided setup should open for this person.
-                    required: [required, completed_at]
+                    required: [required, skipped, completed_at]
                     properties:
                       required: { type: boolean, example: false, description: "`true` while nobody in the organization has finished or skipped the guided setup and this person has the permissions to run it." }
+                      skipped: { type: boolean, example: false, description: "`true` while the organization skipped the guided setup, nobody has finished it since, and this person has the permissions to run it." }
                       completed_at: { type: [string, "null"], format: date-time, description: "When the organization finished or skipped the guided setup. `null` until then." }
         "401": { description: "No session cookie, or the session has expired or been signed out" }
   /api/v1/requests/{id}:
@@ -2457,8 +2458,9 @@ paths:
         Creates a new revision of the pipeline from a complete document.
         The document is validated and compiled first, and every escalation
         path, webhook endpoint and pipeline it names must exist. The
-        revision is created inactive, and it never changes. Activate it to
-        put it into use. Omit `name` to keep the active revision's.
+        revision is created as a draft, which can be changed in place until
+        it is activated. Activate it to put it into use. Omit `name` to keep
+        the active revision's.
       security: [{ cookieAuth: [] }, { apiKeyAuth: [] }]
       parameters:
         - $ref: "#/components/parameters/PipelineKey"
@@ -2548,6 +2550,38 @@ paths:
         "401": { $ref: "#/components/responses/Error", description: "You are not signed in" }
         "403": { $ref: "#/components/responses/Error", description: "You cannot read this pipeline" }
         "404": { $ref: "#/components/responses/Error", description: "No such revision" }
+    put:
+      summary: Update a draft pipeline revision
+      operationId: updateRequestApprovalPipelineRevision
+      x-withhuman-permission: pipeline.write
+      x-withhuman-credential-kinds: [session, personal_api_key, organization_api_key]
+      tags: [Approval pipelines]
+      description: >-
+        Replaces the content of a draft revision, one that has never been
+        active, with a complete document. The revision keeps its number.
+        The document is checked exactly as a new revision's. Omit `name`
+        to keep the draft's. Once a revision has been active it can no
+        longer change.
+      security: [{ cookieAuth: [] }, { apiKeyAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/PipelineKey"
+        - $ref: "#/components/parameters/PipelineRevision"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RequestApprovalPipelineDocument" }
+      responses:
+        "200":
+          description: The updated draft
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RequestApprovalPipelineRevision" }
+        "400": { $ref: "#/components/responses/Error", description: "The document is invalid, or a delegate names a pipeline that does not exist (`request_approval_pipeline_not_found`) or this pipeline itself" }
+        "401": { $ref: "#/components/responses/Error", description: "You are not signed in" }
+        "403": { $ref: "#/components/responses/Error", description: "You cannot edit this pipeline" }
+        "404": { $ref: "#/components/responses/Error", description: "No such revision" }
+        "409": { $ref: "#/components/responses/Error", description: "The revision has been active (`revision_not_draft`), or the pipeline is archived (`request_approval_pipeline_archived`)" }
   /api/v1/request-approval-pipelines/{pipeline_key}/revisions/{revision}/references:
     get:
       summary: Report what a pipeline revision depends on
@@ -2663,8 +2697,8 @@ paths:
         Creates a path and its first revision in one call, from a complete
         document plus the key pipelines will reference. The document is
         validated first, including that every person and team it targets
-        exists. The revision is created inactive, and it never changes.
-        Activate it to put it into use.
+        exists. The revision is created as a draft, which can be changed in
+        place until it is activated. Activate it to put it into use.
 
         A key can be used once. A key that belongs to a path, archived or
         not, is refused with 409 `escalation_path_exists`.
@@ -2754,8 +2788,9 @@ paths:
       description: >-
         Creates a new revision of an existing path from a complete
         document. The document is validated first, including that every
-        person and team it targets exists. The revision is created
-        inactive, and it never changes. Activate it to put it into use.
+        person and team it targets exists. The revision is created as a
+        draft, which can be changed in place until it is activated.
+        Activate it to put it into use.
 
         The path must exist and not be archived. A new path is created
         with `POST /api/v1/escalation-paths`.
@@ -2851,6 +2886,37 @@ paths:
         "401": { $ref: "#/components/responses/Error", description: "You are not signed in" }
         "403": { $ref: "#/components/responses/Error", description: "You cannot read escalation paths" }
         "404": { $ref: "#/components/responses/Error", description: "No such revision" }
+    put:
+      summary: Update a draft escalation path revision
+      operationId: updateEscalationPathRevision
+      x-withhuman-permission: escalation_path.write
+      x-withhuman-credential-kinds: [session, personal_api_key, organization_api_key]
+      tags: [Escalation paths]
+      description: >-
+        Replaces the name and document of a draft revision, one that has
+        never been active. The revision keeps its number. The document is
+        checked exactly as a new revision's. Once a revision has been
+        active it can no longer change.
+      security: [{ cookieAuth: [] }, { apiKeyAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/PathKey"
+        - $ref: "#/components/parameters/PipelineRevision"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EscalationPathDocument" }
+      responses:
+        "200":
+          description: The updated draft
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EscalationPathRevision" }
+        "400": { $ref: "#/components/responses/Error", description: "The document is invalid or names a target that does not exist" }
+        "401": { $ref: "#/components/responses/Error", description: "You are not signed in" }
+        "403": { $ref: "#/components/responses/Error", description: "You cannot edit escalation paths" }
+        "404": { $ref: "#/components/responses/Error", description: "No such revision" }
+        "409": { $ref: "#/components/responses/Error", description: "The revision has been active (`revision_not_draft`), or the path is archived (`escalation_path_archived`)" }
   /api/v1/escalation-paths/{path_key}/revisions/{revision}/activate:
     post:
       summary: Activate an escalation path revision
@@ -3755,6 +3821,38 @@ paths:
         "401": { $ref: "#/components/responses/Error", description: "You are not signed in" }
         "403": { $ref: "#/components/responses/Error", description: "You cannot read webhook endpoints" }
         "404": { $ref: "#/components/responses/Error", description: "No such revision" }
+    put:
+      summary: Update a draft webhook endpoint revision
+      operationId: updateWebhookEndpointRevision
+      x-withhuman-permission: webhook.write
+      x-withhuman-credential-kinds: [session, personal_api_key, organization_api_key]
+      tags: [Webhook endpoints]
+      security: [{ cookieAuth: [] }, { apiKeyAuth: [] }]
+      description: >-
+        Replaces the name and URL of a draft revision, one that has never
+        been active. The revision keeps its number and the endpoint keeps
+        its signing secret, which is never included. Once a revision has
+        been active it can no longer change.
+      parameters:
+        - $ref: "#/components/parameters/WebhookEndpointKey"
+        - $ref: "#/components/parameters/PipelineRevision"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WebhookEndpointDocument" }
+      responses:
+        "200":
+          description: The updated draft
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WebhookEndpointRevision" }
+        "400": { $ref: "#/components/responses/Error", description: "The name is empty, or the URL fails the egress policy" }
+        "401": { $ref: "#/components/responses/Error", description: "You are not signed in" }
+        "403": { $ref: "#/components/responses/Error", description: "You cannot edit webhook endpoints" }
+        "404": { $ref: "#/components/responses/Error", description: "No such revision" }
+        "409": { $ref: "#/components/responses/Error", description: "The revision has been active (`revision_not_draft`)" }
+        "501": { $ref: "#/components/responses/Error", description: "This deployment has no secrets key, so webhook endpoints are unavailable" }
   /api/v1/webhook_endpoints/{endpoint_key}/revisions/{revision}/activate:
     post:
       summary: Activate a webhook endpoint revision
@@ -4131,7 +4229,7 @@ paths:
         - $ref: "#/components/parameters/TeamID"
       responses:
         "200":
-          description: Active immutable revision with its full document
+          description: Active revision with its full document
           headers:
             ETag:
               description: Quoted active revision for a subsequent If-Match mutation
@@ -4160,7 +4258,7 @@ paths:
             schema: { $ref: "#/components/schemas/TeamEscalationPolicyDocument" }
       responses:
         "201":
-          description: Created inactive immutable revision
+          description: The new revision, a draft
           content:
             application/json:
               schema: { $ref: "#/components/schemas/TeamEscalationPolicyRevision" }
@@ -4199,7 +4297,7 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
   /api/v1/teams/{id}/escalation-policy/revisions/{revision}:
     get:
-      summary: Read one immutable team escalation policy revision
+      summary: Read one team escalation policy revision
       operationId: getTeamEscalationPolicyRevision
       x-withhuman-permission: team.read
       x-withhuman-credential-kinds: [session, personal_api_key, organization_api_key]
@@ -4219,6 +4317,37 @@ paths:
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+    put:
+      summary: Update a draft team escalation policy revision
+      operationId: updateTeamEscalationPolicyRevision
+      x-withhuman-permission: team.escalation.write
+      x-withhuman-credential-kinds: [session, personal_api_key, organization_api_key]
+      tags: [Teams]
+      description: >-
+        Replaces the document of a draft revision, one that has never been
+        active. The revision keeps its number. The document is checked
+        exactly as a new revision's. Once a revision has been active it
+        can no longer change.
+      security: [{ cookieAuth: [] }, { apiKeyAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/TeamID"
+        - $ref: "#/components/parameters/PipelineRevision"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TeamEscalationPolicyDocument" }
+      responses:
+        "200":
+          description: The updated draft
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TeamEscalationPolicyRevision" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error", description: "The revision has been active (`revision_not_draft`), or the team is archived" }
   /api/v1/teams/{id}/escalation-policy/revisions/{revision}/activate:
     post:
       summary: Activate or roll back to a team escalation policy revision
@@ -4726,6 +4855,22 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/OrganizationPolicyEnvelope" }
         "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /api/v1/installation:
+    get:
+      summary: Read the installation's update status
+      operationId: getInstallation
+      x-withhuman-permission: organization.settings.write
+      x-withhuman-credential-kinds: [session, personal_api_key]
+      security: [{ cookieAuth: [] }, { apiKeyAuth: [] }]
+      description: Requires organization.settings.write. The running version, the latest release and the security advisories that affect this version, as the last daily heartbeat reported them. latest_version and checked_at are null until a heartbeat has been answered, which never happens with telemetry turned off.
+      responses:
+        "200":
+          description: The installation's update status
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Installation" }
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
   /api/v1/tool_presentations:
@@ -6279,6 +6424,30 @@ components:
           type: string
           enum: [all_readers, routed_only]
           description: Who sees a request. all_readers shows every request to everyone holding request.read; routed_only shows readers what was routed to them (directly, through a team, or by being added) plus unrouted requests. Anyone holding request.read.unrouted (owners and auditors) sees everything either way.
+    Installation:
+      type: object
+      additionalProperties: false
+      required: [id, version, latest_version, update_available, advisories, checked_at]
+      properties:
+        id: { type: string, format: uuid, description: The random installation ID the heartbeat reports. }
+        version: { type: string, description: The running version. }
+        latest_version: { type: [string, "null"], description: "The latest release, or null before a heartbeat has been answered." }
+        update_available: { type: boolean, description: Whether latest_version is newer than the running version. }
+        advisories:
+          type: array
+          description: Security advisories that affect the running version.
+          items: { $ref: "#/components/schemas/SecurityAdvisory" }
+        checked_at: { type: [string, "null"], format: date-time, description: When the last heartbeat was answered. }
+    SecurityAdvisory:
+      type: object
+      additionalProperties: false
+      required: [id, summary, severity, url, fixed_in]
+      properties:
+        id: { type: string, description: "The advisory's identifier, such as a GHSA ID." }
+        summary: { type: string }
+        severity: { type: string, description: "low, medium, high or critical." }
+        url: { type: string, format: uri, description: Where the advisory is published. }
+        fixed_in: { type: string, description: "The first release with the fix, or empty when none is released yet." }
     OrganizationPolicyEnvelope:
       type: object
       additionalProperties: false
@@ -6469,6 +6638,7 @@ components:
           description: "Send requests that reach a person without a block naming a path to the person who owns the agent instance that made them, instead of `default_escalation_path`. The path, if any, is then the fallback for a request whose agent has no owner able to decide it; without one the fallback is the enclosing pipeline's default, else any authorized reviewer."
         created_by_actor_id: { type: string, format: uuid, description: The membership or organization-key actor that created the revision. }
         created_at: { type: string, format: date-time }
+        activated_at: { type: string, format: date-time, description: "When the revision was first active. Absent for a draft, which can still be changed." }
         archived_at: { type: string, format: date-time, description: "Present when the pipeline was archived. An archived revision can be read but never activated." }
     RequestApprovalPipelineRevision:
       type: object
@@ -6494,6 +6664,7 @@ components:
           description: "Send requests that reach a person without a block naming a path to the person who owns the agent instance that made them, instead of `default_escalation_path`. The path, if any, is then the fallback for a request whose agent has no owner able to decide it; without one the fallback is the enclosing pipeline's default, else any authorized reviewer."
         created_by_actor_id: { type: string, format: uuid, description: The membership or organization-key actor that created the revision. }
         created_at: { type: string, format: date-time }
+        activated_at: { type: string, format: date-time, description: "When the revision was first active. Absent for a draft, which can still be changed." }
         archived_at: { type: string, format: date-time, description: "Present when the pipeline was archived." }
         blocks:
           type: array
@@ -7685,6 +7856,7 @@ components:
         url: { type: string, format: uri, example: "https://fraud.example.com/approvals", description: Where deliveries go. }
         created_by_actor_id: { type: string, format: uuid, description: The membership or organization-key actor that created the revision. }
         created_at: { type: string, format: date-time }
+        activated_at: { type: string, format: date-time, description: "When the revision was first active. Absent for a draft, which can still be changed." }
         signing_secret:
           type: string
           example: whsec_9f2c1b7e4d3a4f8b
@@ -8091,7 +8263,7 @@ components:
       type: object
       description: "What the frontend needs to know about this deployment before anyone signs in. An edition adds entries of its own (the hosted edition's signup_enabled, billing_enabled, and the phone and push channel flags); it never changes the ones listed here."
       additionalProperties: true
-      required: [public_origin, version, bootstrap_enabled, custom_permissions_enabled, social_providers, webhook_enabled, slack_enabled, discord_enabled, agent_mcp_servers]
+      required: [public_origin, version, bootstrap_enabled, custom_permissions_enabled, social_providers, password_login_offers_signup, webhook_enabled, slack_enabled, discord_enabled, agent_mcp_servers, update_checks_enabled]
       properties:
         public_origin: { type: string, format: uri }
         version: { type: string }
@@ -8101,6 +8273,7 @@ components:
         discord_enabled: { type: boolean, description: "The deployment configured a Discord app, so an organization can connect a server and members can link their accounts" }
         slack_enabled: { type: boolean, description: "The deployment configured a Slack app, so an organization can connect a workspace and members can link their accounts" }
         cli_download_url: { type: string, format: uri, description: "Base URL serving install.sh and cli/<version>/ for the withhuman CLI" }
+        password_login_offers_signup: { type: boolean, description: "A refused password login for an email without an account mails the address a link to create one. The response is the same invalid_credentials either way." }
         social_providers:
           type: array
           description: Social login providers registered by this edition, in display order
@@ -8109,6 +8282,7 @@ components:
           type: array
           description: "MCP servers this deployment offers every enrolled agent (the hosted edition's gateway), which the withhuman CLI registers with each runtime it installs as its own relay, authenticated with the instance credential. Empty in the open edition."
           items: { $ref: "#/components/schemas/AgentMCPServer" }
+        update_checks_enabled: { type: boolean, description: "The deployment's daily heartbeat reports the latest release and security advisories, which administrators read at /api/v1/installation. False in the hosted edition and when the operator turned telemetry off." }
     AgentMCPServer:
       type: object
       additionalProperties: false
@@ -8157,6 +8331,7 @@ components:
         name: { type: string, example: On-call engineers, description: The display name. }
         created_by_actor_id: { type: string, format: uuid, description: The membership or organization-key actor that created the revision. }
         created_at: { type: string, format: date-time }
+        activated_at: { type: string, format: date-time, description: "When the revision was first active. Absent for a draft, which can still be changed." }
         archived_at: { type: string, format: date-time, description: "When the path was archived. Absent for a revision of a live path; an archived revision can no longer be activated." }
     EscalationPathRevision:
       description: One escalation path revision with its full document.
@@ -8330,6 +8505,7 @@ components:
         is_active: { type: boolean }
         created_by_actor_id: { type: string, format: uuid }
         created_at: { type: string, format: date-time }
+        activated_at: { type: string, format: date-time, description: "When the revision was first active. Absent for a draft, which can still be changed." }
     TeamEscalationPolicyRevision:
       allOf:
         - $ref: "#/components/schemas/TeamEscalationPolicyRevisionSummary"

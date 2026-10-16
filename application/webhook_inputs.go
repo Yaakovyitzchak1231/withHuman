@@ -42,7 +42,7 @@ func validWebhookURL(value string) error {
 	return nil
 }
 
-// CreateWebhookEndpointRevisionInput persists the next immutable revision
+// CreateWebhookEndpointRevisionInput persists the next revision, a draft,
 // of an endpoint key. SealedSigningSecret is a freshly sealed secret the
 // store keeps only when the key has none yet (its first revision); the
 // result says whether it did, so the caller can show the secret once.
@@ -66,6 +66,31 @@ func (input CreateWebhookEndpointRevisionInput) Validate() error {
 		validWebhookURL(input.URL),
 		requiredBytes("sealed signing secret", input.SealedSigningSecret),
 		requiredID("creator membership ID", input.CreatedByActorID),
+		requiredTime("current time", input.Now),
+	})
+}
+
+// UpdateWebhookEndpointRevisionInput replaces the name and URL of a draft
+// revision, one that was never active, keeping its number. An activated
+// revision refuses with domain.ErrRevisionNotDraft.
+type UpdateWebhookEndpointRevisionInput struct {
+	OrganizationID domain.ID
+	EndpointKey    string
+	Revision       int64
+	Name           string
+	URL            string
+	ActorID        domain.ID
+	Now            time.Time
+}
+
+func (input UpdateWebhookEndpointRevisionInput) Validate() error {
+	return firstError([]error{
+		requiredID("organization ID", input.OrganizationID),
+		validWebhookEndpointKey(input.EndpointKey),
+		positiveRevision(input.Revision),
+		requiredString("webhook endpoint name", input.Name),
+		validWebhookURL(input.URL),
+		requiredID("actor ID", input.ActorID),
 		requiredTime("current time", input.Now),
 	})
 }

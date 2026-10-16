@@ -21,6 +21,7 @@ func (a *API) installWebhookEndpointRoutes(router *gin.RouterGroup) {
 	a.handle(router, http.MethodPost, "/webhook_endpoints/:endpoint_key/revisions", write, a.createWebhookEndpointRevision)
 	a.handle(router, http.MethodGet, "/webhook_endpoints/:endpoint_key/revisions", read, a.listWebhookEndpointRevisions)
 	a.handle(router, http.MethodGet, "/webhook_endpoints/:endpoint_key/revisions/:revision", read, a.getWebhookEndpointRevision)
+	a.handle(router, http.MethodPut, "/webhook_endpoints/:endpoint_key/revisions/:revision", write, a.updateWebhookEndpointRevision)
 	a.handle(router, http.MethodPost, "/webhook_endpoints/:endpoint_key/revisions/:revision/activate", write, a.activateWebhookEndpointRevision)
 	a.handle(router, http.MethodPost, "/webhook_endpoints/:endpoint_key/revisions/:revision/test", write, a.testWebhookEndpointRevision)
 	a.handle(router, http.MethodGet, "/webhook_endpoints/:endpoint_key/uses", read, a.listWebhookEndpointUses)
@@ -47,14 +48,15 @@ type webhookEndpointSummaryResponse struct {
 }
 
 type webhookEndpointRevisionResponse struct {
-	ID               domain.ID `json:"id"`
-	EndpointKey      string    `json:"endpoint_key"`
-	Revision         int64     `json:"revision"`
-	IsActive         bool      `json:"is_active"`
-	Name             string    `json:"name"`
-	URL              string    `json:"url"`
-	CreatedByActorID domain.ID `json:"created_by_actor_id"`
-	CreatedAt        time.Time `json:"created_at"`
+	ID               domain.ID  `json:"id"`
+	EndpointKey      string     `json:"endpoint_key"`
+	Revision         int64      `json:"revision"`
+	IsActive         bool       `json:"is_active"`
+	Name             string     `json:"name"`
+	URL              string     `json:"url"`
+	CreatedByActorID domain.ID  `json:"created_by_actor_id"`
+	CreatedAt        time.Time  `json:"created_at"`
+	ActivatedAt      *time.Time `json:"activated_at,omitempty"`
 	// SigningSecret is present only on the response that created the
 	// key's first revision: the one time the secret is shown.
 	SigningSecret string `json:"signing_secret,omitempty"`
@@ -94,6 +96,7 @@ func newWebhookEndpointRevisionResponse(revision domain.WebhookEndpointRevision)
 		ID: revision.ID, EndpointKey: revision.EndpointKey, Revision: revision.Revision,
 		IsActive: revision.IsActive, Name: revision.Name, URL: revision.URL,
 		CreatedByActorID: revision.CreatedByActorID, CreatedAt: revision.CreatedAt,
+		ActivatedAt: revision.ActivatedAt,
 	}
 }
 
@@ -160,6 +163,33 @@ func (a *API) createWebhookEndpointRevision(c *gin.Context) {
 	response := newWebhookEndpointRevisionResponse(created.Revision)
 	response.SigningSecret = created.SigningSecret
 	c.JSON(http.StatusCreated, response)
+}
+
+// updateWebhookEndpointRevision replaces a draft revision's name and URL
+// in place. The key's signing secret is never shown again here.
+func (a *API) updateWebhookEndpointRevision(c *gin.Context) {
+	service, ok := a.webhookService(c)
+	if !ok {
+		return
+	}
+	revisionNumber, err := parsePipelineRevision(c.Param("revision"))
+	if err != nil {
+		a.writeError(c, err)
+		return
+	}
+	var request struct {
+		Name string `json:"name" binding:"required"`
+		URL  string `json:"url" binding:"required"`
+	}
+	if !bindStrict(c, &request) {
+		return
+	}
+	revision, err := service.UpdateRevision(c.Request.Context(), currentPrincipal(c), c.Param("endpoint_key"), revisionNumber, request.Name, request.URL)
+	if err != nil {
+		a.writeError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, newWebhookEndpointRevisionResponse(revision))
 }
 
 func (a *API) listWebhookEndpointRevisions(c *gin.Context) {

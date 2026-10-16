@@ -19,16 +19,19 @@ const AUTHORS: Record<string, string> = {
 };
 const NAMES = ["Fraud review", "Fraud review (EU)", "Fraud review, weekend", "Fraud review, night shift"];
 
+/* Revisions newer than the active one were never activated: drafts. */
 function revisionAt(number: number, active: number): DemoRevision {
   const authors = Object.keys(AUTHORS);
+  const createdAt = new Date(Date.UTC(2026, 8, 1, 9, 0) - (TOTAL - number) * 26 * 3_600_000).toISOString();
   return {
     id: `rev_${number}`,
     revision: number,
     is_active: number === active,
+    activated_at: number <= active ? createdAt : undefined,
     name: NAMES[number % NAMES.length],
     url: `https://hooks.acme.test/fraud/v${number}`,
     created_by_actor_id: authors[number % authors.length],
-    created_at: new Date(Date.UTC(2026, 8, 1, 9, 0) - (TOTAL - number) * 26 * 3_600_000).toISOString(),
+    created_at: createdAt,
   };
 }
 
@@ -62,7 +65,11 @@ export function RevisionHistorySection() {
     setTimeout(() => {
       setActive(item.revision);
       setItems((current) =>
-        current.map((row) => ({ ...row, is_active: row.revision === item.revision })),
+        current.map((row) => ({
+          ...row,
+          is_active: row.revision === item.revision,
+          activated_at: row.revision === item.revision ? (row.activated_at ?? new Date().toISOString()) : row.activated_at,
+        })),
       );
       setActivating(null);
       toast.add({
@@ -79,11 +86,11 @@ export function RevisionHistorySection() {
     <Section
       id="revision-history"
       title="RevisionHistory"
-      lede="Every revisioned resource (pipelines, escalation paths, webhook endpoints) lists its history through this one table: fixed columns, the active mark, a row menu with Activate, Roll back and Create new revision from this, and cursor paging with Load more. Entries the reader cannot take stay in the menu faded, so every row reads the same. The screen supplies an optional summary column and what each action does."
+      lede="Every revisioned resource (pipelines, escalation paths, webhook endpoints) lists its history through this one table: fixed columns, the active mark, a row menu with Activate, Roll back and Create new revision from this (Edit draft on a draft), and cursor paging with Load more. Entries the reader cannot take stay in the menu faded, so every row reads the same. The screen supplies an optional summary column and what each action does."
     >
       <Demo
         label="Webhook endpoint history"
-        hint="click a row to open it; the row menu activates, rolls back (earlier revisions only), or starts a new revision from the row; Load more fetches the next page"
+        hint="click a row to open it; the row menu activates, rolls back (earlier revisions only), starts a new revision from the row, or edits a draft in place; Load more fetches the next page"
       >
         <div className="overflow-hidden rounded-lg border-hairline border-edge bg-surface shadow-sm">
           <RevisionHistory
@@ -114,6 +121,7 @@ export function RevisionHistorySection() {
             onCreateFrom={(item) =>
               toast.add({ title: `Editing from revision ${item.revision} (demo)` })
             }
+            onEditDraft={(item) => toast.add({ title: `Editing draft revision ${item.revision} (demo)` })}
             menuActions={(item) => [
               {
                 id: "test",

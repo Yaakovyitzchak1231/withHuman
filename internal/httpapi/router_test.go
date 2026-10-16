@@ -444,6 +444,25 @@ func TestFrontendFallbackSeparatesProductRoutesFromAPIs(t *testing.T) {
 	}
 }
 
+func TestFrontendShellIsNotIndexed(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	(&API{frontend: webapp.Assets()}).installFrontend(router)
+
+	for _, path := range []string{"/", "/signup", "/welcome", "/requests/example"} {
+		t.Run(path, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+			if response.Code != http.StatusOK {
+				t.Fatalf("got status %d", response.Code)
+			}
+			if response.Header().Get("X-Robots-Tag") != "noindex" {
+				t.Fatalf("got X-Robots-Tag %q, want noindex", response.Header().Get("X-Robots-Tag"))
+			}
+		})
+	}
+}
+
 func TestFrontendRouteChunksAreEmbeddedAndImmutable(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
@@ -685,6 +704,35 @@ func TestRuntimeConfigReportsRegisteredSocialProviders(t *testing.T) {
 		t.Fatalf("unexpected provider descriptor: %#v", providers[0])
 	}
 }
+
+// The sign-in form points to the inbox only where the edition mails a
+// signup link for a refused password.
+func TestRuntimeConfigReportsTheSignupOffer(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	auth := authn.NewService(nil, nil, nil, nil, nil, nil, application.RealClock{}, authn.ServiceConfig{})
+	read := func() any {
+		t.Helper()
+		response := httptest.NewRecorder()
+		NewRouter(Dependencies{Logger: logger, Auth: auth}).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/runtime-config", nil))
+		var body map[string]any
+		if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		return body["password_login_offers_signup"]
+	}
+	if offered := read(); offered != false {
+		t.Fatalf("open edition must report false, got %#v", offered)
+	}
+	auth.RegisterSignupOffer(runtimeConfigSignupOfferStub{})
+	if offered := read(); offered != true {
+		t.Fatalf("registered offer must report true, got %#v", offered)
+	}
+}
+
+type runtimeConfigSignupOfferStub struct{}
+
+func (runtimeConfigSignupOfferStub) OfferSignup(context.Context, string) {}
 
 func TestApprovalCancellationIsAnAAPRoute(t *testing.T) {
 	gin.SetMode(gin.TestMode)

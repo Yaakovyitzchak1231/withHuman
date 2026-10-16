@@ -175,9 +175,10 @@ func (a *API) enrichedMe(c *gin.Context) {
 	}
 	// Onboarding is required while nobody has finished or skipped it and
 	// this person can run it; the frontend opens /welcome on that signal.
+	// A skipped setup nobody has finished since is offered again.
 	if a.onboarding != nil {
-		if required, completedAt, err := a.onboarding.Required(c.Request.Context(), principal); err == nil {
-			response["onboarding"] = gin.H{"required": required, "completed_at": completedAt}
+		if status, err := a.onboarding.Status(c.Request.Context(), principal); err == nil {
+			response["onboarding"] = gin.H{"required": status.Required, "skipped": status.Skipped, "completed_at": status.CompletedAt}
 		}
 	}
 	c.JSON(http.StatusOK, response)

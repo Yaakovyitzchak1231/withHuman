@@ -31,6 +31,7 @@ export {
 } from "./components/table";
 export {
   RevisionHistory,
+  isDraftRevision,
   type RevisionHistoryProps,
   type RevisionRow,
 } from "./components/revision-history";
@@ -85,7 +86,12 @@ export {
   type RadioOptionProps,
 } from "./components/radio-group";
 export { SaveBar, type SaveBarProps } from "./components/save-bar";
-export { UnsavedGuard, type UnsavedGuardProps } from "./components/unsaved-guard";
+export {
+  UnsavedDialog,
+  UnsavedGuard,
+  type UnsavedDialogProps,
+  type UnsavedGuardProps,
+} from "./components/unsaved-guard";
 export { SelectionBar, type SelectionBarProps } from "./components/selection-bar";
 export { SettingRow, type SettingRowProps } from "./components/setting-row";
 export { SettingsPage, type SettingsPageProps } from "./components/settings-page";

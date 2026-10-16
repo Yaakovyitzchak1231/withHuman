@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/withHumanAI/withHuman/internal/heartbeat"
 	"github.com/withHumanAI/withHuman/loggermdc"
 	"github.com/withHumanAI/withHuman/runtime"
 	"github.com/withHumanAI/withHuman/singlebinary"
@@ -34,8 +35,8 @@ func main() {
 }
 
 // The open edition in one process: no lifecycle hooks, no extra routes,
-// unlimited entitlements, and the bootstrap ceremony as the only
-// organization-creation path.
+// unlimited entitlements, the bootstrap ceremony as the only
+// organization-creation path, and the daily installation heartbeat.
 func run(logger *slog.Logger, dataDir, httpAddress string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -54,7 +55,8 @@ func run(logger *slog.Logger, dataDir, httpAddress string) error {
 		HTTPAddress: httpAddress,
 		Logger:      logger,
 		Version:     version,
-		Server:      runtime.ServerOptions{Frontend: webapp.Assets()},
+		Server:      runtime.ServerOptions{Frontend: webapp.Assets(), UpdateChecks: true},
+		Worker:      runtime.WorkerOptions{HeartbeatURL: heartbeat.DefaultURL},
 	})
 	if err != nil {
 		return err

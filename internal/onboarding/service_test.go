@@ -212,6 +212,8 @@ type identityStub struct {
 	application.IdentityRepository
 	membership domain.Membership
 	user       domain.User
+	// The organization's setup stamps.
+	completedAt, finishedAt *time.Time
 }
 
 // rolesStub answers the delegated principal's grant load with whatever
@@ -226,7 +228,8 @@ func (s *rolesStub) LoadGrants(context.Context, application.LoadGrantsInput) ([]
 }
 
 func (s *identityStub) GetOrganization(_ context.Context, input application.GetOrganizationInput) (domain.Organization, error) {
-	return domain.Organization{ID: input.OrganizationID, Status: domain.OrganizationActive}, nil
+	return domain.Organization{ID: input.OrganizationID, Status: domain.OrganizationActive,
+		OnboardingCompletedAt: s.completedAt, OnboardingFinishedAt: s.finishedAt}, nil
 }
 
 func (s *identityStub) GetUser(context.Context, application.GetUserInput) (domain.User, error) {
@@ -904,9 +907,31 @@ func TestAuthorization(t *testing.T) {
 	if _, err := h.service.Get(ctx, agent); !errors.Is(err, domain.ErrForbidden) {
 		t.Fatalf("agent principal: %v", err)
 	}
-	required, _, err := h.service.Required(ctx, h.principal)
-	if err == nil && !required {
+	status, err := h.service.Status(ctx, h.principal)
+	if err == nil && !status.Required {
 		t.Fatal("owner of an unfinished organization should need onboarding")
+	}
+}
+
+func TestStatusOffersASkippedSetupAgain(t *testing.T) {
+	ctx := context.Background()
+	h := newHarness()
+	identities := h.identities
+	at := time.Date(2026, 9, 8, 10, 0, 0, 0, time.UTC)
+
+	identities.completedAt = &at
+	status, err := h.service.Status(ctx, h.principal)
+	if err != nil || status.Required || !status.Skipped {
+		t.Fatalf("skipped setup: %v %+v", err, status)
+	}
+	reviewer := h.principal.WithGrants(domain.GrantsForRoles([]domain.Role{domain.RoleReviewer}))
+	if status, err := h.service.Status(ctx, reviewer); err != nil || status.Skipped {
+		t.Fatalf("a reviewer cannot run the setup, so it is not offered: %v %+v", err, status)
+	}
+
+	identities.finishedAt = &at
+	if status, err := h.service.Status(ctx, h.principal); err != nil || status.Required || status.Skipped {
+		t.Fatalf("finished setup: %v %+v", err, status)
 	}
 }
 

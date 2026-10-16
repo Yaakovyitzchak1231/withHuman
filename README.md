@@ -140,6 +140,16 @@ Don't want to run it yourself? [withhuman.ai](https://withhuman.ai) hosts
 it and adds the audit log, the AI judge, the MCP gateway, phone
 notifications and single sign-on.
 
+## Telemetry
+
+Once a day withHuman sends a random installation ID, its version, the
+platform and whether it runs as a binary, a container or on Kubernetes.
+The answer tells administrators about new releases and security fixes on
+the **Version** settings page. Nothing about your organizations, people,
+agents or requests is sent. Set `WITHHUMAN_TELEMETRY=off` (or
+`DO_NOT_TRACK=1`) to turn it off. See
+[Updates and telemetry](https://withhuman.ai/docs/web-app/updates-and-telemetry).
+
 ## Community
 
 - **Bugs and ideas:** [GitHub Issues](https://github.com/withHumanAI/withHuman/issues)

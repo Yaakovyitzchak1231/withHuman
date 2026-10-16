@@ -228,3 +228,27 @@ func TestSignupVerificationCarriesTheLink(t *testing.T) {
 		t.Fatalf("unexpected signup subject:\n%s", message.body)
 	}
 }
+
+// A signup offer goes to an address with no account, so it names no
+// organization and carries the link that creates one.
+func TestSignupOfferCarriesTheLink(t *testing.T) {
+	channel, sent := testSMTPChannel(t, nil)
+	expires := time.Unix(1_700_600_000, 0).UTC()
+	if err := channel.SendTransactional(context.Background(), application.SendTransactionalInput{
+		Message: application.TransactionalMessage{
+			Kind:      application.TransactionalSignupOffer,
+			VerifyURL: "https://approvals.example.com/signup/whs_secret", ExpiresAt: expires,
+		},
+		Recipient: application.NotificationRecipient{Emails: []string{"new@example.com"}},
+		Address:   "new@example.com",
+	}); err != nil {
+		t.Fatalf("SendTransactional: %v", err)
+	}
+	message := (*sent)[0]
+	if !strings.Contains(message.body, "https://approvals.example.com/signup/whs_secret") {
+		t.Fatalf("signup offer omitted the link:\n%s", message.body)
+	}
+	if !strings.Contains(message.body, "Subject: Create your withHuman account") {
+		t.Fatalf("unexpected signup offer subject:\n%s", message.body)
+	}
+}

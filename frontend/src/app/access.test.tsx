@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { api } from "../api";
+import { api, RequestError } from "../api";
 import { AccessScreen } from "./access";
 import { registerExtensions, type SSODoor } from "./extensions";
 import { stubWebStorage } from "./test-storage";
@@ -32,8 +32,10 @@ const runtimeConfig = {
     { key: "google", label: "Google" },
     { key: "github", label: "GitHub" },
   ],
+  password_login_offers_signup: false,
   cli_download_url: "",
   agent_mcp_servers: [],
+  update_checks_enabled: false,
 };
 
 beforeEach(async () => {
@@ -188,5 +190,95 @@ describe("last used badge", () => {
     await waitFor(() => expect(api.login).toHaveBeenCalled());
     expect(sessionStorage.getItem("wh-staged-login-method")).toBe("password");
     expect(localStorage.getItem("wh-last-login-method")).toBeNull();
+  });
+});
+
+describe("a refused password", () => {
+  beforeEach(() => {
+    registerExtensions({ loginMethods: { sso: null } });
+    localStorage.setItem("wh-email", "ada@acme.example");
+    vi.spyOn(api, "loginMethods").mockResolvedValue({ password: true, sso_organizations: [] });
+    vi.spyOn(api, "login").mockRejectedValue(
+      new RequestError("that email and password do not match", 401, "invalid_credentials"),
+    );
+  });
+
+  afterEach(() => {
+    /* The store keeps the loaded object, so the flag is reset on it. */
+    runtimeConfig.password_login_offers_signup = false;
+  });
+
+  async function submitPassword() {
+    renderAccess();
+    const form = screen.getByRole("button", { name: "Continue" }).closest("form")!;
+    fireEvent.submit(form);
+    await waitFor(() => screen.getByLabelText("Password"));
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "hunter2hunter2" } });
+    fireEvent.submit(form);
+  }
+
+  it("says the credentials do not match", async () => {
+    await submitPassword();
+    await screen.findByText("That email and password do not match.");
+  });
+
+  it("points to the inbox where the edition mails a signup link", async () => {
+    runtimeConfig.password_login_offers_signup = true;
+    await submitPassword();
+    await screen.findByText(
+      "That email and password do not match. If you're new to withHuman, check your inbox for a link to create an account.",
+    );
+  });
+});
+
+describe("a social sign-in without an account", () => {
+  beforeEach(() => {
+    registerExtensions({ loginMethods: { sso: null } });
+    window.history.replaceState(null, "", "/queue?social=continue");
+    vi.spyOn(api, "socialContinue").mockResolvedValue({
+      status: "organization_required",
+      email: "ada@example.com",
+      expires_at: "2026-10-15T12:00:00Z",
+    });
+  });
+
+  it("asks for the organization to found and signs the founder in", async () => {
+    const principal = { actor_id: "user-1" } as never;
+    const found = vi
+      .spyOn(api, "socialFoundOrganization")
+      .mockResolvedValue({ status: "complete", principal });
+    const onAuthenticated = vi.fn();
+    render(<AccessScreen onAuthenticated={onAuthenticated} initialError="" />);
+    expect(await screen.findByText("ada@example.com")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Yes, create an account" }));
+    const name = await screen.findByLabelText("Organization name");
+    fireEvent.change(name, { target: { value: "Acme" } });
+    fireEvent.submit(name.closest("form")!);
+    await waitFor(() => expect(onAuthenticated).toHaveBeenCalledWith(principal));
+    expect(found).toHaveBeenCalledWith("Acme");
+  });
+
+  it("starts over when the held sign-in has expired", async () => {
+    vi.spyOn(api, "socialFoundOrganization").mockRejectedValue(
+      new RequestError("That sign-in attempt expired.", 401, "social_flow_invalid"),
+    );
+    renderAccess();
+    fireEvent.click(await screen.findByRole("button", { name: "Yes, create an account" }));
+    const name = await screen.findByLabelText("Organization name");
+    fireEvent.change(name, { target: { value: "Acme" } });
+    fireEvent.submit(name.closest("form")!);
+    await screen.findByText("That sign-in attempt expired. Start again from this page.");
+    expect(screen.queryByLabelText("Organization name")).toBeNull();
+    expect(screen.getByRole("heading", { name: "Sign in" })).toBeTruthy();
+  });
+
+  it("asks before creating an account and goes back to sign in on no", async () => {
+    const found = vi.spyOn(api, "socialFoundOrganization");
+    renderAccess();
+    await screen.findByRole("heading", { name: "Create a new account?" });
+    expect(screen.queryByLabelText("Organization name")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "No, use a different account" }));
+    expect(screen.getByRole("heading", { name: "Sign in" })).toBeTruthy();
+    expect(found).not.toHaveBeenCalled();
   });
 });

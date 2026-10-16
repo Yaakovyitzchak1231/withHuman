@@ -28,6 +28,7 @@ import (
 	"github.com/withHumanAI/withHuman/internal/authorization"
 	"github.com/withHumanAI/withHuman/internal/contacts"
 	"github.com/withHumanAI/withHuman/internal/discordconnect"
+	"github.com/withHumanAI/withHuman/internal/heartbeat"
 	"github.com/withHumanAI/withHuman/internal/mcpoauth"
 	"github.com/withHumanAI/withHuman/internal/members"
 	"github.com/withHumanAI/withHuman/internal/onboarding"
@@ -72,6 +73,10 @@ type Config struct {
 	// runtime it installs. Reported as agent_mcp_servers, empty in the
 	// open edition.
 	AgentMCPServers []domain.AgentMCPServer
+	// UpdateChecks says the deployment's heartbeat reports which release
+	// is newest, so administrators get a Version page. Reported as
+	// update_checks_enabled.
+	UpdateChecks bool
 }
 
 type pipelineReadiness interface {
@@ -94,6 +99,8 @@ type Dependencies struct {
 	Onboarding       *onboarding.Service
 	// OrgSettings reads and changes the organization policy.
 	OrgSettings *orgsettings.Service
+	// Installation reads the running release's update status.
+	Installation *heartbeat.StatusReader
 	// ToolPresentations resolves how each request's arguments are shown
 	// and manages the organization's own presentations.
 	ToolPresentations *toolpresentations.Service
@@ -141,6 +148,7 @@ type API struct {
 	webhooks           *webhookendpoints.Service
 	onboarding         *onboarding.Service
 	orgSettings        *orgsettings.Service
+	installation       *heartbeat.StatusReader
 	toolPresentations  *toolpresentations.Service
 	roles              application.RoleRepository
 	permissionPolicies application.PermissionPolicyRepository
@@ -180,7 +188,7 @@ func newAPI(dependencies Dependencies) *API {
 		permissionPolicies: policies, auth: dependencies.Auth, approvals: dependencies.Approvals, members: dependencies.Members,
 		contacts: dependencies.Contacts, slack: dependencies.Slack, discord: dependencies.Discord,
 		teams:    dependencies.Teams,
-		webhooks: dependencies.WebhookEndpoints, onboarding: dependencies.Onboarding, orgSettings: dependencies.OrgSettings,
+		webhooks: dependencies.WebhookEndpoints, onboarding: dependencies.Onboarding, orgSettings: dependencies.OrgSettings, installation: dependencies.Installation,
 		toolPresentations: dependencies.ToolPresentations, toolCatalog: dependencies.ToolCatalog,
 		identities: dependencies.Identities, roles: dependencies.Roles, approvalRepo: dependencies.ApprovalRepo,
 		orchestrator:      dependencies.Orchestrator,
@@ -303,6 +311,7 @@ func (a *API) router() *gin.Engine {
 	a.installRequestApprovalPipelineRoutes(appAPI)
 	a.installRoutingRoutes(appAPI)
 	a.installOrganizationRoutes(appAPI)
+	a.installInstallationRoutes(appAPI)
 	a.installToolPresentationRoutes(appAPI)
 	a.installTeamRoutes(appAPI)
 	a.installTeamEscalationRoutes(appAPI)
@@ -386,8 +395,10 @@ func (a *API) runtimeConfig(c *gin.Context) {
 	// Social providers are read live: the edition registers them on the
 	// auth service after the router is composed.
 	providers := []authn.SocialProvider{}
+	offersSignup := false
 	if a.auth != nil {
 		providers = a.auth.SocialProviders()
+		offersSignup = a.auth.OffersSignup()
 	}
 	agentMCPServers := []domain.AgentMCPServer{}
 	if a.config.AgentMCPServers != nil {
@@ -398,13 +409,15 @@ func (a *API) runtimeConfig(c *gin.Context) {
 		"bootstrap_enabled": a.config.BootstrapEnabled,
 		// Predefined roles are always offered; custom permission
 		// policies only where the edition switched them on.
-		"custom_permissions_enabled": a.config.CustomPermissions,
-		"webhook_enabled":            a.webhooks != nil && a.webhooks.Configured(),
-		"slack_enabled":              a.slack != nil && a.slack.Configured(),
-		"discord_enabled":            a.discord != nil && a.discord.Configured(),
-		"social_providers":           providers,
-		"cli_download_url":           a.config.CLIDownloadURL,
-		"agent_mcp_servers":          agentMCPServers,
+		"custom_permissions_enabled":   a.config.CustomPermissions,
+		"webhook_enabled":              a.webhooks != nil && a.webhooks.Configured(),
+		"slack_enabled":                a.slack != nil && a.slack.Configured(),
+		"discord_enabled":              a.discord != nil && a.discord.Configured(),
+		"social_providers":             providers,
+		"password_login_offers_signup": offersSignup,
+		"cli_download_url":             a.config.CLIDownloadURL,
+		"agent_mcp_servers":            agentMCPServers,
+		"update_checks_enabled":        a.config.UpdateChecks,
 	}
 	for key, value := range a.config.Extras {
 		payload[key] = value
@@ -418,8 +431,9 @@ var runtimeConfigKeys = map[string]bool{
 	"public_origin": true, "version": true, "bootstrap_enabled": true,
 	"custom_permissions_enabled": true, "webhook_enabled": true,
 	"slack_enabled": true, "discord_enabled": true,
-	"social_providers": true,
+	"social_providers": true, "password_login_offers_signup": true,
 	"cli_download_url": true, "agent_mcp_servers": true,
+	"update_checks_enabled": true,
 }
 
 // RuntimeConfigExtras validates an edition's runtime-config entries for
@@ -1061,6 +1075,7 @@ func (a *API) installRequestApprovalPipelineRoutes(router *gin.RouterGroup) {
 	a.handle(router, http.MethodPost, pipeline+"/revisions", write, a.createRequestApprovalPipelineRevision)
 	a.handle(router, http.MethodGet, pipeline+"/revisions", read, a.listRequestApprovalPipelineRevisions)
 	a.handle(router, http.MethodGet, pipeline+"/revisions/:revision", read, a.getRequestApprovalPipelineRevision)
+	a.handle(router, http.MethodPut, pipeline+"/revisions/:revision", write, a.updateRequestApprovalPipelineRevision)
 	a.handle(router, http.MethodGet, pipeline+"/revisions/:revision/references", read, a.getRequestApprovalPipelineRevisionReferences)
 	a.handle(router, http.MethodPost, pipeline+"/revisions/:revision/activate", activate, a.activateRequestApprovalPipelineRevision)
 }
@@ -1213,6 +1228,32 @@ func (a *API) createRequestApprovalPipelineRevision(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusCreated, newRequestApprovalPipelineRevisionResponse(revision))
+}
+
+// updateRequestApprovalPipelineRevision replaces a draft revision's
+// content in place with the same document a new revision takes.
+func (a *API) updateRequestApprovalPipelineRevision(c *gin.Context) {
+	revisionNumber, err := parsePipelineRevision(c.Param("revision"))
+	if err != nil {
+		a.writeError(c, err)
+		return
+	}
+	var request requestApprovalPipelineDocumentRequest
+	if !bindStrict(c, &request) {
+		return
+	}
+	if request.Blocks == nil {
+		a.writeError(c, fmt.Errorf("blocks are required: %w", domain.ErrInvalid))
+		return
+	}
+	revision, err := a.pipelines.UpdateRevision(c.Request.Context(), currentPrincipal(c), c.Param("pipeline_key"), revisionNumber, request.Name, request.Blocks, approvalpipeline.Route{
+		EscalationPath: request.DefaultEscalationPath, AskAgentOwner: request.DefaultAskAgentOwner,
+	})
+	if err != nil {
+		a.writeError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, newRequestApprovalPipelineRevisionResponse(revision))
 }
 
 func (a *API) listRequestApprovalPipelineRevisions(c *gin.Context) {
@@ -1608,6 +1649,8 @@ func WriteError(c *gin.Context, logger *slog.Logger, err error) {
 		status, errorType, code = http.StatusConflict, "conflict", "tool_presentation_exists"
 	case errors.Is(err, domain.ErrEscalationPathArchived):
 		status, errorType, code = http.StatusConflict, "conflict", "escalation_path_archived"
+	case errors.Is(err, domain.ErrRevisionNotDraft):
+		status, errorType, code = http.StatusConflict, "conflict", "revision_not_draft"
 	case errors.Is(err, domain.ErrAgentArchived):
 		status, errorType, code = http.StatusConflict, "conflict", "agent_archived"
 	case errors.Is(err, domain.ErrAgentOwnerRequired):
@@ -1812,6 +1855,9 @@ func (a *API) installFrontend(router *gin.Engine) {
 			return
 		}
 		c.Header("Cache-Control", "no-cache")
+		// The shell is the same empty page at every product path and has
+		// nothing for a search engine to index.
+		c.Header("X-Robots-Tag", "noindex")
 		c.Data(http.StatusOK, "text/html; charset=utf-8", contents)
 	})
 }

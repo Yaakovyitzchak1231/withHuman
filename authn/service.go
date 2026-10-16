@@ -66,6 +66,7 @@ type Service struct {
 	local         Authenticator
 	social        []SocialAuthenticator
 	loginPolicy   LoginPolicy
+	signupOffer   SignupOffer
 	roles         application.RoleRepository
 	gatewayToken  string
 	onboarding    application.OnboardingRepository
@@ -273,6 +274,9 @@ func (s *Service) LoginLocal(ctx context.Context, input LocalLoginInput) (LoginR
 		return LoginResult{}, fmt.Errorf("client kind %q is not registered: %w", input.Client.Kind, domain.ErrInvalid)
 	}
 	assertion, err := s.local.Complete(ctx, map[string]string{"email": input.Email, "password": input.Password})
+	if errors.Is(err, ErrInvalidCredentials) {
+		s.offerSignup(ctx, input.Email)
+	}
 	if err != nil {
 		return LoginResult{}, err
 	}

@@ -22,7 +22,7 @@ import {
   type ChannelKind,
   type ChannelsPage,
 } from "./contact-channels";
-import { NotificationLadders } from "./notification-rules";
+import { NotificationLadders, type LadderDraft } from "./notification-rules";
 import { useAccess } from "./authorization";
 import { contactKind, extensions } from "./extensions";
 import { useSession } from "./principal";
@@ -189,31 +189,40 @@ export function OnboardingContactStep({
 }
 
 /* The step after the channels: both ladders, and the Continue that
- * records the pair of steps on the session the first time through.
- * Edits waiting to be saved hold it: the step is left with the pane,
- * and edits it carried would go with it. */
+ * saves any edits to them and then records the pair of steps on the
+ * session the first time through. The draft lives with the flow, which
+ * asks before a way out that would drop it. */
 export function OnboardingRulesStep({
   page,
+  ladders,
   onChanged,
   onContinue,
   continuing,
   error,
 }: {
   page: ChannelsPage;
-  /* Reloads the page's channels and ladders after any change. */
+  ladders: LadderDraft;
+  /* Reloads the page's channels and ladders. */
   onChanged: () => Promise<void>;
   onContinue: () => void;
   continuing: boolean;
   /* Why the last Continue did not get anywhere. */
   error: string;
 }) {
-  const { methods, rules } = page;
-  const [rulesDirty, setRulesDirty] = useState(false);
+  const [saveError, setSaveError] = useState("");
 
-  /* The rules are keyed on what the server holds, so a save or a change
-   * to the methods starts the ladders from a fresh draft. */
-  const rulesKey =
-    JSON.stringify(rules) + methods.map((method) => `${method.id}:${method.verified}`).join(",");
+  const next = async () => {
+    setSaveError("");
+    try {
+      await ladders.save();
+    } catch (reason) {
+      setSaveError(reason instanceof Error ? reason.message : "Could not save your rules.");
+      return;
+    }
+    onContinue();
+  };
+
+  const problem = saveError || error;
 
   return (
     <Card>
@@ -228,28 +237,25 @@ export function OnboardingRulesStep({
       </CardHeader>
       <CardBody className="flex flex-col gap-5">
         <NotificationLadders
-          key={rulesKey}
-          rules={rules}
-          methods={methods}
-          onSaved={onChanged}
+          ladders={ladders}
+          methods={page.methods}
+          onRetry={() => void onChanged()}
           embedded
-          onDirtyChange={setRulesDirty}
         />
-        {error ? (
+        {problem ? (
           <Callout tone="warn" title="Could not continue">
-            {error}
+            {problem}
           </Callout>
         ) : null}
       </CardBody>
-      <CardFooter className="flex-col items-end gap-1.5">
-        <Button variant="primary" loading={continuing} disabled={rulesDirty} onClick={onContinue}>
+      <CardFooter className="justify-end">
+        <Button
+          variant="primary"
+          loading={ladders.saving || continuing}
+          onClick={() => void next()}
+        >
           Continue
         </Button>
-        {rulesDirty ? (
-          <span className="text-label font-normal text-ink-muted">
-            Save your rule changes to continue.
-          </span>
-        ) : null}
       </CardFooter>
     </Card>
   );

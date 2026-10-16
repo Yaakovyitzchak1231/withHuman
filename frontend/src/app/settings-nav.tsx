@@ -1,6 +1,7 @@
 import { NavGroupLabel, NavItem } from "./nav-item";
 import { useAccess } from "./authorization";
 import { ExtensionSettingsNav, useExtensionSettingsNav } from "./extensions";
+import { VERSION_PATH, useVersionPageAvailable } from "./update-todos";
 
 /* The sidebar's contents while a settings page is open: two groups,
  * "You" for per-person preferences every member has, "Organization"
@@ -12,6 +13,7 @@ export function SettingsNav() {
   const canReadMembers = holdsAnywhere("membership.read");
   const canReadTeams = holdsAnywhere("team.read");
   const canReadConnections = holdsAnywhere("connection.read");
+  const versionPage = useVersionPageAvailable();
   const extensionYou = useExtensionSettingsNav("you");
   const extensionOrganization = useExtensionSettingsNav("organization");
 
@@ -39,6 +41,11 @@ export function SettingsNav() {
     canReadConnections ? (
       <NavItem key="integrations" to="/settings/integrations">
         Integrations
+      </NavItem>
+    ) : null,
+    versionPage ? (
+      <NavItem key="version" to={VERSION_PATH}>
+        Version
       </NavItem>
     ) : null,
     extensionOrganization.length > 0 ? (

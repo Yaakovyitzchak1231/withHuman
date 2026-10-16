@@ -2,12 +2,14 @@ package domain
 
 import "time"
 
-// WebhookEndpointRevision is one immutable revision of an organization
+// WebhookEndpointRevision is one revision of an organization
 // webhook endpoint: a destination (name and URL) filed under a stable
 // endpoint key, exactly like an escalation path revision. Pipeline blocks
 // reference the key; deliveries resolve the key's active revision. The
 // signing secret belongs to the key, not the revision, so a URL change
-// never forces the receiver to reconfigure.
+// never forces the receiver to reconfigure. A revision is a draft until
+// it is first activated (ActivatedAt): only a draft's name and URL may
+// change, and from its activation on it is immutable.
 type WebhookEndpointRevision struct {
 	ID               ID
 	OrganizationID   ID
@@ -18,6 +20,7 @@ type WebhookEndpointRevision struct {
 	URL              string
 	CreatedByActorID ID
 	CreatedAt        time.Time
+	ActivatedAt      *time.Time
 }
 
 // WebhookEndpointSummary describes one endpoint key's revision lineage.

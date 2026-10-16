@@ -38,7 +38,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/ds/components/toggle-group";
 import { useToast } from "@/ds/components/toast";
 import { Page } from "@/ds/components/page";
 import { PageHeader, PageBackLink, PageBackButton } from "@/ds/components/page-header";
-import { RevisionHistory } from "@/ds/components/revision-history";
+import { RevisionHistory, isDraftRevision } from "@/ds/components/revision-history";
 import { AlertIcon, EllipsisIcon } from "@/ds/icons";
 import { api, RequestError } from "../api";
 import {
@@ -102,14 +102,16 @@ import { TestRequestDialog } from "./test-request-dialog";
 export { TestRequestDialog } from "./test-request-dialog";
 
 const FIXED_FIELD_PATHS = new Set(FIXED_FIELDS.map((field) => field.path));
+/* The test sample as the dialogs first show it, before anyone edits it. */
+const PLACEHOLDER_SAMPLE = JSON.stringify(defaultSample(), null, 2);
 
 /*
  * One pipeline, viewed or edited in place. The rail keeps the same
  * scaffolding in both modes: entry, this pipeline's blocks with their
  * exits, branches' wells and delegates' exits, and the terminus that owns the
  * pipeline default. Edit swaps the read-only rows for editable cards
- * where they stand; Create revision commits a new immutable revision,
- * which stays inactive until activated from the history below. Every
+ * where they stand; Create revision commits a new revision, which stays
+ * a draft until activated. A draft is edited in place until then. Every
  * pipeline is keyed; "entry" is the one every request enters, and the
  * others take what delegate blocks hand them.
  */
@@ -378,6 +380,12 @@ export function PipelineViewScreen({
     editing ? pathTarget((latest ?? displayed)?.default_escalation_path, roster, (latest ?? displayed)?.default_ask_agent_owner) : null,
   );
   const [baselineDefault, setBaselineDefault] = useState<ReviewerTarget | null>(draftDefault);
+  /* The draft revision being changed in place, or null when saving
+   * creates a new revision. Editing continues the latest revision when it
+   * is a draft. */
+  const [draftTarget, setDraftTarget] = useState<number | null>(() =>
+    editing && latest && isDraftRevision(latest) ? latest.revision : null,
+  );
   /* The pipeline's name under edit: renaming is a revision too. */
   const [draftName, setDraftName] = useState(pipelineName);
   const [baselineName, setBaselineName] = useState(pipelineName);
@@ -399,6 +407,9 @@ export function PipelineViewScreen({
   const offered = usePipelineSuggestions() ?? NO_SUGGESTIONS;
   const [sampleDraft, setSampleText] = useState<string | null>(null);
   const sampleText = sampleDraft ?? JSON.stringify(offered.sample ?? defaultSample(), null, 2);
+  /* The placeholder sample names a made-up tool and arguments, so only a
+   * real request or a sample someone wrote feeds the editors. */
+  const sampleForSuggestions = sampleText === PLACEHOLDER_SAMPLE ? "" : sampleText;
   const settled = test !== null && cursor >= test.steps.length;
 
   /* Structural edits, drag reordering, and the confirmation before a
@@ -454,13 +465,13 @@ export function PipelineViewScreen({
   const suggestions = useMemo(() => [...new Set([
     ...offered.argumentPaths,
     ...conditionFieldPaths(savedConditions),
-    ...suggestPaths(sampleText),
-  ])].sort((a, b) => Number(FIXED_FIELD_PATHS.has(b)) - Number(FIXED_FIELD_PATHS.has(a))), [offered.argumentPaths, savedConditions, sampleText]);
+    ...suggestPaths(sampleForSuggestions),
+  ])].sort((a, b) => Number(FIXED_FIELD_PATHS.has(b)) - Number(FIXED_FIELD_PATHS.has(a))), [offered.argumentPaths, savedConditions, sampleForSuggestions]);
   const valueSuggestions = useMemo(() => mergeValueSuggestions(
     offered.valueSuggestions,
-    sampleValueSuggestions(sampleText),
+    sampleValueSuggestions(sampleForSuggestions),
     conditionValueSuggestions(savedConditions),
-  ), [offered.valueSuggestions, sampleText, savedConditions]);
+  ), [offered.valueSuggestions, sampleForSuggestions, savedConditions]);
   const railBlocks = editing ? (jsonDraft?.blocks ?? draft) : viewBlocks;
   const reachability = pipelineReachability(railBlocks);
 
@@ -517,18 +528,21 @@ export function PipelineViewScreen({
   /* Editing starts from the latest revision, which is also the baseline
    * the unsaved count is measured against. Starting from an earlier
    * revision keeps that baseline: the draft is that revision's blocks,
-   * and the count says how far it stands from the latest. */
-  function startEdit(from?: RequestApprovalPipelineRevision) {
-    const revision = latest ?? displayed;
+   * and the count says how far it stands from the latest. Editing a
+   * draft in place takes the draft as both. */
+  function startEdit(from?: RequestApprovalPipelineRevision, inPlace = false) {
+    const revision = inPlace && from ? from : latest ?? displayed;
     const baselineDrafts = draftsFromBlocks(revision?.blocks ?? [], directory);
     const baselineTarget = pathTarget(revision?.default_escalation_path, directory, revision?.default_ask_agent_owner);
     const origin = from ?? revision;
-    setDraft(from ? draftsFromBlocks(origin?.blocks ?? [], directory) : baselineDrafts);
+    const copy = from !== undefined && !inPlace;
+    setDraft(copy ? draftsFromBlocks(origin?.blocks ?? [], directory) : baselineDrafts);
     setBaseline(baselineDrafts);
-    setDraftDefault(from ? pathTarget(origin?.default_escalation_path, directory, origin?.default_ask_agent_owner) : baselineTarget);
+    setDraftDefault(copy ? pathTarget(origin?.default_escalation_path, directory, origin?.default_ask_agent_owner) : baselineTarget);
     setBaselineDefault(baselineTarget);
     setDraftName(revision?.name ?? pipelineName);
     setBaselineName(revision?.name ?? pipelineName);
+    setDraftTarget(inPlace && from ? from.revision : null);
     setMode("blocks");
     setJsonError("");
     setExpandedKey(null);
@@ -538,12 +552,12 @@ export function PipelineViewScreen({
 
   /* The list holds only summaries, so the revision's blocks are fetched
    * before the editor opens on them. */
-  async function startEditFrom(summary: RequestApprovalPipelineRevisionSummary) {
+  async function startEditFrom(summary: RequestApprovalPipelineRevisionSummary, inPlace = false) {
     try {
       const revision = await api.requestApprovalPipelineRevision(pipelineKey, summary.revision);
-      startEdit(revision);
+      startEdit(revision, inPlace);
       toast.add({
-        title: `Editing from revision ${summary.revision}`,
+        title: inPlace ? `Editing draft revision ${summary.revision}` : `Editing from revision ${summary.revision}`,
       });
     } catch (reason) {
       toast.add({
@@ -570,56 +584,72 @@ export function PipelineViewScreen({
     setJsonError("");
   }
 
+  /* Saving creates a revision, or replaces the draft being edited in
+   * place. An untouched draft skips the save and goes straight to the
+   * activation offer. */
   async function commit() {
     if (!activeRevision) return;
+    const target = draftTarget;
+    const unchanged = target !== null && dirtyCount === 0;
     let next = draft;
     let nextDefault = draftDefault;
-    if (mode === "json") {
-      try {
-        const document = parseDocument(jsonText);
-        next = draftsFromBlocks(document.blocks, directory);
-        nextDefault = pathTarget(document.default_escalation_path, directory, document.default_ask_agent_owner);
-      } catch (reason) {
-        setJsonError(reason instanceof Error ? reason.message : "The document is not valid JSON.");
+    if (!unchanged) {
+      if (mode === "json") {
+        try {
+          const document = parseDocument(jsonText);
+          next = draftsFromBlocks(document.blocks, directory);
+          nextDefault = pathTarget(document.default_escalation_path, directory, document.default_ask_agent_owner);
+        } catch (reason) {
+          setJsonError(reason instanceof Error ? reason.message : "The document is not valid JSON.");
+          return;
+        }
+      }
+      if (!draftName.trim()) {
+        toast.add({ type: "deny", title: "The revision is not ready", description: "The pipeline needs a name." });
+        return;
+      }
+      const problem = validateDrafts(next, { pipelineKey });
+      if (problem) {
+        toast.add({ type: "deny", title: "The revision is not ready", description: problem });
         return;
       }
     }
-    if (!draftName.trim()) {
-      toast.add({ type: "deny", title: "The revision is not ready", description: "The pipeline needs a name." });
-      return;
-    }
-    const problem = validateDrafts(next, { pipelineKey });
-    if (problem) {
-      toast.add({ type: "deny", title: "The revision is not ready", description: problem });
-      return;
-    }
+    const failed = target === null ? "The revision could not be created" : "The draft could not be saved";
     setSaving(true);
     try {
-      const revision = await api.createRequestApprovalPipelineRevision(
-        pipelineKey,
-        { name: draftName.trim(), ...documentFromDrafts(next, nextDefault) },
-      );
+      let number: number;
+      if (target !== null && unchanged) {
+        number = target;
+      } else {
+        const body = { name: draftName.trim(), ...documentFromDrafts(next, nextDefault) };
+        const saved = target === null
+          ? await api.createRequestApprovalPipelineRevision(pipelineKey, body)
+          : await api.updateRequestApprovalPipelineRevision(pipelineKey, target, body);
+        number = saved.revision;
+      }
       await revisionActivation.offer({
-        revision: revision.revision,
+        revision: number,
         activeRevision: activeRevision?.revision ?? null,
         canActivate,
         activationDescription: "Once active, new requests use this pipeline revision.",
-        activate: () => api.activateRequestApprovalPipelineRevision(pipelineKey, revision.revision, activeRevision.revision),
+        unchanged,
+        activate: () => api.activateRequestApprovalPipelineRevision(pipelineKey, number, activeRevision.revision),
       });
       setEditing(false);
       await router.invalidate();
     } catch (reason) {
+      if (revisionActivation.refusedDraft(reason)) return;
       if (reason instanceof RequestError && reason.code === "request_approval_pipeline_not_found") {
         toast.add({
           type: "deny",
-          title: "The revision could not be created",
+          title: failed,
           description: "A delegate block names a pipeline that does not exist or is archived. Choose another pipeline.",
         });
         return;
       }
       toast.add({
         type: "deny",
-        title: "The revision could not be created",
+        title: failed,
         description: reason instanceof Error ? reason.message : undefined,
       });
     } finally {
@@ -879,7 +909,7 @@ export function PipelineViewScreen({
               </Badge>
               {editing ? (
                 <Badge tone="accent">
-                  Draft revision {(latest?.revision ?? 0) + 1}
+                  Draft revision {draftTarget ?? (latest?.revision ?? 0) + 1}
                 </Badge>
               ) : displayed?.archived_at ? (
                 <Badge tone="warn">Archived revision {displayed.revision}</Badge>
@@ -913,9 +943,22 @@ export function PipelineViewScreen({
               </Button>
             ) : (
               editable ? (
-                <Button variant="primary" onClick={() => startEdit(viewingInactive ? displayed ?? undefined : undefined)}>
-                  {viewingInactive ? "Create revision from this" : "Edit pipeline"}
-                </Button>
+                /* An inactive revision opens as itself when it is a draft
+                 * and as a new revision from it otherwise; the active one
+                 * continues the latest draft when there is one. */
+                viewingInactive && displayed ? (
+                  <Button variant="primary" onClick={() => startEdit(displayed, isDraftRevision(displayed))}>
+                    {isDraftRevision(displayed) ? "Edit draft" : "Create revision from this"}
+                  </Button>
+                ) : latest && isDraftRevision(latest) ? (
+                  <Button variant="primary" onClick={() => startEdit(latest, true)}>
+                    Edit draft
+                  </Button>
+                ) : (
+                  <Button variant="primary" onClick={() => startEdit()}>
+                    Edit pipeline
+                  </Button>
+                )
               ) : null
             )}
             {editable || (!entry && !archived && !editing && canActivate) ? (
@@ -987,7 +1030,7 @@ export function PipelineViewScreen({
           value={draftName}
           onChange={(event) => setDraftName(event.target.value)}
           className="max-w-[380px]"
-          info="Renaming creates a new revision."
+          info={draftTarget === null ? "Renaming creates a new revision." : undefined}
         />
       ) : null}
 
@@ -1052,6 +1095,7 @@ export function PipelineViewScreen({
                 : undefined
             }
             onCreateFrom={editable ? (revision) => void startEditFrom(revision) : undefined}
+            onEditDraft={editable ? (revision) => void startEditFrom(revision, true) : undefined}
           />
         </Card>
       ) : null}
@@ -1059,7 +1103,8 @@ export function PipelineViewScreen({
       {editing ? (
         <SaveBar
           count={dirtyCount}
-          saveLabel="Create revision"
+          saveLabel={draftTarget === null ? "Create revision" : dirtyCount === 0 ? "Activate" : "Save draft"}
+          idle={draftTarget !== null && canActivate ? `Draft revision ${draftTarget}` : undefined}
           saving={saving}
           onDiscard={discard}
           onSave={() => void commit()}

@@ -390,8 +390,10 @@ export interface Session {
   assignments: RoleAssignment[];
   /* required is true while the organization has not finished (or
    * skipped) the guided setup and the caller holds every permission the
-   * flow needs; the app sends such a person to /welcome once per load. */
-  onboarding?: { required: boolean; completed_at?: string | null };
+   * flow needs; the app sends such a person to /welcome once per load.
+   * skipped is true while the setup was skipped and nobody has finished
+   * it since, for the same people; the sidebar offers it again. */
+  onboarding?: { required: boolean; skipped: boolean; completed_at?: string | null };
 }
 
 export interface Member {
@@ -647,7 +649,10 @@ export type LoginResponse =
     }
   /* Every organization signs in through enterprise SSO: no ticket, the
    * client continues through the SSO flow for one of them. */
-  | { status: "sso_required"; organizations: LoginOrganization[] };
+  | { status: "sso_required"; organizations: LoginOrganization[] }
+  /* A social sign-in whose verified email has no account yet: naming an
+   * organization founds it with that identity. */
+  | { status: "organization_required"; email: string; expires_at: string };
 
 /* A social login provider the edition registered (Google, GitHub). The
  * open edition registers none and the buttons never render. */
@@ -873,6 +878,8 @@ export interface WebhookEndpointRevision {
   endpoint_key: string;
   revision: number;
   is_active: boolean;
+  /* When the revision first became active; absent for a draft. */
+  activated_at?: string;
   name: string;
   url: string;
   created_by_actor_id: string;
@@ -984,6 +991,8 @@ export interface RequestApprovalPipelineRevisionSummary {
   name: string;
   revision: number;
   is_active: boolean;
+  /* When the revision first became active; absent for a draft. */
+  activated_at?: string;
   /* Every block, including the blocks inside branches. */
   block_count: number;
   default_escalation_path?: string;
@@ -1199,6 +1208,8 @@ export interface EscalationPathRevisionSummary {
   path_key: string;
   revision: number;
   is_active: boolean;
+  /* When the revision first became active; absent for a draft. */
+  activated_at?: string;
   name: string;
   created_by_actor_id: string;
   created_at: string;
@@ -1210,6 +1221,8 @@ export interface EscalationPathRevisionWire extends EscalationDocumentBodyWire {
   path_key: string;
   revision: number;
   is_active: boolean;
+  /* When the revision first became active; absent for a draft. */
+  activated_at?: string;
   name: string;
   document_version: number;
   created_by_actor_id: string;
@@ -1239,6 +1252,8 @@ export interface TeamEscalationPolicyRevisionSummary {
   team_id: string;
   revision: number;
   is_active: boolean;
+  /* When the revision first became active; absent for a draft. */
+  activated_at?: string;
   created_by_actor_id: string;
   created_at: string;
 }
@@ -1536,6 +1551,26 @@ export interface OnboardingBegin {
 export type MFAMode = "optional" | "reviewers_required" | "everyone_required";
 export type UnroutedRequestsPolicy = "any_reviewer" | "break_glass_only";
 export type RequestVisibilityPolicy = "all_readers" | "routed_only";
+
+/* The running release and what the last heartbeat said about newer
+ * ones. latest_version and checked_at are null until one is answered. */
+export interface Installation {
+  id: string;
+  version: string;
+  latest_version: string | null;
+  update_available: boolean;
+  advisories: SecurityAdvisory[];
+  checked_at: string | null;
+}
+
+export interface SecurityAdvisory {
+  id: string;
+  summary: string;
+  severity: string;
+  url: string;
+  /* Empty when no release has the fix yet. */
+  fixed_in: string;
+}
 
 /* The organization's approval policy knobs. Durations are Go duration
  * strings ("24h0m0s"); src/app/duration.ts converts them. */

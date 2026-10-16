@@ -122,20 +122,7 @@ func (service *Service) GetRevision(ctx context.Context, principal domain.Princi
 }
 
 func (service *Service) CreateRevision(ctx context.Context, principal domain.Principal, teamID domain.ID, document routing.TeamPolicyDocument) (PolicyRevision, error) {
-	if err := authorize(principal, domain.PermissionTeamEscalationWrite, teamID); err != nil {
-		return PolicyRevision{}, err
-	}
-	if err := document.Validate(); err != nil {
-		return PolicyRevision{}, invalidPolicyDocument(err)
-	}
-	if err := service.requireTeamTargets(ctx, principal.OrganizationID, teamID, document); err != nil {
-		return PolicyRevision{}, err
-	}
-	warnings, err := service.deciderWarning(ctx, principal.OrganizationID, teamID)
-	if err != nil {
-		return PolicyRevision{}, err
-	}
-	canonical, err := json.Marshal(document)
+	canonical, warnings, err := service.prepareDocument(ctx, principal, teamID, document)
 	if err != nil {
 		return PolicyRevision{}, err
 	}
@@ -152,6 +139,52 @@ func (service *Service) CreateRevision(ctx context.Context, principal domain.Pri
 		return PolicyRevision{}, err
 	}
 	return PolicyRevision{Revision: stored, Document: document, Warnings: warnings}, nil
+}
+
+// UpdateRevision replaces a draft revision's document in place, checked
+// exactly as a new revision's; the revision keeps its number. A revision
+// that was ever active refuses with domain.ErrRevisionNotDraft.
+func (service *Service) UpdateRevision(ctx context.Context, principal domain.Principal, teamID domain.ID, revisionNumber int64, document routing.TeamPolicyDocument) (PolicyRevision, error) {
+	canonical, warnings, err := service.prepareDocument(ctx, principal, teamID, document)
+	if err != nil {
+		return PolicyRevision{}, err
+	}
+	stored, err := service.policies.UpdateTeamEscalationPolicyRevision(ctx, application.UpdateTeamEscalationPolicyRevisionInput{
+		OrganizationID:  principal.OrganizationID,
+		TeamID:          teamID,
+		Revision:        revisionNumber,
+		Document:        canonical,
+		DocumentVersion: routing.DocumentVersion,
+		ActorID:         principal.ManagementActorID(),
+		Now:             service.clock.Now(),
+	})
+	if err != nil {
+		return PolicyRevision{}, err
+	}
+	return PolicyRevision{Revision: stored, Document: document, Warnings: warnings}, nil
+}
+
+// prepareDocument authorizes a write of the document, checks it and its
+// targets, and canonicalizes it for storage with its advisory warnings.
+func (service *Service) prepareDocument(ctx context.Context, principal domain.Principal, teamID domain.ID, document routing.TeamPolicyDocument) (json.RawMessage, []Warning, error) {
+	if err := authorize(principal, domain.PermissionTeamEscalationWrite, teamID); err != nil {
+		return nil, nil, err
+	}
+	if err := document.Validate(); err != nil {
+		return nil, nil, invalidPolicyDocument(err)
+	}
+	if err := service.requireTeamTargets(ctx, principal.OrganizationID, teamID, document); err != nil {
+		return nil, nil, err
+	}
+	warnings, err := service.deciderWarning(ctx, principal.OrganizationID, teamID)
+	if err != nil {
+		return nil, nil, err
+	}
+	canonical, err := json.Marshal(document)
+	if err != nil {
+		return nil, nil, err
+	}
+	return canonical, warnings, nil
 }
 
 // ActivateRevision re-checks the stored document against the roster as

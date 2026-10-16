@@ -141,6 +141,12 @@ export const DOCS_SCREEN_PAGES: DocsPage[] = [
     description: "Manage organization-wide rules for reviews, request visibility and API keys.",
   },
   {
+    route: "/settings/version",
+    slug: "web-app/updates-and-telemetry",
+    title: "Updates and telemetry",
+    description: "Check for new releases and choose whether your deployment reports its version.",
+  },
+  {
     route: "/settings/integrations",
     slug: "web-app/integrations",
     title: "Integrations",

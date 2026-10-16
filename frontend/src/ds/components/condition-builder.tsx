@@ -452,13 +452,37 @@ export function FieldPathInput({
                     {option.label}
                   </span>
                   <span className="ml-auto shrink-0 font-mono text-micro text-ink-faint">{hints[path]?.types.join(" | ") || path}</span>
-                  {hints[path] ? <span className="w-full text-micro text-ink-muted">{hints[path].description}{hints[path].partial ? ` · Applies to ${hints[path].sources.join(", ")}` : ""}</span> : null}
+                  {hints[path] ? <FieldHintText hint={hints[path]} /> : null}
                 </button>
               </li>
             );
           })}
         </ul>
       ) : null}
+    </div>
+  );
+}
+
+/* A field shared by many tools merges every tool's description, so the
+ * suggestion shows two lines of it and keeps the rest in the tooltip. */
+function FieldHintText({ hint }: { hint: FieldHint }) {
+  const applies = hint.partial ? `Applies to ${hint.sources.join(", ")}` : "";
+  return (
+    <span className="w-full text-micro text-ink-muted" title={[hint.description, applies].filter(Boolean).join("\n\n")}>
+      {hint.description ? <span className="line-clamp-2">{hint.description}</span> : null}
+      {applies ? <span className="block truncate">{applies}</span> : null}
+    </span>
+  );
+}
+
+/* Under a chosen field: two lines of its merged description, then its
+ * type and the tools that declare it on one line. Hover shows it all. */
+function FieldDetails({ field }: { field: FieldHint }) {
+  const facts = `${field.types.join(" | ")}${field.required ? " · Required" : ""}${field.partial ? " · Present in some definitions" : ""}. ${field.sources.join(", ")}`;
+  return (
+    <div className="w-full text-micro text-ink-muted" title={[field.description, facts].filter(Boolean).join("\n\n")}>
+      {field.description ? <p className="line-clamp-2">{field.description}</p> : null}
+      <p className="truncate">{facts}</p>
     </div>
   );
 }
@@ -690,7 +714,7 @@ function ConditionLeafRow({
         </IconButton>
       ) : null}
       {node.field === "/request/tool" && (catalog?.tools.length ?? 0) > 0 ? <p className="w-full text-micro text-ink-muted">Matches this tool name from every source.</p> : null}
-      {field ? <p className="w-full text-micro text-ink-muted">{field.description} {field.types.join(" | ")}{field.required ? " · Required" : ""}{field.partial ? " · Present in some definitions" : ""}. {field.sources.join(", ")}</p> : null}
+      {field ? <FieldDetails field={field} /> : null}
       {warning ? <p role="status" className="w-full text-micro text-warn">{warning}</p> : null}
     </div>
   );
