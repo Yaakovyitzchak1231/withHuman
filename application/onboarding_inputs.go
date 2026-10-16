@@ -193,6 +193,23 @@ func (input CompleteOnboardingInput) Validate() error {
 	return nil
 }
 
+// GetSetupProgressInput reads what an organization has set up; a
+// credential counts only while it is unexpired at Now.
+type GetSetupProgressInput struct {
+	OrganizationID domain.ID
+	Now            time.Time
+}
+
+func (input GetSetupProgressInput) Validate() error {
+	if err := requiredID("organization ID", input.OrganizationID); err != nil {
+		return err
+	}
+	if input.Now.IsZero() {
+		return fmt.Errorf("now is required: %w", domain.ErrInvalid)
+	}
+	return nil
+}
+
 // GetAgentBySlugInput looks an agent up by its slug, which names exactly
 // one agent of the organization, live or archived.
 type GetAgentBySlugInput struct {

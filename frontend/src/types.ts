@@ -391,9 +391,16 @@ export interface Session {
   /* required is true while the organization has not finished (or
    * skipped) the guided setup and the caller holds every permission the
    * flow needs; the app sends such a person to /welcome once per load.
-   * skipped is true while the setup was skipped and nobody has finished
-   * it since, for the same people; the sidebar offers it again. */
-  onboarding?: { required: boolean; skipped: boolean; completed_at?: string | null };
+   * After that the same people get the checklist of what the
+   * organization has set up, however it was set up; the sidebar offers
+   * the setup again while an item is left. */
+  onboarding?: { required: boolean; checklist: SetupChecklist | null; completed_at?: string | null };
+}
+
+export interface SetupChecklist {
+  agent_connected: boolean;
+  rules_written: boolean;
+  tested: boolean;
 }
 
 export interface Member {

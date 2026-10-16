@@ -36,6 +36,7 @@ import { TablesSection } from "./sections/tables";
 import { RevisionHistorySection } from "./sections/revision-history";
 import { TimelinesSection } from "./sections/timelines";
 import { SteppersSection } from "./sections/steppers";
+import { ChecklistsSection } from "./sections/checklists";
 import { PolicyBuilderSection } from "./sections/policy-builder";
 import { ReviewerRoutingSection } from "./sections/reviewer-routing";
 import { SchedulingSection } from "./sections/scheduling";
@@ -65,6 +66,7 @@ const CORE_SECTIONS: StyleguideSection[] = [
   { id: "detail-blocks", label: "Detail blocks", Component: DetailBlocksSection },
   { id: "timelines", label: "Timeline", Component: TimelinesSection },
   { id: "steppers", label: "Stepper", Component: SteppersSection },
+  { id: "checklists", label: "Checklist", Component: ChecklistsSection },
   { id: "policy-builder", label: "Policy builder", Component: PolicyBuilderSection },
   { id: "reviewer-routing", label: "Reviewer routing", Component: ReviewerRoutingSection },
   { id: "settings", label: "Settings", Component: SettingsSection_ },

@@ -297,9 +297,9 @@ function OnboardingFlow({ page }: { page: ChannelsPage }) {
       await api.onboardingComplete(outcome);
       /* Finished or skipped, the workspace is theirs: open the sidebar
        * so the queue arrives with its navigation, whatever they had
-       * before the setup held it closed. The session learns the outcome,
-       * so a skip brings the sidebar's Finish setup card and a finish
-       * removes it. */
+       * before the setup held it closed. The session learns the outcome
+       * and what is set up, so the sidebar's Finish setup card shows
+       * what is left. */
       void refreshSession();
       sidebar?.reopen();
       void navigate({ to: "/queue" });
