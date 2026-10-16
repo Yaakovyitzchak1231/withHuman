@@ -40,6 +40,7 @@ import { Route as AppSettingsOrganizationRouteImport } from './routes/_app.setti
 import { Route as AppSettingsPersonalApiKeysRouteImport } from './routes/_app.settings.personal-api-keys'
 import { Route as AppSettingsTeamsRouteImport } from './routes/_app.settings.teams'
 import { Route as AppSettingsToolPresentationsRouteImport } from './routes/_app.settings.tool-presentations'
+import { Route as AppSettingsVersionRouteImport } from './routes/_app.settings.version'
 import { Route as AppWebhooksEndpointKeyRouteImport } from './routes/_app.webhooks_.$endpointKey'
 import { Route as AppSettingsNotificationsAddRouteImport } from './routes/_app.settings.notifications_.add'
 import { Route as AppSettingsPersonalApiKeysNewRouteImport } from './routes/_app.settings.personal-api-keys_.new'
@@ -208,6 +209,11 @@ const AppSettingsToolPresentationsRoute =
     path: '/settings/tool-presentations',
     getParentRoute: () => AppRoute,
   } as any)
+const AppSettingsVersionRoute = AppSettingsVersionRouteImport.update({
+  id: '/settings/version',
+  path: '/settings/version',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppWebhooksEndpointKeyRoute = AppWebhooksEndpointKeyRouteImport.update({
   id: '/webhooks_/$endpointKey',
   path: '/webhooks/$endpointKey',
@@ -292,6 +298,7 @@ export interface FileRoutesByFullPath {
   '/settings/personal-api-keys': typeof AppSettingsPersonalApiKeysRoute
   '/settings/teams': typeof AppSettingsTeamsRoute
   '/settings/tool-presentations': typeof AppSettingsToolPresentationsRoute
+  '/settings/version': typeof AppSettingsVersionRoute
   '/webhooks/$endpointKey': typeof AppWebhooksEndpointKeyRoute
   '/settings/': typeof AppSettingsIndexRoute
   '/settings/notifications/add': typeof AppSettingsNotificationsAddRoute
@@ -333,6 +340,7 @@ export interface FileRoutesByTo {
   '/settings/personal-api-keys': typeof AppSettingsPersonalApiKeysRoute
   '/settings/teams': typeof AppSettingsTeamsRoute
   '/settings/tool-presentations': typeof AppSettingsToolPresentationsRoute
+  '/settings/version': typeof AppSettingsVersionRoute
   '/webhooks/$endpointKey': typeof AppWebhooksEndpointKeyRoute
   '/settings': typeof AppSettingsIndexRoute
   '/settings/notifications/add': typeof AppSettingsNotificationsAddRoute
@@ -376,6 +384,7 @@ export interface FileRoutesById {
   '/_app/settings/personal-api-keys': typeof AppSettingsPersonalApiKeysRoute
   '/_app/settings/teams': typeof AppSettingsTeamsRoute
   '/_app/settings/tool-presentations': typeof AppSettingsToolPresentationsRoute
+  '/_app/settings/version': typeof AppSettingsVersionRoute
   '/_app/webhooks_/$endpointKey': typeof AppWebhooksEndpointKeyRoute
   '/_app/settings/': typeof AppSettingsIndexRoute
   '/_app/settings/notifications_/add': typeof AppSettingsNotificationsAddRoute
@@ -419,6 +428,7 @@ export interface FileRouteTypes {
     | '/settings/personal-api-keys'
     | '/settings/teams'
     | '/settings/tool-presentations'
+    | '/settings/version'
     | '/webhooks/$endpointKey'
     | '/settings/'
     | '/settings/notifications/add'
@@ -460,6 +470,7 @@ export interface FileRouteTypes {
     | '/settings/personal-api-keys'
     | '/settings/teams'
     | '/settings/tool-presentations'
+    | '/settings/version'
     | '/webhooks/$endpointKey'
     | '/settings'
     | '/settings/notifications/add'
@@ -502,6 +513,7 @@ export interface FileRouteTypes {
     | '/_app/settings/personal-api-keys'
     | '/_app/settings/teams'
     | '/_app/settings/tool-presentations'
+    | '/_app/settings/version'
     | '/_app/webhooks_/$endpointKey'
     | '/_app/settings/'
     | '/_app/settings/notifications_/add'
@@ -743,6 +755,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSettingsToolPresentationsRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/settings/version': {
+      id: '/_app/settings/version'
+      path: '/settings/version'
+      fullPath: '/settings/version'
+      preLoaderRoute: typeof AppSettingsVersionRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/webhooks_/$endpointKey': {
       id: '/_app/webhooks_/$endpointKey'
       path: '/webhooks/$endpointKey'
@@ -833,6 +852,7 @@ interface AppRouteChildren {
   AppSettingsPersonalApiKeysRoute: typeof AppSettingsPersonalApiKeysRoute
   AppSettingsTeamsRoute: typeof AppSettingsTeamsRoute
   AppSettingsToolPresentationsRoute: typeof AppSettingsToolPresentationsRoute
+  AppSettingsVersionRoute: typeof AppSettingsVersionRoute
   AppWebhooksEndpointKeyRoute: typeof AppWebhooksEndpointKeyRoute
   AppSettingsIndexRoute: typeof AppSettingsIndexRoute
   AppSettingsNotificationsAddRoute: typeof AppSettingsNotificationsAddRoute
@@ -869,6 +889,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppSettingsPersonalApiKeysRoute: AppSettingsPersonalApiKeysRoute,
   AppSettingsTeamsRoute: AppSettingsTeamsRoute,
   AppSettingsToolPresentationsRoute: AppSettingsToolPresentationsRoute,
+  AppSettingsVersionRoute: AppSettingsVersionRoute,
   AppWebhooksEndpointKeyRoute: AppWebhooksEndpointKeyRoute,
   AppSettingsIndexRoute: AppSettingsIndexRoute,
   AppSettingsNotificationsAddRoute: AppSettingsNotificationsAddRoute,

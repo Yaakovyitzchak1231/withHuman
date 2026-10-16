@@ -35,6 +35,7 @@ const runtimeConfig = {
   password_login_offers_signup: false,
   cli_download_url: "",
   agent_mcp_servers: [],
+  update_checks_enabled: false,
 };
 
 beforeEach(async () => {

@@ -33,6 +33,7 @@ import (
 	"github.com/withHumanAI/withHuman/internal/contacts"
 	"github.com/withHumanAI/withHuman/internal/discord"
 	"github.com/withHumanAI/withHuman/internal/discordconnect"
+	"github.com/withHumanAI/withHuman/internal/heartbeat"
 	"github.com/withHumanAI/withHuman/internal/httpapi"
 	"github.com/withHumanAI/withHuman/internal/mcpoauth"
 	"github.com/withHumanAI/withHuman/internal/members"
@@ -137,6 +138,10 @@ type ServerOptions struct {
 	// caller's credential exactly as core's tools do, so a tool may only
 	// reach a route that admits the caller's key.
 	MCPTools []mcptools.Registration
+	// UpdateChecks offers administrators the Version page, for an edition
+	// whose worker sends the installation heartbeat (WorkerOptions.HeartbeatURL).
+	// It stays off when the operator turned telemetry off.
+	UpdateChecks bool
 }
 
 // Server is a composed withHuman product server. The exported fields are
@@ -372,7 +377,8 @@ func NewServer(ctx context.Context, options ServerOptions) (*Server, error) {
 	drain := httpapi.NewDrain()
 	router := httpapi.NewRouter(httpapi.Dependencies{
 		Auth: authService, Approvals: approvalService, Members: memberService, Teams: teamService, Contacts: contactService, Slack: slackService, Discord: discordService,
-		ToolCatalog: catalogService, WebhookEndpoints: webhookService, Onboarding: onboardingService, OrgSettings: orgSettingsService, ToolPresentations: toolPresentationService,
+		ToolCatalog: catalogService, WebhookEndpoints: webhookService, Onboarding: onboardingService, OrgSettings: orgSettingsService,
+		Installation: heartbeat.NewStatusReader(store, options.Version), ToolPresentations: toolPresentationService,
 		Identities: store, Roles: store, ApprovalRepo: store,
 		Orchestrator: orchestrator,
 		Pipelines:    pipelineService, CompiledPipelines: compiledPipelines,
@@ -382,6 +388,7 @@ func NewServer(ctx context.Context, options ServerOptions) (*Server, error) {
 			PublicOrigin: cfg.PublicOrigin, CookieSecure: cookieSecure(cfg.PublicOrigin), Version: options.Version,
 			BootstrapEnabled: cfg.BootstrapSecret != "", Extras: extras, CustomPermissions: options.CustomPermissionsEnabled,
 			CLIDownloadURL: cfg.CLIDownloadURL, AgentMCPServers: options.AgentMCPServers,
+			UpdateChecks: options.UpdateChecks && cfg.Telemetry,
 		},
 	})
 	if len(cfg.TrustedProxyCIDRs) == 0 {
