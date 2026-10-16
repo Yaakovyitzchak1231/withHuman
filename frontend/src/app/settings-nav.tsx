@@ -1,7 +1,7 @@
 import { NavGroupLabel, NavItem } from "./nav-item";
 import { useAccess } from "./authorization";
 import { ExtensionSettingsNav, useExtensionSettingsNav } from "./extensions";
-import { VERSION_PATH, useVersionPageAvailable } from "./installation";
+import { VERSION_PATH, useVersionPageAvailable } from "./update-todos";
 
 /* The sidebar's contents while a settings page is open: two groups,
  * "You" for per-person preferences every member has, "Organization"

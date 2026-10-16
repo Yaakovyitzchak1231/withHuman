@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Installation } from "../types";
-import { updateTodos } from "./installation";
+import { updateTodos } from "./update-todos";
 
 const current: Installation = {
   id: "8d3f0c4e-0000-4000-8000-000000000000",
