@@ -386,7 +386,13 @@ Examples:
   client and device context supplied by an assertion-based native login. A wrong password or unknown
   email is 401 `invalid_credentials` (`authn.ErrInvalidCredentials`,
   still an `ErrUnauthenticated`), so the sign-in form can say so instead
-  of reporting an expired session. Whether an organization signs in
+  of reporting an expired session. A refused password for an email no
+  active user has is handed to the edition's `authn.SignupOffer`
+  (`Service.RegisterSignupOffer`; the hosted edition mails the address a
+  link to create an account). The answer stays `invalid_credentials`
+  either way, so the form never says which emails have accounts, and
+  runtime-config's `password_login_offers_signup` lets the form point
+  to the inbox in every refusal. Whether an organization signs in
   only through an external method is the edition's say, asked at every
   login-shaped door through `authn.LoginPolicy`
   (`Service.RegisterLoginPolicy`): `RequiresExternalLogin` (a password or

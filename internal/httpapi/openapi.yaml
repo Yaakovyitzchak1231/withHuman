@@ -8232,7 +8232,7 @@ components:
       type: object
       description: "What the frontend needs to know about this deployment before anyone signs in. An edition adds entries of its own (the hosted edition's signup_enabled, billing_enabled, and the phone and push channel flags); it never changes the ones listed here."
       additionalProperties: true
-      required: [public_origin, version, bootstrap_enabled, custom_permissions_enabled, social_providers, webhook_enabled, slack_enabled, discord_enabled, agent_mcp_servers]
+      required: [public_origin, version, bootstrap_enabled, custom_permissions_enabled, social_providers, password_login_offers_signup, webhook_enabled, slack_enabled, discord_enabled, agent_mcp_servers]
       properties:
         public_origin: { type: string, format: uri }
         version: { type: string }
@@ -8242,6 +8242,7 @@ components:
         discord_enabled: { type: boolean, description: "The deployment configured a Discord app, so an organization can connect a server and members can link their accounts" }
         slack_enabled: { type: boolean, description: "The deployment configured a Slack app, so an organization can connect a workspace and members can link their accounts" }
         cli_download_url: { type: string, format: uri, description: "Base URL serving install.sh and cli/<version>/ for the withhuman CLI" }
+        password_login_offers_signup: { type: boolean, description: "A refused password login for an email without an account mails the address a link to create one. The response is the same invalid_credentials either way." }
         social_providers:
           type: array
           description: Social login providers registered by this edition, in display order
