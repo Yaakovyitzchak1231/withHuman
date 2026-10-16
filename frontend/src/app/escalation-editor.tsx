@@ -88,7 +88,7 @@ const TIMEZONES = [
 /* Field paths a branch condition may test: the fixed fields a pipeline
  * condition offers, since both run through the same validator. The
  * request builder accepts any path under arguments. */
-const SUGGESTIONS = [...FIXED_FIELDS.map((field) => field.path), "/request/arguments/amount_cents"];
+const SUGGESTIONS = FIXED_FIELDS.map((field) => field.path);
 
 /* The sentences that differ between the two documents. */
 const COPY = {
