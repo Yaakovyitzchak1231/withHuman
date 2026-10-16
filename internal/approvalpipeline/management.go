@@ -237,7 +237,7 @@ func (service *ManagementService) Create(ctx context.Context, principal domain.P
 	return service.loadRevisionBlocks(ctx, revision)
 }
 
-// CreateRevision appends an inactive revision to a live pipeline. An empty
+// CreateRevision appends a draft revision to a live pipeline. An empty
 // name keeps the active revision's.
 func (service *ManagementService) CreateRevision(ctx context.Context, principal domain.Principal, pipelineKey, name string, definitions []approvalblock.Definition, defaultRoute Route) (PipelineRevision, error) {
 	if err := authorizePipelineManagement(principal, domain.PermissionPipelineWrite, pipelineKey); err != nil {
@@ -271,6 +271,44 @@ func (service *ManagementService) CreateRevision(ctx context.Context, principal 
 		return PipelineRevision{}, err
 	}
 	return service.loadRevisionBlocks(ctx, revision)
+}
+
+// UpdateRevision replaces a draft revision's name, blocks and default in
+// place; the revision keeps its number. The document is checked exactly
+// as a new revision's would be. An empty name keeps the draft's. A
+// revision that was ever active refuses with domain.ErrRevisionNotDraft.
+func (service *ManagementService) UpdateRevision(ctx context.Context, principal domain.Principal, pipelineKey string, revision int64, name string, definitions []approvalblock.Definition, defaultRoute Route) (PipelineRevision, error) {
+	if err := authorizePipelineManagement(principal, domain.PermissionPipelineWrite, pipelineKey); err != nil {
+		return PipelineRevision{}, err
+	}
+	if strings.TrimSpace(name) == "" {
+		draft, err := service.repository.GetRequestApprovalPipelineRevision(ctx, application.GetRequestApprovalPipelineRevisionInput{
+			OrganizationID: principal.OrganizationID, PipelineKey: pipelineKey, Revision: revision,
+		})
+		if err != nil {
+			return PipelineRevision{}, err
+		}
+		name = draft.Name
+	}
+	blocks, err := service.prepareDocument(ctx, principal.OrganizationID, pipelineKey, definitions, defaultRoute)
+	if err != nil {
+		return PipelineRevision{}, err
+	}
+	updated, err := service.repository.UpdateRequestApprovalPipelineRevision(ctx, application.UpdateRequestApprovalPipelineRevisionInput{
+		OrganizationID:        principal.OrganizationID,
+		PipelineKey:           pipelineKey,
+		Revision:              revision,
+		Name:                  name,
+		Blocks:                blocks,
+		DefaultEscalationPath: defaultRoute.EscalationPath,
+		DefaultAskAgentOwner:  defaultRoute.AskAgentOwner,
+		ActorID:               principal.ManagementActorID(),
+		Now:                   service.clock.Now(),
+	})
+	if err != nil {
+		return PipelineRevision{}, err
+	}
+	return service.loadRevisionBlocks(ctx, updated)
 }
 
 // prepareDocument compiles a document and checks everything it references

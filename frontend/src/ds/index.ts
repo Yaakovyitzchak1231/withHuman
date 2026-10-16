@@ -31,6 +31,7 @@ export {
 } from "./components/table";
 export {
   RevisionHistory,
+  isDraftRevision,
   type RevisionHistoryProps,
   type RevisionRow,
 } from "./components/revision-history";

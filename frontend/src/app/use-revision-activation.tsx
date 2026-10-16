@@ -8,7 +8,14 @@ interface SavedRevision {
   activeRevision: number | null;
   canActivate: boolean;
   activationDescription: string;
+  /* A draft offered for activation as it was, with nothing saved. */
+  unchanged?: boolean;
   activate: () => Promise<unknown>;
+}
+
+/* Saving a draft in place is refused once anyone has activated it. */
+export function isRevisionNotDraft(reason: unknown): boolean {
+  return reason instanceof RequestError && reason.status === 409 && reason.code === "revision_not_draft";
 }
 
 /* Every revisioned save pauses here before refreshing or navigating away.
@@ -23,13 +30,16 @@ export function useRevisionActivation() {
 
   function finish(active: boolean) {
     if (!pending) return;
-    toast.add({
-      type: active ? "approve" : "neutral",
-      title: `Revision ${pending.revision} ${active ? "active" : "saved as draft"}`,
-      description: active
-        ? pending.activationDescription
-        : "Activate it later to make your changes live.",
-    });
+    /* Keeping an untouched draft changed nothing, so there is nothing to say. */
+    if (active || !pending.unchanged) {
+      toast.add({
+        type: active ? "approve" : "neutral",
+        title: `Revision ${pending.revision} ${active ? "active" : "saved as draft"}`,
+        description: active
+          ? pending.activationDescription
+          : "Activate it later to make your changes live.",
+      });
+    }
     setPending(null);
     pending.resolve();
   }
@@ -40,6 +50,7 @@ export function useRevisionActivation() {
       activeRevision={pending.activeRevision}
       canActivate={pending.canActivate}
       activationDescription={pending.activationDescription}
+      unchanged={pending.unchanged}
       onKeepDraft={() => finish(false)}
       onActivate={async () => {
         try {
@@ -55,5 +66,17 @@ export function useRevisionActivation() {
     />
   ) : null;
 
-  return { offer, dialog };
+  /* A save to a draft someone activated meanwhile: says so and answers
+   * true. The caller keeps the editor open so the work can be copied. */
+  function refusedDraft(reason: unknown): boolean {
+    if (!isRevisionNotDraft(reason)) return false;
+    toast.add({
+      type: "deny",
+      title: "Draft already activated",
+      description: "Someone else activated it. Your changes were not saved.",
+    });
+    return true;
+  }
+
+  return { offer, dialog, refusedDraft };
 }

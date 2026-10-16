@@ -5,10 +5,11 @@ import (
 	"time"
 )
 
-// EscalationPathRevision is one immutable escalation path revision.
-// IsActive and ArchivedAt are the only fields that may change after the
-// revision is created: archiving the path stamps every revision at once
-// and deactivates the active one.
+// EscalationPathRevision is one escalation path revision. A revision is
+// a draft until it is first activated (ActivatedAt): only a draft's name
+// and document may change. After that, IsActive and ArchivedAt are the
+// only fields that may change: archiving the path stamps every revision
+// at once and deactivates the active one.
 type EscalationPathRevision struct {
 	ID               ID
 	OrganizationID   ID
@@ -20,6 +21,7 @@ type EscalationPathRevision struct {
 	DocumentVersion  int
 	CreatedByActorID ID
 	CreatedAt        time.Time
+	ActivatedAt      *time.Time
 	ArchivedAt       *time.Time
 }
 
@@ -118,8 +120,9 @@ type ApprovalRequestRouting struct {
 	CreatedAt time.Time
 }
 
-// TeamEscalationPolicyRevision is one immutable team escalation policy
-// revision. IsActive is the only field that may change after creation.
+// TeamEscalationPolicyRevision is one team escalation policy revision.
+// A revision is a draft until it is first activated (ActivatedAt): only
+// a draft's document may change, and after that only IsActive.
 type TeamEscalationPolicyRevision struct {
 	ID               ID
 	OrganizationID   ID
@@ -130,6 +133,7 @@ type TeamEscalationPolicyRevision struct {
 	DocumentVersion  int
 	CreatedByActorID ID
 	CreatedAt        time.Time
+	ActivatedAt      *time.Time
 }
 
 // TeamEscalationPolicyReference names one active team policy revision,

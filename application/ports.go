@@ -225,6 +225,11 @@ type RequestApprovalPipelineRepository interface {
 	// domain.ErrRequestApprovalPipelineExists.
 	CreateRequestApprovalPipeline(context.Context, CreateRequestApprovalPipelineInput) (domain.RequestApprovalPipelineRevision, error)
 	CreateRequestApprovalPipelineRevision(context.Context, CreateRequestApprovalPipelineRevisionInput) (domain.RequestApprovalPipelineRevision, error)
+	// UpdateRequestApprovalPipelineRevision replaces a draft revision's
+	// name, blocks and default; an activated one refuses with
+	// domain.ErrRevisionNotDraft and an archived pipeline with
+	// domain.ErrRequestApprovalPipelineArchived.
+	UpdateRequestApprovalPipelineRevision(context.Context, UpdateRequestApprovalPipelineRevisionInput) (domain.RequestApprovalPipelineRevision, error)
 	ListRequestApprovalPipelineSummaries(context.Context, ListRequestApprovalPipelineSummariesInput) ([]domain.RequestApprovalPipelineSummary, error)
 	GetRequestApprovalPipelineRevision(context.Context, GetRequestApprovalPipelineRevisionInput) (domain.RequestApprovalPipelineRevision, error)
 	ListRequestApprovalPipelineRevisions(context.Context, ListRequestApprovalPipelineRevisionsInput) (RevisionPage[domain.RequestApprovalPipelineRevision], error)
@@ -289,6 +294,10 @@ type EscalationPathRepository interface {
 	// path; an unknown key is domain.ErrNotFound and an archived one
 	// domain.ErrEscalationPathArchived.
 	CreateEscalationPathRevision(context.Context, CreateEscalationPathRevisionInput) (domain.EscalationPathRevision, error)
+	// UpdateEscalationPathRevision replaces a draft revision's name and
+	// document; an activated one refuses with domain.ErrRevisionNotDraft
+	// and an archived path with domain.ErrEscalationPathArchived.
+	UpdateEscalationPathRevision(context.Context, UpdateEscalationPathRevisionInput) (domain.EscalationPathRevision, error)
 	ListEscalationPathSummaries(context.Context, ListEscalationPathSummariesInput) ([]domain.EscalationPathSummary, error)
 	GetEscalationPathRevision(context.Context, GetEscalationPathRevisionInput) (domain.EscalationPathRevision, error)
 	ListEscalationPathRevisions(context.Context, ListEscalationPathRevisionsInput) (RevisionPage[domain.EscalationPathRevision], error)
@@ -415,6 +424,9 @@ type WebhookEndpointResolver interface {
 type WebhookEndpointRepository interface {
 	WebhookEndpointResolver
 	CreateWebhookEndpointRevision(context.Context, CreateWebhookEndpointRevisionInput) (CreatedWebhookEndpointRevision, error)
+	// UpdateWebhookEndpointRevision replaces a draft revision's name and
+	// URL; an activated one refuses with domain.ErrRevisionNotDraft.
+	UpdateWebhookEndpointRevision(context.Context, UpdateWebhookEndpointRevisionInput) (domain.WebhookEndpointRevision, error)
 	ListWebhookEndpointSummaries(context.Context, ListWebhookEndpointSummariesInput) ([]domain.WebhookEndpointSummary, error)
 	GetWebhookEndpointRevision(context.Context, GetWebhookEndpointRevisionInput) (domain.WebhookEndpointRevision, error)
 	ListWebhookEndpointRevisions(context.Context, ListWebhookEndpointRevisionsInput) (RevisionPage[domain.WebhookEndpointRevision], error)

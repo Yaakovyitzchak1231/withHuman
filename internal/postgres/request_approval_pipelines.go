@@ -18,7 +18,7 @@ import (
 
 const requestApprovalPipelineSelect = `SELECT id::text, organization_id::text, pipeline_key, name, revision,
 	is_active, block_ids::text[], COALESCE(default_escalation_path, ''), default_ask_agent_owner,
-	created_by_actor_id::text, created_at, archived_at
+	created_by_actor_id::text, created_at, archived_at, activated_at
 	FROM request_approval_pipelines `
 
 const requestApprovalBlockSelect = `SELECT b.id::text, b.organization_id::text, b.block_key, b.name, b.block_type,
@@ -105,6 +105,86 @@ func (s *Store) CreateRequestApprovalPipelineRevision(ctx context.Context, input
 	}
 	revision, err := s.insertRequestApprovalPipelineRevision(ctx, tx, input, revisionNumber, false)
 	if err != nil {
+		return domain.RequestApprovalPipelineRevision{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.RequestApprovalPipelineRevision{}, err
+	}
+	return revision, nil
+}
+
+// UpdateRequestApprovalPipelineRevision replaces a draft revision's name,
+// blocks and default in place under the pipeline's lock. A revision that
+// was ever active refuses with domain.ErrRevisionNotDraft, and so does
+// one an activation is about to take, since activation holds the same
+// lock. References are checked when the draft is activated, as for a new
+// revision.
+func (s *Store) UpdateRequestApprovalPipelineRevision(ctx context.Context, input application.UpdateRequestApprovalPipelineRevisionInput) (domain.RequestApprovalPipelineRevision, error) {
+	if err := input.Validate(); err != nil {
+		return domain.RequestApprovalPipelineRevision{}, err
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.RequestApprovalPipelineRevision{}, err
+	}
+	defer tx.Rollback(ctx)
+	if err := lockRequestApprovalPipeline(ctx, tx, input.OrganizationID, input.PipelineKey); err != nil {
+		return domain.RequestApprovalPipelineRevision{}, err
+	}
+	revision, err := scanRequestApprovalPipelineRevision(tx.QueryRow(ctx, requestApprovalPipelineSelect+
+		`WHERE organization_id = $1 AND pipeline_key = $2 AND revision = $3`,
+		input.OrganizationID, input.PipelineKey, input.Revision))
+	if err != nil {
+		return domain.RequestApprovalPipelineRevision{}, err
+	}
+	if revision.ArchivedAt != nil {
+		return domain.RequestApprovalPipelineRevision{}, domain.ErrRequestApprovalPipelineArchived
+	}
+	if revision.IsActive || revision.ActivatedAt != nil {
+		return domain.RequestApprovalPipelineRevision{}, domain.ErrRevisionNotDraft
+	}
+	actorID, err := managementActorID(ctx, tx, input.OrganizationID, input.ActorID)
+	if err != nil {
+		return domain.RequestApprovalPipelineRevision{}, err
+	}
+	blocks := application.CreateRequestApprovalPipelineRevisionInput{
+		OrganizationID: input.OrganizationID, CreatedByActorID: input.ActorID, Now: input.Now,
+	}
+	blockIDs := make([]domain.ID, 0, len(input.Blocks))
+	for _, blockInput := range input.Blocks {
+		block, err := insertOrReuseRequestApprovalBlock(ctx, tx, blocks, blockInput)
+		if err != nil {
+			return domain.RequestApprovalPipelineRevision{}, err
+		}
+		blockIDs = append(blockIDs, block.ID)
+	}
+	if revision.Name == input.Name && slices.Equal(revision.BlockIDs, blockIDs) &&
+		revision.DefaultEscalationPath == input.DefaultEscalationPath && revision.DefaultAskAgentOwner == input.DefaultAskAgentOwner {
+		// Blocks are stored by content, so the same document is the same
+		// revision: nothing to write.
+		if err := tx.Commit(ctx); err != nil {
+			return domain.RequestApprovalPipelineRevision{}, err
+		}
+		return revision, nil
+	}
+	revision.Name, revision.BlockIDs = input.Name, blockIDs
+	revision.DefaultEscalationPath, revision.DefaultAskAgentOwner = input.DefaultEscalationPath, input.DefaultAskAgentOwner
+	if _, err := tx.Exec(ctx, `UPDATE request_approval_pipelines
+		SET name = $3, block_ids = $4, default_escalation_path = NULLIF($5, ''), default_ask_agent_owner = $6
+		WHERE organization_id = $1 AND id = $2`, input.OrganizationID, revision.ID, revision.Name,
+		idStrings(revision.BlockIDs), revision.DefaultEscalationPath, revision.DefaultAskAgentOwner); err != nil {
+		return domain.RequestApprovalPipelineRevision{}, err
+	}
+	data, _ := json.Marshal(map[string]any{
+		"pipeline_key": revision.PipelineKey, "name": revision.Name,
+		"revision": revision.Revision, "block_count": len(revision.BlockIDs),
+	})
+	if err := s.appendManagementAuditEvent(ctx, tx, domain.AuditEvent{
+		OrganizationID: input.OrganizationID, EventType: "request_approval_pipeline.revision_updated",
+		ActorType: domain.ActorHuman, ActorID: actorID,
+		SubjectType: "request_approval_pipeline", SubjectID: revision.ID,
+		Data: data, OccurredAt: input.Now,
+	}); err != nil {
 		return domain.RequestApprovalPipelineRevision{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -455,8 +535,9 @@ func (s *Store) ActivateRequestApprovalPipelineRevision(ctx context.Context, inp
 		WHERE organization_id = $1 AND id = $2`, input.OrganizationID, current.ID); err != nil {
 		return domain.RequestApprovalPipelineRevision{}, err
 	}
-	if _, err := tx.Exec(ctx, `UPDATE request_approval_pipelines SET is_active = true
-		WHERE organization_id = $1 AND id = $2`, input.OrganizationID, target.ID); err != nil {
+	// The trigger stamps a draft's first activation.
+	if err := tx.QueryRow(ctx, `UPDATE request_approval_pipelines SET is_active = true
+		WHERE organization_id = $1 AND id = $2 RETURNING activated_at`, input.OrganizationID, target.ID).Scan(&target.ActivatedAt); err != nil {
 		return domain.RequestApprovalPipelineRevision{}, err
 	}
 	data, _ := json.Marshal(map[string]any{
@@ -945,7 +1026,7 @@ func scanRequestApprovalPipelineRevision(row rowScanner) (domain.RequestApproval
 	var id, organizationID, membershipID string
 	var blockIDs []string
 	err := row.Scan(&id, &organizationID, &revision.PipelineKey, &revision.Name, &revision.Revision, &revision.IsActive,
-		&blockIDs, &revision.DefaultEscalationPath, &revision.DefaultAskAgentOwner, &membershipID, &revision.CreatedAt, &revision.ArchivedAt)
+		&blockIDs, &revision.DefaultEscalationPath, &revision.DefaultAskAgentOwner, &membershipID, &revision.CreatedAt, &revision.ArchivedAt, &revision.ActivatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.RequestApprovalPipelineRevision{}, domain.ErrNotFound
 	}

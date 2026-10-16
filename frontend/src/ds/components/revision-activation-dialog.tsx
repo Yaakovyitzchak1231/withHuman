@@ -8,6 +8,8 @@ export interface RevisionActivationDialogProps {
   activeRevision: number | null;
   canActivate: boolean;
   activationDescription: string;
+  /* A draft offered as it was, with no changes saved just now. */
+  unchanged?: boolean;
   onActivate: () => Promise<void>;
   onKeepDraft: () => void;
 }
@@ -19,6 +21,7 @@ export function RevisionActivationDialog({
   activeRevision,
   canActivate,
   activationDescription,
+  unchanged = false,
   onActivate,
   onKeepDraft,
 }: RevisionActivationDialogProps) {
@@ -50,7 +53,7 @@ export function RevisionActivationDialog({
       <DialogContent>
         <DialogTitle>Make revision {revision} active?</DialogTitle>
         <DialogDescription>
-          Your changes are saved as a draft.{" "}
+          {unchanged ? `Revision ${revision} is a draft.` : "Your changes are saved as a draft."}{" "}
           {activeRevision === null
             ? "No revision is active yet."
             : `Revision ${activeRevision} is still active.`}{" "}
@@ -63,7 +66,7 @@ export function RevisionActivationDialog({
         ) : null}
         {error ? (
           <div role="alert" className="mt-4">
-            <Callout tone="deny" title={`Revision ${revision} saved, activation failed`}>
+            <Callout tone="deny" title={unchanged ? "Activation failed" : `Revision ${revision} saved, activation failed`}>
               {error}
             </Callout>
           </div>

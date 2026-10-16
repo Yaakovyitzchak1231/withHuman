@@ -30,10 +30,11 @@ func ValidPipelineKey(key string) bool {
 	return pipelineKeyPattern.MatchString(key)
 }
 
-// RequestApprovalPipelineRevision is one immutable ordered pipeline
-// revision of the pipeline PipelineKey names. IsActive and ArchivedAt are
-// the only fields that may change after the revision is created; an
-// archived revision is never active and stays frozen. Name is the
+// RequestApprovalPipelineRevision is one ordered pipeline revision of the
+// pipeline PipelineKey names. A draft (never active, not archived) may
+// change its name, blocks and default in place; once activated, IsActive
+// and ArchivedAt are the only fields that may change, and an archived
+// revision is never active and stays frozen. Name is the
 // pipeline's display name as of this revision. DefaultEscalationPath is
 // the escalation path key a request goes to when it runs out of this
 // pipeline or exits it through a human outcome that names no path; empty
@@ -48,12 +49,16 @@ type RequestApprovalPipelineRevision struct {
 	IsActive       bool   `json:"is_active"`
 	// BlockIDs lists every block of the revision in pre-order: a branch,
 	// then the blocks it holds, each its own snapshot.
-	BlockIDs              []ID       `json:"block_ids"`
-	DefaultEscalationPath string     `json:"default_escalation_path,omitempty"`
-	DefaultAskAgentOwner  bool       `json:"default_ask_agent_owner,omitempty"`
-	CreatedByActorID      ID         `json:"created_by_actor_id"`
-	CreatedAt             time.Time  `json:"created_at"`
-	ArchivedAt            *time.Time `json:"archived_at,omitempty"`
+	BlockIDs              []ID      `json:"block_ids"`
+	DefaultEscalationPath string    `json:"default_escalation_path,omitempty"`
+	DefaultAskAgentOwner  bool      `json:"default_ask_agent_owner,omitempty"`
+	CreatedByActorID      ID        `json:"created_by_actor_id"`
+	CreatedAt             time.Time `json:"created_at"`
+	// ActivatedAt is when the revision was first active. Until then it is
+	// a draft whose name, blocks and default may still change; from then
+	// on it is immutable.
+	ActivatedAt *time.Time `json:"activated_at,omitempty"`
+	ArchivedAt  *time.Time `json:"archived_at,omitempty"`
 }
 
 // RequestApprovalPipelineSummary is the history overview of one pipeline

@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { useRouter } from "@tanstack/react-router";
+import { Badge } from "@/ds/components/badge";
 import { Button } from "@/ds/components/button";
 import { Callout } from "@/ds/components/callout";
 import { Card, CardBody, CardDescription, CardHeader, CardTitle } from "@/ds/components/card";
@@ -23,7 +24,7 @@ import { TextField } from "@/ds/components/text-field";
 import { useToast } from "@/ds/components/toast";
 import { Page } from "@/ds/components/page";
 import { PageHeader, PageBackLink } from "@/ds/components/page-header";
-import { RevisionHistory } from "@/ds/components/revision-history";
+import { RevisionHistory, isDraftRevision } from "@/ds/components/revision-history";
 import { AlertIcon, CheckIcon, CopyIcon, EllipsisIcon } from "@/ds/icons";
 import { api, RequestError } from "../api";
 import type { PipelineUse, RevisionPage, WebhookEndpointRevision, WebhookEndpointTest } from "../types";
@@ -34,9 +35,10 @@ import { useRevisionActivation } from "./use-revision-activation";
 import { hostOf } from "./webhooks";
 
 /*
- * Webhook endpoint editor. The endpoint is a key with immutable revisions
- * of a name and URL, exactly like an escalation path: saving creates a
- * new revision and offers activation, history lets an administrator roll back,
+ * Webhook endpoint editor. The endpoint is a key with revisions of a name
+ * and URL, exactly like an escalation path: saving creates a new revision
+ * (or changes a draft in place) and offers activation, history lets an
+ * administrator roll back,
  * and archiving deactivates the current revision. The signing secret
  * belongs to the key: it is minted with the first revision, shown once
  * then and at rotation, and survives every revision.
@@ -45,6 +47,13 @@ import { hostOf } from "./webhooks";
 export interface EndpointDraft {
   name: string;
   url: string;
+}
+
+/* A draft revision the editor changes in place, and its saved content:
+ * the baseline the unsaved count measures against. */
+interface DraftSource {
+  revision: number;
+  saved: EndpointDraft;
 }
 
 /* What the webhook endpoint route loader delivers: the active revision
@@ -61,6 +70,9 @@ export interface WebhookEndpointPage {
   history: RevisionPage<WebhookEndpointRevision>;
   uses: PipelineUse[];
   secretRotatedAt: string | null;
+  /* With no active revision, the latest revision when it is a draft:
+   * saved holds it and the editor changes it in place. */
+  draftRevision: number | null;
   error: string;
 }
 
@@ -89,7 +101,16 @@ export async function loadWebhookEndpointPage(endpointKey: string): Promise<Webh
   const secretRotatedAt = summary?.secret_rotated_at ?? null;
   const archivedAt = summary?.archived_at ?? null;
   if (active.error) {
-    return { activeRevision: null, archivedAt, saved: null, history, uses, secretRotatedAt, error: active.error };
+    return {
+      activeRevision: null,
+      archivedAt,
+      saved: null,
+      history,
+      uses,
+      secretRotatedAt,
+      draftRevision: null,
+      error: active.error,
+    };
   }
   const source = active.revision ?? history.revisions[0] ?? null;
   return {
@@ -99,6 +120,7 @@ export async function loadWebhookEndpointPage(endpointKey: string): Promise<Webh
     history,
     uses,
     secretRotatedAt,
+    draftRevision: !active.revision && source && isDraftRevision(source) ? source.revision : null,
     error: "",
   };
 }
@@ -117,10 +139,23 @@ export function WebhookEndpointScreen({
   const { activeRevision, archivedAt, saved, uses, secretRotatedAt, error } = page;
   const history = useRevisionPages(page.history, (cursor) => api.webhookEndpointRevisions(endpointKey, cursor));
   /* The draft belongs to the page it was edited from: a save, rollback,
-   * or archive reloads the page and the editor shows the saved revision. */
-  const [edit, setEdit] = useState<{ base: WebhookEndpointPage; draft: EndpointDraft } | null>(null);
-  const draft = edit?.base === page ? edit.draft : saved;
-  const setDraft = (next: EndpointDraft) => setEdit({ base: page, draft: next });
+   * or archive reloads the page and the editor shows the saved revision.
+   * source is the draft revision being changed in place, if any; with
+   * none, saving creates a new revision. */
+  const [edit, setEdit] = useState<{
+    base: WebhookEndpointPage;
+    draft: EndpointDraft;
+    source: DraftSource | null;
+  } | null>(null);
+  const current = edit?.base === page ? edit : null;
+  const draft = current ? current.draft : saved;
+  const source: DraftSource | null = current
+    ? current.source
+    : page.draftRevision !== null && saved
+      ? { revision: page.draftRevision, saved }
+      : null;
+  const baseline = source?.saved ?? saved;
+  const setDraft = (next: EndpointDraft) => setEdit({ base: page, draft: next, source });
   const [saving, setSaving] = useState(false);
   const [archiving, setArchiving] = useState(false);
   const [rotating, setRotating] = useState(false);
@@ -134,39 +169,50 @@ export function WebhookEndpointScreen({
   const isNew = page.history.revisions.length === 0;
 
   const dirtyCount = useMemo(() => {
-    if (!draft || !saved) return 0;
+    if (!draft || !baseline) return 0;
     let count = 0;
-    if (draft.name !== saved.name) count += 1;
-    if (draft.url !== saved.url) count += 1;
+    if (draft.name !== baseline.name) count += 1;
+    if (draft.url !== baseline.url) count += 1;
     /* A brand-new endpoint has no revision to keep; saving is the only
      * way to make it exist. */
     if (count === 0 && isNew && draft.url.trim() !== "") count = 1;
     return count;
-  }, [draft, saved, isNew]);
+  }, [draft, baseline, isNew]);
 
   function fail(title: string, reason: unknown) {
     toast.add({ type: "deny", title, description: reason instanceof Error ? reason.message : undefined });
   }
 
+  /* Saving creates a revision, or replaces the draft being edited in
+   * place. An untouched draft skips the save and goes straight to the
+   * activation offer. */
   async function save(current: EndpointDraft) {
+    const target = source?.revision ?? null;
+    const unchanged = target !== null && dirtyCount === 0;
+    const body = { name: current.name.trim(), url: current.url.trim() };
     setSaving(true);
     try {
-      const created = await api.createWebhookEndpointRevision(endpointKey, {
-        name: current.name.trim(),
-        url: current.url.trim(),
-      });
+      const created =
+        target === null
+          ? await api.createWebhookEndpointRevision(endpointKey, body)
+          : unchanged
+            ? null
+            : await api.updateWebhookEndpointRevision(endpointKey, target, body);
+      const number = created?.revision ?? target ?? 0;
       await revisionActivation.offer({
-        revision: created.revision,
+        revision: number,
         activeRevision,
         canActivate: true,
         activationDescription: "Once active, new webhook deliveries use this revision.",
-        activate: () => api.activateWebhookEndpointRevision(endpointKey, created.revision, activeRevision),
+        unchanged,
+        activate: () => api.activateWebhookEndpointRevision(endpointKey, number, activeRevision),
       });
       await router.invalidate();
-      if (created.signing_secret) {
+      if (created?.signing_secret) {
         setRevealed({ secret: created.signing_secret, rotated: false });
       }
     } catch (reason) {
+      if (revisionActivation.refusedDraft(reason)) return;
       fail("Save failed", reason);
     } finally {
       setSaving(false);
@@ -176,11 +222,19 @@ export function WebhookEndpointScreen({
   /* The editor takes this revision's destination as its draft; saving
    * creates a new revision from it. */
   function startFrom(revision: WebhookEndpointRevision) {
-    setDraft({ name: revision.name, url: revision.url });
+    setEdit({ base: page, draft: { name: revision.name, url: revision.url }, source: null });
     toast.add({
       title: `Editing from revision ${revision.revision}`,
       description: "Save to create a new revision.",
     });
+  }
+
+  /* The editor takes a draft revision as itself: saving changes it in
+   * place. */
+  function editDraft(revision: WebhookEndpointRevision) {
+    const next = { name: revision.name, url: revision.url };
+    setEdit({ base: page, draft: next, source: { revision: revision.revision, saved: next } });
+    toast.add({ title: `Editing draft revision ${revision.revision}` });
   }
 
   async function activate(revision: WebhookEndpointRevision) {
@@ -260,7 +314,10 @@ export function WebhookEndpointScreen({
    * it. Unsaved edits hide the offer, since saving them opens the same
    * choice for the new revision. */
   const latest = history.items[0] ?? null;
-  const activatable = !isNew && activeRevision === null && dirtyCount === 0 ? latest : null;
+  const activatable = !isNew && activeRevision === null && dirtyCount === 0 && source === null ? latest : null;
+  /* The latest revision, when it is a draft the editor is not on yet:
+   * the header offers to continue it. */
+  const latestDraft = latest && isDraftRevision(latest) && source?.revision !== latest.revision ? latest : null;
 
   return (
     <Page width="narrow">
@@ -268,12 +325,20 @@ export function WebhookEndpointScreen({
       <PageHeader back={<PageBackLink to="/webhooks">Webhook endpoints</PageBackLink>}>
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h1 className="text-title-lg text-ink">Webhook endpoint</h1>
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="text-title-lg text-ink">Webhook endpoint</h1>
+              {source ? <Badge tone="accent">Draft revision {source.revision}</Badge> : null}
+            </div>
             <p className="mt-1.5 max-w-[560px] text-body text-ink-muted">
               Configure the webhook settings.
             </p>
           </div>
           <div className="flex items-center gap-2">
+            {latestDraft ? (
+              <Button size="sm" onClick={() => editDraft(latestDraft)}>
+                Edit draft
+              </Button>
+            ) : null}
             {activatable ? (
               <Button
                 variant="primary"
@@ -391,6 +456,7 @@ export function WebhookEndpointScreen({
             onActivate={(revision) => void activate(revision)}
             activating={activating}
             onCreateFrom={startFrom}
+            onEditDraft={editDraft}
             menuActions={(revision) => [
               {
                 id: "test",
@@ -481,7 +547,9 @@ export function WebhookEndpointScreen({
             <DialogDescription>
               {viewing.is_active
                 ? "This revision is active."
-                : "This revision is inactive."}
+                : isDraftRevision(viewing)
+                  ? "This revision is a draft."
+                  : "This revision is inactive."}
             </DialogDescription>
             <DialogBody>
               <DescriptionList>
@@ -506,6 +574,17 @@ export function WebhookEndpointScreen({
                 Test delivery
               </Button>
               <DialogClose render={<Button variant="ghost">Close</Button>} />
+              {isDraftRevision(viewing) ? (
+                <Button
+                  variant="primary"
+                  onClick={() => {
+                    editDraft(viewing);
+                    setViewing(null);
+                  }}
+                >
+                  Edit draft
+                </Button>
+              ) : null}
             </DialogFooter>
           </DialogContent>
         </Dialog>
@@ -513,8 +592,11 @@ export function WebhookEndpointScreen({
 
       <SaveBar
         count={dirtyCount}
+        saveLabel={source === null ? "Save" : dirtyCount === 0 ? "Activate" : "Save draft"}
+        idle={source ? `Draft revision ${source.revision}` : undefined}
+        idleDiscardLabel={source && source.revision !== page.draftRevision ? "Cancel" : undefined}
         saving={saving}
-        onDiscard={() => saved && setDraft(saved)}
+        onDiscard={() => (dirtyCount === 0 ? setEdit(null) : baseline && setDraft(baseline))}
         onSave={() => void save(draft)}
       />
     </Page>

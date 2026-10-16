@@ -12,7 +12,7 @@ import (
 )
 
 const teamEscalationPolicySelect = `SELECT id::text, organization_id::text, team_id::text, revision, is_active,
-	document, document_version, created_by_actor_id::text, created_at
+	document, document_version, created_by_actor_id::text, created_at, activated_at
 	FROM team_escalation_policies `
 
 func (s *Store) CreateTeamEscalationPolicyRevision(ctx context.Context, input application.CreateTeamEscalationPolicyRevisionInput) (domain.TeamEscalationPolicyRevision, error) {
@@ -62,6 +62,63 @@ func (s *Store) CreateTeamEscalationPolicyRevision(ctx context.Context, input ap
 		Data: data, OccurredAt: input.Now,
 	}); err != nil {
 		return domain.TeamEscalationPolicyRevision{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.TeamEscalationPolicyRevision{}, err
+	}
+	return revision, nil
+}
+
+// UpdateTeamEscalationPolicyRevision replaces a draft revision's document
+// in place under the policy's lock, which activation also takes.
+func (s *Store) UpdateTeamEscalationPolicyRevision(ctx context.Context, input application.UpdateTeamEscalationPolicyRevisionInput) (domain.TeamEscalationPolicyRevision, error) {
+	if err := input.Validate(); err != nil {
+		return domain.TeamEscalationPolicyRevision{}, err
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.TeamEscalationPolicyRevision{}, err
+	}
+	defer tx.Rollback(ctx)
+	if err := requireLiveTeam(ctx, tx, input.OrganizationID, input.TeamID); err != nil {
+		return domain.TeamEscalationPolicyRevision{}, err
+	}
+	if err := lockTeamEscalationPolicy(ctx, tx, input.OrganizationID, input.TeamID); err != nil {
+		return domain.TeamEscalationPolicyRevision{}, err
+	}
+	revision, err := scanTeamEscalationPolicyRevision(tx.QueryRow(ctx, teamEscalationPolicySelect+
+		`WHERE organization_id = $1 AND team_id = $2 AND revision = $3`,
+		input.OrganizationID, input.TeamID, input.Revision))
+	if err != nil {
+		return domain.TeamEscalationPolicyRevision{}, err
+	}
+	if revision.IsActive || revision.ActivatedAt != nil {
+		return domain.TeamEscalationPolicyRevision{}, domain.ErrRevisionNotDraft
+	}
+	actorID, err := managementActorID(ctx, tx, input.OrganizationID, input.ActorID)
+	if err != nil {
+		return domain.TeamEscalationPolicyRevision{}, err
+	}
+	var changed bool
+	if err := tx.QueryRow(ctx, `UPDATE team_escalation_policies SET document = $3, document_version = $4
+		WHERE organization_id = $1 AND id = $2
+		  AND (document, document_version) IS DISTINCT FROM ($3::jsonb, $4)
+		RETURNING true`, input.OrganizationID, revision.ID, input.Document, input.DocumentVersion).Scan(&changed); err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return domain.TeamEscalationPolicyRevision{}, err
+		}
+	}
+	revision.Document, revision.DocumentVersion = input.Document, input.DocumentVersion
+	if changed {
+		data, _ := json.Marshal(map[string]any{"team_id": revision.TeamID, "revision": revision.Revision})
+		if err := s.appendManagementAuditEvent(ctx, tx, domain.AuditEvent{
+			OrganizationID: input.OrganizationID, EventType: "team_escalation_policy.revision_updated",
+			ActorType: domain.ActorHuman, ActorID: actorID,
+			SubjectType: "team_escalation_policy", SubjectID: revision.ID,
+			Data: data, OccurredAt: input.Now,
+		}); err != nil {
+			return domain.TeamEscalationPolicyRevision{}, err
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return domain.TeamEscalationPolicyRevision{}, err
@@ -181,8 +238,9 @@ func (s *Store) ActivateTeamEscalationPolicyRevision(ctx context.Context, input 
 			return domain.TeamEscalationPolicyRevision{}, err
 		}
 	}
-	if _, err := tx.Exec(ctx, `UPDATE team_escalation_policies SET is_active = true
-		WHERE organization_id = $1 AND id = $2`, input.OrganizationID, target.ID); err != nil {
+	// The trigger stamps a draft's first activation.
+	if err := tx.QueryRow(ctx, `UPDATE team_escalation_policies SET is_active = true
+		WHERE organization_id = $1 AND id = $2 RETURNING activated_at`, input.OrganizationID, target.ID).Scan(&target.ActivatedAt); err != nil {
 		return domain.TeamEscalationPolicyRevision{}, err
 	}
 	data, _ := json.Marshal(map[string]any{
@@ -259,7 +317,7 @@ func scanTeamEscalationPolicyRevision(row rowScanner) (domain.TeamEscalationPoli
 	var revision domain.TeamEscalationPolicyRevision
 	var id, organizationID, teamID, membershipID string
 	err := row.Scan(&id, &organizationID, &teamID, &revision.Revision, &revision.IsActive,
-		&revision.Document, &revision.DocumentVersion, &membershipID, &revision.CreatedAt)
+		&revision.Document, &revision.DocumentVersion, &membershipID, &revision.CreatedAt, &revision.ActivatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.TeamEscalationPolicyRevision{}, domain.ErrNotFound
 	}

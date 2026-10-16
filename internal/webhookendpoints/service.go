@@ -205,7 +205,7 @@ func (s *Service) GetRevision(ctx context.Context, principal domain.Principal, e
 	return s.endpoints.GetWebhookEndpointRevision(ctx, application.GetWebhookEndpointRevisionInput{OrganizationID: principal.OrganizationID, EndpointKey: endpointKey, Revision: revision})
 }
 
-// CreateRevision appends the next inactive revision of the key. A fresh
+// CreateRevision appends the next revision of the key, a draft. A fresh
 // secret is sealed for every call; the store keeps it only when the key
 // has none yet, and that is the one time the secret is shown.
 func (s *Service) CreateRevision(ctx context.Context, principal domain.Principal, endpointKey, name, url string) (CreatedRevision, error) {
@@ -242,6 +242,29 @@ func (s *Service) CreateRevision(ctx context.Context, principal domain.Principal
 		result.SigningSecret = secret
 	}
 	return result, nil
+}
+
+// UpdateRevision replaces a draft revision's name and URL in place; the
+// revision keeps its number and the key keeps its secret. A revision that
+// was ever active refuses with domain.ErrRevisionNotDraft.
+func (s *Service) UpdateRevision(ctx context.Context, principal domain.Principal, endpointKey string, revision int64, name, url string) (domain.WebhookEndpointRevision, error) {
+	if err := s.requireManager(principal); err != nil {
+		return domain.WebhookEndpointRevision{}, err
+	}
+	if err := s.requireConfigured(); err != nil {
+		return domain.WebhookEndpointRevision{}, err
+	}
+	if err := validateEndpointKey(endpointKey); err != nil {
+		return domain.WebhookEndpointRevision{}, err
+	}
+	if err := s.validateURL(url); err != nil {
+		return domain.WebhookEndpointRevision{}, err
+	}
+	return s.endpoints.UpdateWebhookEndpointRevision(ctx, application.UpdateWebhookEndpointRevisionInput{
+		OrganizationID: principal.OrganizationID, EndpointKey: endpointKey, Revision: revision,
+		Name: strings.TrimSpace(name), URL: strings.TrimSpace(url),
+		ActorID: principal.ManagementActorID(), Now: s.clock.Now(),
+	})
 }
 
 // ActivateRevision switches the key's active revision, or rolls back to

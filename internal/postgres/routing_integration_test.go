@@ -92,8 +92,17 @@ func TestRoutingAgainstRealPostgres(t *testing.T) {
 	t.Run("append only records", func(t *testing.T) {
 		assertSQLRejected(t, ctx, store, `DELETE FROM escalation_paths WHERE id = $1`,
 			"append-only", firstRevision.ID)
+		// A draft's content may change; a revision that was active may not.
+		frozen := createRoutingTestPathRevision(t, ctx, store, firstOrg, firstMembership, "frozen", routingTestPathDocument(), now)
+		if _, err := store.ActivateEscalationPathRevision(ctx, application.ActivateEscalationPathRevisionInput{
+			OrganizationID: firstOrg, PathKey: "frozen", Revision: frozen.Revision, ActorID: firstMembership, Now: now,
+		}); err != nil {
+			t.Fatalf("activate the frozen path: %v", err)
+		}
 		assertSQLRejected(t, ctx, store, `UPDATE escalation_paths SET name = 'renamed' WHERE id = $1`,
-			"only is_active and archived_at may change", firstRevision.ID)
+			"only a draft escalation path revision may change its content", frozen.ID)
+		assertSQLRejected(t, ctx, store, `UPDATE escalation_paths SET path_key = 'moved' WHERE id = $1`,
+			"identity is immutable", firstRevision.ID)
 		assertSQLRejected(t, ctx, store, `UPDATE escalation_paths SET is_active = is_active WHERE id = $1`,
 			"must change is_active", firstRevision.ID)
 	})

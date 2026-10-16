@@ -1110,6 +1110,7 @@ func (a *API) installRequestApprovalPipelineRoutes(router *gin.RouterGroup) {
 	a.handle(router, http.MethodPost, pipeline+"/revisions", write, a.createRequestApprovalPipelineRevision)
 	a.handle(router, http.MethodGet, pipeline+"/revisions", read, a.listRequestApprovalPipelineRevisions)
 	a.handle(router, http.MethodGet, pipeline+"/revisions/:revision", read, a.getRequestApprovalPipelineRevision)
+	a.handle(router, http.MethodPut, pipeline+"/revisions/:revision", write, a.updateRequestApprovalPipelineRevision)
 	a.handle(router, http.MethodGet, pipeline+"/revisions/:revision/references", read, a.getRequestApprovalPipelineRevisionReferences)
 	a.handle(router, http.MethodPost, pipeline+"/revisions/:revision/activate", activate, a.activateRequestApprovalPipelineRevision)
 }
@@ -1262,6 +1263,32 @@ func (a *API) createRequestApprovalPipelineRevision(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusCreated, newRequestApprovalPipelineRevisionResponse(revision))
+}
+
+// updateRequestApprovalPipelineRevision replaces a draft revision's
+// content in place with the same document a new revision takes.
+func (a *API) updateRequestApprovalPipelineRevision(c *gin.Context) {
+	revisionNumber, err := parsePipelineRevision(c.Param("revision"))
+	if err != nil {
+		a.writeError(c, err)
+		return
+	}
+	var request requestApprovalPipelineDocumentRequest
+	if !bindStrict(c, &request) {
+		return
+	}
+	if request.Blocks == nil {
+		a.writeError(c, fmt.Errorf("blocks are required: %w", domain.ErrInvalid))
+		return
+	}
+	revision, err := a.pipelines.UpdateRevision(c.Request.Context(), currentPrincipal(c), c.Param("pipeline_key"), revisionNumber, request.Name, request.Blocks, approvalpipeline.Route{
+		EscalationPath: request.DefaultEscalationPath, AskAgentOwner: request.DefaultAskAgentOwner,
+	})
+	if err != nil {
+		a.writeError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, newRequestApprovalPipelineRevisionResponse(revision))
 }
 
 func (a *API) listRequestApprovalPipelineRevisions(c *gin.Context) {
@@ -1657,6 +1684,8 @@ func WriteError(c *gin.Context, logger *slog.Logger, err error) {
 		status, errorType, code = http.StatusConflict, "conflict", "tool_presentation_exists"
 	case errors.Is(err, domain.ErrEscalationPathArchived):
 		status, errorType, code = http.StatusConflict, "conflict", "escalation_path_archived"
+	case errors.Is(err, domain.ErrRevisionNotDraft):
+		status, errorType, code = http.StatusConflict, "conflict", "revision_not_draft"
 	case errors.Is(err, domain.ErrAgentArchived):
 		status, errorType, code = http.StatusConflict, "conflict", "agent_archived"
 	case errors.Is(err, domain.ErrAgentOwnerRequired):

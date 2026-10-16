@@ -151,8 +151,25 @@ func TestTeamEscalationPoliciesAgainstRealPostgres(t *testing.T) {
 	t.Run("append only records", func(t *testing.T) {
 		assertSQLRejected(t, ctx, store, `DELETE FROM team_escalation_policies WHERE id = $1`,
 			"append-only", first.ID)
+		// A draft's document may change; a revision that was active may not.
+		// The frozen team lives in the second organization, whose events no
+		// later count reads.
+		frozenTeam, err := store.CreateTeam(ctx, application.CreateTeamInput{
+			OrganizationID: secondOrg, Name: "frozen", ActorMembershipID: secondMembership, Now: now,
+		})
+		if err != nil {
+			t.Fatalf("CreateTeam frozen: %v", err)
+		}
+		frozen := createTeamPolicyRevision(t, ctx, store, secondOrg, frozenTeam.ID, secondMembership, teamPolicyDocument(true), now)
+		if _, err := store.ActivateTeamEscalationPolicyRevision(ctx, application.ActivateTeamEscalationPolicyRevisionInput{
+			OrganizationID: secondOrg, TeamID: frozenTeam.ID, Revision: frozen.Revision, ActorID: secondMembership, Now: now,
+		}); err != nil {
+			t.Fatalf("activate the frozen policy: %v", err)
+		}
 		assertSQLRejected(t, ctx, store, `UPDATE team_escalation_policies SET document = '{"nodes":[]}' WHERE id = $1`,
-			"only is_active may change", first.ID)
+			"only a draft team escalation policy revision may change its content", frozen.ID)
+		assertSQLRejected(t, ctx, store, `UPDATE team_escalation_policies SET revision = 99 WHERE id = $1`,
+			"identity is immutable", first.ID)
 		assertSQLRejected(t, ctx, store, `UPDATE team_escalation_policies SET is_active = is_active WHERE id = $1`,
 			"must change is_active", first.ID)
 	})

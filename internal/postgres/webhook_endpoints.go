@@ -13,14 +13,14 @@ import (
 )
 
 const webhookEndpointSelect = `SELECT id::text, organization_id::text, endpoint_key, revision, is_active,
-	name, url, created_by_actor_id::text, created_at
+	name, url, created_by_actor_id::text, created_at, activated_at
 	FROM webhook_endpoint_revisions `
 
 func scanWebhookEndpointRevision(row rowScanner) (domain.WebhookEndpointRevision, error) {
 	var revision domain.WebhookEndpointRevision
 	var id, organizationID, membershipID string
 	err := row.Scan(&id, &organizationID, &revision.EndpointKey, &revision.Revision, &revision.IsActive,
-		&revision.Name, &revision.URL, &membershipID, &revision.CreatedAt)
+		&revision.Name, &revision.URL, &membershipID, &revision.CreatedAt, &revision.ActivatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.WebhookEndpointRevision{}, domain.ErrNotFound
 	}
@@ -105,6 +105,63 @@ func (s *Store) CreateWebhookEndpointRevision(ctx context.Context, input applica
 		return application.CreatedWebhookEndpointRevision{}, err
 	}
 	return application.CreatedWebhookEndpointRevision{Revision: revision, SecretCreated: secretCreated}, nil
+}
+
+// UpdateWebhookEndpointRevision replaces a draft revision's name and URL
+// in place under the key's lock, which activation also takes. The key's
+// signing secret is untouched.
+func (s *Store) UpdateWebhookEndpointRevision(ctx context.Context, input application.UpdateWebhookEndpointRevisionInput) (domain.WebhookEndpointRevision, error) {
+	if err := input.Validate(); err != nil {
+		return domain.WebhookEndpointRevision{}, err
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.WebhookEndpointRevision{}, err
+	}
+	defer tx.Rollback(ctx)
+	if err := lockWebhookEndpoint(ctx, tx, input.OrganizationID, input.EndpointKey); err != nil {
+		return domain.WebhookEndpointRevision{}, err
+	}
+	revision, err := scanWebhookEndpointRevision(tx.QueryRow(ctx, webhookEndpointSelect+
+		`WHERE organization_id = $1 AND endpoint_key = $2 AND revision = $3`,
+		input.OrganizationID, input.EndpointKey, input.Revision))
+	if err != nil {
+		return domain.WebhookEndpointRevision{}, err
+	}
+	if revision.IsActive || revision.ActivatedAt != nil {
+		return domain.WebhookEndpointRevision{}, domain.ErrRevisionNotDraft
+	}
+	actorID, err := managementActorID(ctx, tx, input.OrganizationID, input.ActorID)
+	if err != nil {
+		return domain.WebhookEndpointRevision{}, err
+	}
+	if revision.Name == input.Name && revision.URL == input.URL {
+		if err := tx.Commit(ctx); err != nil {
+			return domain.WebhookEndpointRevision{}, err
+		}
+		return revision, nil
+	}
+	revision.Name, revision.URL = input.Name, input.URL
+	if _, err := tx.Exec(ctx, `UPDATE webhook_endpoint_revisions SET name = $3, url = $4
+		WHERE organization_id = $1 AND id = $2`, input.OrganizationID, revision.ID, revision.Name, revision.URL); err != nil {
+		return domain.WebhookEndpointRevision{}, err
+	}
+	data, _ := json.Marshal(map[string]any{
+		"endpoint_key": revision.EndpointKey, "revision": revision.Revision,
+		"name": revision.Name, "url_host": webhookURLHost(revision.URL),
+	})
+	if err := s.appendManagementAuditEvent(ctx, tx, domain.AuditEvent{
+		OrganizationID: input.OrganizationID, EventType: "webhook_endpoint.revision_updated",
+		ActorType: domain.ActorHuman, ActorID: actorID,
+		SubjectType: "webhook_endpoint", SubjectID: revision.ID,
+		Data: data, OccurredAt: input.Now,
+	}); err != nil {
+		return domain.WebhookEndpointRevision{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.WebhookEndpointRevision{}, err
+	}
+	return revision, nil
 }
 
 func (s *Store) ListWebhookEndpointSummaries(ctx context.Context, input application.ListWebhookEndpointSummariesInput) ([]domain.WebhookEndpointSummary, error) {
@@ -232,8 +289,9 @@ func (s *Store) ActivateWebhookEndpointRevision(ctx context.Context, input appli
 			return domain.WebhookEndpointRevision{}, err
 		}
 	}
-	if _, err := tx.Exec(ctx, `UPDATE webhook_endpoint_revisions SET is_active = true
-		WHERE organization_id = $1 AND id = $2`, input.OrganizationID, target.ID); err != nil {
+	// The trigger stamps a draft's first activation.
+	if err := tx.QueryRow(ctx, `UPDATE webhook_endpoint_revisions SET is_active = true
+		WHERE organization_id = $1 AND id = $2 RETURNING activated_at`, input.OrganizationID, target.ID).Scan(&target.ActivatedAt); err != nil {
 		return domain.WebhookEndpointRevision{}, err
 	}
 	// An active revision ends any archive of the key.
