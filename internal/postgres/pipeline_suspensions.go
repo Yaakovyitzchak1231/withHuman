@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/withHumanAI/withHuman/application"
 	"github.com/withHumanAI/withHuman/domain"
+	"github.com/withHumanAI/withHuman/telemetry"
 )
 
 // insertPipelineSuspension writes the open suspension inside the
@@ -126,7 +127,8 @@ func (s *Store) ResumeApproval(ctx context.Context, input application.ResumeAppr
 		return current()
 	}
 	var status string
-	err = tx.QueryRow(ctx, `SELECT status FROM approval_requests WHERE organization_id=$1 AND id=$2 FOR UPDATE`, organizationID, requestID).Scan(&status)
+	var createdAt time.Time
+	err = tx.QueryRow(ctx, `SELECT status, created_at FROM approval_requests WHERE organization_id=$1 AND id=$2 FOR UPDATE`, organizationID, requestID).Scan(&status, &createdAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.ApprovalRequest{}, domain.ErrNotFound
 	}
@@ -176,6 +178,9 @@ func (s *Store) ResumeApproval(ctx context.Context, input application.ResumeAppr
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return domain.ApprovalRequest{}, err
+	}
+	if decision := input.Decision; decision != nil {
+		telemetry.ApprovalResolved(ctx, string(decision.Status), string(domain.DecisionSourcePipeline), createdAt, decision.DecidedAt)
 	}
 	return current()
 }

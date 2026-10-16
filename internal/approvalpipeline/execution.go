@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/withHumanAI/withHuman/application"
 	"github.com/withHumanAI/withHuman/domain"
+	"github.com/withHumanAI/withHuman/telemetry"
 )
 
 const (
@@ -74,6 +75,17 @@ const AbandonReasonCode = "block_error"
 // the pipeline: the request is committed as pending with a suspension the
 // worker resumes.
 func (service *ExecutionService) Evaluate(ctx context.Context, request domain.ApprovalRequest) (application.InitializeApprovalInput, error) {
+	started := time.Now()
+	result, err := service.evaluate(ctx, request)
+	outcome := pipelineOutcome(result.Decision)
+	if result.Suspension != nil {
+		outcome = pipelineSuspended
+	}
+	telemetry.PipelineEvaluated(ctx, pipelineStageRequest, outcome, pipelineErrorType(err), time.Since(started))
+	return result, err
+}
+
+func (service *ExecutionService) evaluate(ctx context.Context, request domain.ApprovalRequest) (application.InitializeApprovalInput, error) {
 	if err := (application.StartApprovalInput{Request: request}).Validate(); err != nil {
 		return application.InitializeApprovalInput{}, err
 	}
@@ -169,6 +181,38 @@ func (service *ExecutionService) Evaluate(ctx context.Context, request domain.Ap
 // prepares the resume write. It never persists. The caller attaches routing
 // when the outcome still needs a human.
 func (service *ExecutionService) Resume(ctx context.Context, request domain.ApprovalRequest, suspension domain.PipelineSuspension) (application.ResumeApprovalInput, error) {
+	started := time.Now()
+	result, err := service.resume(ctx, request, suspension)
+	telemetry.PipelineEvaluated(ctx, pipelineStageResume, pipelineOutcome(result.Decision), pipelineErrorType(err), time.Since(started))
+	return result, err
+}
+
+// The pipeline stages and outcomes the evaluation metric reports beside
+// the decision statuses.
+const (
+	pipelineStageRequest = "request"
+	pipelineStageResume  = "resume"
+	pipelineHuman        = "human"
+	pipelineSuspended    = "suspended"
+)
+
+// pipelineOutcome is the decision's status, or human when the run left
+// the request for a person.
+func pipelineOutcome(decision *domain.Decision) string {
+	if decision == nil {
+		return pipelineHuman
+	}
+	return string(decision.Status)
+}
+
+func pipelineErrorType(err error) string {
+	if err == nil {
+		return ""
+	}
+	return "_OTHER"
+}
+
+func (service *ExecutionService) resume(ctx context.Context, request domain.ApprovalRequest, suspension domain.PipelineSuspension) (application.ResumeApprovalInput, error) {
 	if request.ID != suspension.RequestID || request.OrganizationID != suspension.OrganizationID {
 		return application.ResumeApprovalInput{}, fmt.Errorf("suspension does not belong to the request: %w", domain.ErrInvalid)
 	}
@@ -402,7 +446,9 @@ func (service *ExecutionService) runBlocks(ctx context.Context, run *pipelineRun
 		}
 		run.input.PipelineKey = effective.keyAt(index)
 		if block.container() {
+			started := time.Now()
 			evaluated := executeBranchCondition(ctx, block.Executor, run.input)
+			telemetry.PipelineBlockEvaluated(ctx, snapshot.BlockType, string(evaluated.Outcome), string(evaluated.ErrorCode), time.Since(started))
 			if err := service.record(run, snapshot, index, evaluated); err != nil {
 				return nil, err
 			}
@@ -424,7 +470,9 @@ func (service *ExecutionService) runBlocks(ctx context.Context, run *pipelineRun
 		if suspendAsync && block.Asynchronous {
 			return &suspensionPoint{position: index, block: snapshot, pipelineKey: effective.keyAt(index)}, nil
 		}
+		started := time.Now()
 		evaluated := ExecuteRequestApprovalBlock(ctx, block.Executor, run.input)
+		telemetry.PipelineBlockEvaluated(ctx, snapshot.BlockType, string(evaluated.Outcome), string(evaluated.ErrorCode), time.Since(started))
 		if err := service.record(run, snapshot, index, evaluated); err != nil {
 			return nil, err
 		}

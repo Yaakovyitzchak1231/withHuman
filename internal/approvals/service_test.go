@@ -144,9 +144,6 @@ func (r *approvalRepositoryStub) CountPendingApprovals(context.Context, applicat
 	}
 	return 0, nil
 }
-func (r *approvalRepositoryStub) OperationalMetrics(context.Context) (application.ApprovalMetrics, error) {
-	return application.ApprovalMetrics{}, nil
-}
 func (r *approvalRepositoryStub) Health(context.Context) error { return nil }
 
 func (r *approvalRepositoryStub) ListApprovalWorkflowStarts(context.Context, application.ListApprovalWorkflowStartsInput) ([]application.ApprovalWorkflowStart, error) {

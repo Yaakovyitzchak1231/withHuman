@@ -142,9 +142,6 @@ func (r *workflowRepository) ListReviewerCandidates(context.Context, application
 func (r *workflowRepository) GetApprovalRoutingState(context.Context, application.GetApprovalRoutingStateInput) (application.ApprovalRoutingState, error) {
 	return application.ApprovalRoutingState{}, nil
 }
-func (r *workflowRepository) OperationalMetrics(context.Context) (application.ApprovalMetrics, error) {
-	return application.ApprovalMetrics{}, nil
-}
 func (r *workflowRepository) Health(context.Context) error { return nil }
 
 type stubRecipientResolver struct {

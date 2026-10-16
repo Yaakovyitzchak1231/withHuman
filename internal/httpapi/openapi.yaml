@@ -267,16 +267,6 @@ paths:
         "200": { description: PostgreSQL and compiled pipelines are ready }
         "404": { $ref: "#/components/responses/Error" }
         "503": { description: A required dependency is unavailable or the server is draining before shutdown }
-  /metrics:
-    get:
-      summary: Read Prometheus operational metrics
-      operationId: operationalMetrics
-      x-withhuman-permission: public
-      security: []
-      responses:
-        "200": { description: Process and approval lifecycle metrics }
-        "404": { $ref: "#/components/responses/Error" }
-        "503": { description: Metrics storage is unavailable }
   /api/runtime-config:
     get:
       summary: Read public deployment configuration

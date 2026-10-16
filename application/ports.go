@@ -181,7 +181,6 @@ type ApprovalRepository interface {
 	// to the request: they hold request.decide and are not yet reviewers.
 	ListReviewerCandidates(ctx context.Context, input ListReviewerCandidatesInput) ([]ReviewerCandidate, error)
 	GetApprovalRoutingState(ctx context.Context, input GetApprovalRoutingStateInput) (ApprovalRoutingState, error)
-	OperationalMetrics(ctx context.Context) (ApprovalMetrics, error)
 	Health(ctx context.Context) error
 }
 
@@ -313,21 +312,6 @@ type EscalationPathRepository interface {
 	// name the path, as a block's path or as the pipeline default. The
 	// same set refuses ArchiveEscalationPath.
 	ListEscalationPathUses(context.Context, ListEscalationPathUsesInput) ([]domain.PipelineUse, error)
-}
-
-// ApprovalMetrics is a deliberately tenant-neutral operational view. It is
-// safe to expose to infrastructure monitoring without leaking organization
-// names, request payloads, or reviewer identity.
-type ApprovalMetrics struct {
-	Pending                    int64
-	Approved                   int64
-	Denied                     int64
-	Expired                    int64
-	Cancelled                  int64
-	AverageDecisionLatencySecs float64
-	DatabaseAcquiredConns      int32
-	DatabaseIdleConns          int32
-	DatabaseMaxConns           int32
 }
 
 // ErrWorkflowClosed reports that a request's workflow has already finished,

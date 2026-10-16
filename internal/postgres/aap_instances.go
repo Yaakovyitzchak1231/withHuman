@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/withHumanAI/withHuman/application"
 	"github.com/withHumanAI/withHuman/domain"
+	"github.com/withHumanAI/withHuman/telemetry"
 )
 
 // ClaimProvisioningKey reserves an AAP provisioning key for one attempt.
@@ -370,11 +371,20 @@ func (s *Store) DeleteProvisionedInstance(ctx context.Context, input application
 	}
 	auth := domain.AuthContext{Method: "provisioner", Assurance: "machine", AuthenticatedAt: input.Now}
 	cancelled := make([]domain.ID, 0, len(pending))
+	created := make([]time.Time, 0, len(pending))
 	for _, requestID := range pending {
-		if err := s.cancelLockedApproval(ctx, tx, input.OrganizationID, domain.ID(requestID), input.AgentID, string(input.InstanceID), name, auth, input.Now); err != nil {
+		createdAt, err := s.cancelLockedApproval(ctx, tx, input.OrganizationID, domain.ID(requestID), input.AgentID, string(input.InstanceID), name, auth, input.Now)
+		if err != nil {
 			return nil, err
 		}
 		cancelled = append(cancelled, domain.ID(requestID))
+		created = append(created, createdAt)
 	}
-	return cancelled, tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	for _, createdAt := range created {
+		telemetry.ApprovalResolved(ctx, string(domain.ApprovalCancelled), string(domain.DecisionSourceAgent), createdAt, input.Now)
+	}
+	return cancelled, nil
 }

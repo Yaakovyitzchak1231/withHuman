@@ -134,6 +134,7 @@ Before you go beyond your own machine:
 3. Set `WITHHUMAN_SECRETS_KEY` and keep it safe.
 4. Configure SMTP so invitations and password resets reach people.
 5. Back up the whole data directory.
+6. Set `OTEL_EXPORTER_OTLP_ENDPOINT` to collect its OpenTelemetry metrics.
 
 Don't want to run it yourself? [withhuman.ai](https://withhuman.ai) hosts
 it and adds the audit log, the AI judge, the MCP gateway, phone

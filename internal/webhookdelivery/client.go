@@ -9,6 +9,8 @@ import (
 	"net"
 	"net/http"
 	"time"
+
+	"github.com/withHumanAI/withHuman/telemetry"
 )
 
 const (
@@ -27,6 +29,9 @@ var ErrResponseTooLarge = errors.New("webhook response exceeds the size limit")
 // that signs another way (AAP's Standard Webhooks) leaves it empty and
 // supplies its headers in Headers.
 type Delivery struct {
+	// Purpose says why the webhook is sent, one of the telemetry
+	// package's webhook purposes, for the delivery metric.
+	Purpose        string
 	URL            string
 	Secret         string
 	Headers        http.Header
@@ -161,16 +166,19 @@ func (c *Client) Deliver(ctx context.Context, delivery Delivery) (Response, erro
 	started := time.Now()
 	response, err := httpClient.Do(request)
 	if err != nil {
-		return Response{Duration: time.Since(started)}, err
+		duration := time.Since(started)
+		telemetry.WebhookDelivered(ctx, delivery.Purpose, 0, true, IsTimeout(err), duration)
+		return Response{Duration: duration}, err
 	}
 	defer response.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(response.Body, MaximumResponseBytes+1))
 	duration := time.Since(started)
+	if err == nil && len(body) > MaximumResponseBytes {
+		err = ErrResponseTooLarge
+	}
+	telemetry.WebhookDelivered(ctx, delivery.Purpose, response.StatusCode, err != nil, IsTimeout(err), duration)
 	if err != nil {
 		return Response{StatusCode: response.StatusCode, Header: response.Header, Duration: duration}, err
-	}
-	if len(body) > MaximumResponseBytes {
-		return Response{StatusCode: response.StatusCode, Header: response.Header, Duration: duration}, ErrResponseTooLarge
 	}
 	return Response{StatusCode: response.StatusCode, Header: response.Header, Body: body, Duration: duration}, nil
 }

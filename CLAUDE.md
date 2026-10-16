@@ -268,6 +268,22 @@ Examples:
 - Application port operations accept one named input struct in addition to
   `context.Context`. Every input struct has a `Validate` method, and production
   adapters validate it before performing I/O or other side effects.
+- Metrics are OpenTelemetry, in the exported `telemetry` package: each
+  process's main calls `telemetry.Start` (the single binary's
+  `cmd/withhuman`, an edition's mains), which installs the meter provider
+  only when the standard `OTEL_*` variables configure an exporter; every
+  core instrument is declared in `telemetry/instruments.go` with semantic
+  convention names where one exists (`http.server.request.duration`,
+  `db.client.connection.*`, Temporal's own through its SDK handler) and
+  `withhuman.*` otherwise, and an edition makes its own from
+  `telemetry.Meter`. Attributes are closed vocabularies, never an
+  organization, agent, member, tool or request identifier. Request
+  outcomes are counted in the store after the transaction commits, so a
+  rollback or an idempotent replay counts nothing. Tests read metrics
+  through `telemetry/telemetrytest`, comparing counts before and after.
+  Exporter settings are the `OTEL_*` variables of the OpenTelemetry
+  specification, the one exception to the `WITHHUMAN_` prefix: operators
+  and collectors already speak them.
 - Request-scoped logging uses `loggermdc` and the context-aware
   `slog` methods. Service entry points call `loggermdc.Configure` before
   composing dependencies so injected loggers and package-level `slog` calls

@@ -54,6 +54,7 @@ import (
 	"github.com/withHumanAI/withHuman/loggermdc"
 	"github.com/withHumanAI/withHuman/mcptools"
 	"github.com/withHumanAI/withHuman/notifications"
+	"github.com/withHumanAI/withHuman/telemetry"
 	"github.com/withHumanAI/withHuman/tenants"
 	"go.temporal.io/sdk/client"
 	temporallog "go.temporal.io/sdk/log"
@@ -193,6 +194,7 @@ type Server struct {
 	toolCatalog    *toolcatalog.Service
 	temporalClient client.Client
 	drain          *httpapi.Drain
+	stopObserving  func()
 }
 
 // RequestReader is the product read of one approval request: the
@@ -268,10 +270,30 @@ func NewServer(ctx context.Context, options ServerOptions) (*Server, error) {
 	}
 	temporalClient, err := client.NewLazyClient(client.Options{HostPort: cfg.TemporalAddress, Namespace: cfg.TemporalNamespace,
 		ContextPropagators: []workflow.ContextPropagator{orchestration.NewMDCPropagator()},
-		Logger:             temporallog.NewStructuredLogger(logger)})
+		Logger:             temporallog.NewStructuredLogger(logger), MetricsHandler: telemetry.TemporalMetrics(logger)})
 	if err != nil {
 		store.Close()
 		return nil, err
+	}
+	stopObservingPool, err := telemetry.ObservePool("server", store.Pool())
+	if err != nil {
+		temporalClient.Close()
+		store.Close()
+		return nil, err
+	}
+	// The pending backlog is read by the server alone: every replica
+	// reports the same deployment-wide value, and a worker may not run
+	// beside it.
+	stopObservingPending, err := telemetry.ObservePendingApprovals(store.PendingApprovals)
+	if err != nil {
+		stopObservingPool()
+		temporalClient.Close()
+		store.Close()
+		return nil, err
+	}
+	stopObserving := func() {
+		stopObservingPending()
+		stopObservingPool()
 	}
 	orchestrator := orchestration.NewTemporal(temporalClient, cfg.TemporalTaskQueue)
 	var plan application.Entitlements = options.Entitlements
@@ -394,6 +416,7 @@ func NewServer(ctx context.Context, options ServerOptions) (*Server, error) {
 	if len(cfg.TrustedProxyCIDRs) == 0 {
 		_ = router.SetTrustedProxies(nil)
 	} else if err := router.SetTrustedProxies(cfg.TrustedProxyCIDRs); err != nil {
+		stopObserving()
 		temporalClient.Close()
 		store.Close()
 		return nil, err
@@ -402,7 +425,7 @@ func NewServer(ctx context.Context, options ServerOptions) (*Server, error) {
 		toolCatalog: catalogService,
 		Config:      cfg, Router: router, Auth: authService, Tenants: tenantService,
 		Clock: clock, Logger: logger, Notifications: notifier, Roles: store, PermissionPolicies: store, Requests: approvalService, Contacts: contactService, Directory: store, Members: memberService, Temporal: temporalClient,
-		store: store, temporalClient: temporalClient, drain: drain,
+		store: store, temporalClient: temporalClient, drain: drain, stopObserving: stopObserving,
 	}
 	if options.RegisterRoutes != nil {
 		options.RegisterRoutes(server)
@@ -557,6 +580,7 @@ func serveUntilDrained(ctx context.Context, server *http.Server, listener net.Li
 // Close releases the store and Temporal client without serving, for a
 // composition that fails between NewServer and Serve.
 func (s *Server) Close() {
+	s.stopObserving()
 	s.temporalClient.Close()
 	s.store.Close()
 }

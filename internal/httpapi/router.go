@@ -13,7 +13,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -43,6 +42,7 @@ import (
 	"github.com/withHumanAI/withHuman/internal/webhookendpoints"
 	"github.com/withHumanAI/withHuman/loggermdc"
 	"github.com/withHumanAI/withHuman/mcptools"
+	"github.com/withHumanAI/withHuman/telemetry"
 )
 
 //go:embed openapi.yaml
@@ -165,10 +165,7 @@ type API struct {
 	logger             *slog.Logger
 	config             Config
 	// access records every registered route with its label; see access.go.
-	access       map[routeKey]string
-	requests     atomic.Uint64
-	errors       atomic.Uint64
-	durationNano atomic.Uint64
+	access map[routeKey]string
 	// engine is the composed router; the MCP tools dispatch product API
 	// calls to it in process so they run the same path a client would.
 	engine *gin.Engine
@@ -213,7 +210,6 @@ func (a *API) router() *gin.Engine {
 	root := &router.RouterGroup
 	a.handle(root, http.MethodGet, "/livez", AccessPublic, func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "live"}) })
 	a.handle(root, http.MethodGet, "/readyz", AccessPublic, a.readiness)
-	a.handle(root, http.MethodGet, "/metrics", AccessPublic, a.metrics)
 	a.handle(root, http.MethodGet, "/api/runtime-config", AccessPublic, a.runtimeConfig)
 	a.handle(root, http.MethodGet, "/api/openapi.yaml", AccessPublic, func(c *gin.Context) { c.Data(http.StatusOK, "application/yaml", openAPISpec) })
 	// /api/mcp/v1 is the management MCP surface for AI agents holding an
@@ -349,8 +345,9 @@ func (a *API) observability() gin.HandlerFunc {
 		// An MCP tool's in-process call is part of the inbound MCP
 		// request already counted, so it is logged but not metered.
 		loopback := isMCPLoopback(c.Request.Context())
+		var finish func(route string, status int)
 		if !loopback {
-			a.requests.Add(1)
+			finish = telemetry.StartHTTPServerRequest(c.Request.Context(), c.Request.Method, c.Request.TLS != nil)
 		}
 		c.Next()
 		duration := time.Since(startedAt)
@@ -358,11 +355,8 @@ func (a *API) observability() gin.HandlerFunc {
 		if c.Writer.Status() >= 500 {
 			level = slog.LevelError
 		}
-		if !loopback {
-			a.durationNano.Add(uint64(duration.Nanoseconds()))
-			if c.Writer.Status() >= 500 {
-				a.errors.Add(1)
-			}
+		if finish != nil {
+			finish(c.FullPath(), c.Writer.Status())
 		}
 		a.logger.LogAttrs(c.Request.Context(), level, "http request - "+c.Request.URL.Path,
 			slog.String("method", c.Request.Method), slog.String("path", c.Request.URL.Path),
@@ -395,49 +389,6 @@ func (a *API) readiness(c *gin.Context) {
 		}
 	}
 	c.JSON(status, gin.H{"status": map[bool]string{true: "ready", false: "not_ready"}[status == http.StatusOK], "checks": checks})
-}
-
-func (a *API) metrics(c *gin.Context) {
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Second)
-	defer cancel()
-	metrics, err := a.approvalRepo.OperationalMetrics(ctx)
-	if err != nil {
-		a.logger.ErrorContext(c.Request.Context(), "operational metrics collection failed", "error", err)
-		c.String(http.StatusServiceUnavailable, "metrics unavailable\n")
-		return
-	}
-	c.Header("Content-Type", "text/plain; version=0.0.4")
-	requestCount := a.requests.Load()
-	averageHTTPSeconds := 0.0
-	if requestCount > 0 {
-		averageHTTPSeconds = float64(a.durationNano.Load()) / float64(requestCount) / float64(time.Second)
-	}
-	c.String(http.StatusOK, `# HELP withhuman_http_requests_total HTTP requests handled by this process.
-# TYPE withhuman_http_requests_total counter
-withhuman_http_requests_total %d
-# HELP withhuman_http_errors_total HTTP responses with a 5xx status.
-# TYPE withhuman_http_errors_total counter
-withhuman_http_errors_total %d
-# HELP withhuman_http_request_duration_seconds Mean HTTP request duration for this process.
-# TYPE withhuman_http_request_duration_seconds gauge
-withhuman_http_request_duration_seconds %.6f
-# HELP withhuman_approvals Current approval request count by status.
-# TYPE withhuman_approvals gauge
-withhuman_approvals{status="pending"} %d
-withhuman_approvals{status="approved"} %d
-withhuman_approvals{status="denied"} %d
-withhuman_approvals{status="expired"} %d
-withhuman_approvals{status="cancelled"} %d
-# HELP withhuman_approval_decision_latency_seconds Mean human decision latency for approved and denied requests.
-# TYPE withhuman_approval_decision_latency_seconds gauge
-withhuman_approval_decision_latency_seconds %.6f
-# HELP withhuman_database_connections PostgreSQL connection-pool state.
-# TYPE withhuman_database_connections gauge
-withhuman_database_connections{state="acquired"} %d
-withhuman_database_connections{state="idle"} %d
-withhuman_database_connections{state="max"} %d
-`, requestCount, a.errors.Load(), averageHTTPSeconds, metrics.Pending, metrics.Approved, metrics.Denied, metrics.Expired, metrics.Cancelled,
-		metrics.AverageDecisionLatencySecs, metrics.DatabaseAcquiredConns, metrics.DatabaseIdleConns, metrics.DatabaseMaxConns)
 }
 
 func (a *API) runtimeConfig(c *gin.Context) {
@@ -1889,7 +1840,7 @@ func (a *API) installFrontend(router *gin.Engine) {
 	}
 	router.NoRoute(func(c *gin.Context) {
 		path := c.Request.URL.Path
-		if a.frontend == nil || strings.HasPrefix(path, "/api/") || strings.HasPrefix(path, "/auth/") || path == "/livez" || path == "/readyz" || path == "/metrics" {
+		if a.frontend == nil || strings.HasPrefix(path, "/api/") || strings.HasPrefix(path, "/auth/") || path == "/livez" || path == "/readyz" {
 			writeAPIError(c, http.StatusNotFound, "not_found", "route_not_found", "Route not found.", nil)
 			return
 		}
