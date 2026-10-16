@@ -1212,9 +1212,10 @@ paths:
                   onboarding:
                     type: object
                     description: Whether the product's guided setup should open for this person.
-                    required: [required, completed_at]
+                    required: [required, skipped, completed_at]
                     properties:
                       required: { type: boolean, example: false, description: "`true` while nobody in the organization has finished or skipped the guided setup and this person has the permissions to run it." }
+                      skipped: { type: boolean, example: false, description: "`true` while the organization skipped the guided setup, nobody has finished it since, and this person has the permissions to run it." }
                       completed_at: { type: [string, "null"], format: date-time, description: "When the organization finished or skipped the guided setup. `null` until then." }
         "401": { description: "No session cookie, or the session has expired or been signed out" }
   /api/v1/requests/{id}:

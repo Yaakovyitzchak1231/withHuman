@@ -254,15 +254,30 @@ func (s *Service) Get(ctx context.Context, principal domain.Principal) (domain.O
 	})
 }
 
-// Status reports whether the organization still needs onboarding from
-// this person's point of view: nobody has finished or skipped it, and
-// they hold the authority to run it.
-func (s *Service) Required(ctx context.Context, principal domain.Principal) (required bool, completedAt *time.Time, err error) {
+// Status is where the organization stands with the guided setup, from
+// one person's point of view.
+type Status struct {
+	// Required while nobody has finished or skipped the setup and the
+	// person can run it: the product opens on /welcome.
+	Required bool
+	// Skipped while the setup was skipped, nobody has finished it since,
+	// and the person can run it: the product offers it again.
+	Skipped     bool
+	CompletedAt *time.Time
+}
+
+// Status reports the organization's setup state for this person.
+func (s *Service) Status(ctx context.Context, principal domain.Principal) (Status, error) {
 	organization, err := s.identities.GetOrganization(ctx, application.GetOrganizationInput{OrganizationID: principal.OrganizationID})
 	if err != nil {
-		return false, nil, err
+		return Status{}, err
 	}
-	return organization.OnboardingCompletedAt == nil && Authorized(principal), organization.OnboardingCompletedAt, nil
+	authorized := Authorized(principal)
+	return Status{
+		Required:    organization.OnboardingCompletedAt == nil && authorized,
+		Skipped:     organization.OnboardingCompletedAt != nil && organization.OnboardingFinishedAt == nil && authorized,
+		CompletedAt: organization.OnboardingCompletedAt,
+	}, nil
 }
 
 // SelectAgents records which detected runtimes the person wants
