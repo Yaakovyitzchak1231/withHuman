@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { Button } from "@/ds/components/button";
 import { Callout } from "@/ds/components/callout";
 import { IconButton } from "@/ds/components/icon-button";
@@ -101,37 +101,38 @@ function sortRungs(rules: NotificationRule[]) {
   return [...rules].sort((a, b) => a.delay_seconds - b.delay_seconds);
 }
 
-/* Both ladders with one save bar: an edit to either counts as dirty, and
- * Save writes whichever changed. The saved rules come from the route
- * loader; the parent keys this component on them, so a save or a change
- * to the methods (which can change the defaults, and takes a removed
- * method's rungs with it on the server) starts a fresh draft. Methods are
- * the confirmed ones from the channels above, including unavailable Slack
- * links whose saved references survive reconnection. On a settings page each ladder is
- * a section of its own; embedded in a card (the guided setup) each is a
- * well, and the card learns through onDirtyChange whether edits are
- * waiting so its own way forward can hold until they are saved. */
-export function NotificationLadders({
-  rules,
-  methods,
-  onSaved,
-  embedded = false,
-  onDirtyChange,
-}: {
+/* The person's two ladders as a draft over what the server holds. A
+ * new value from the loader (after a save, or a change to the methods,
+ * which can change the defaults and takes a removed method's rungs with
+ * it on the server) starts a fresh draft. Methods are the confirmed ones
+ * from the channels, including unavailable Slack links whose saved
+ * references survive reconnection. save writes whichever ladder changed
+ * and rejects when a write fails, so each caller says so its own way. */
+export interface LadderDraft {
   rules: NotificationRules | null;
-  methods: ContactMethod[];
-  onSaved: () => Promise<void>;
-  embedded?: boolean;
-  onDirtyChange?: (dirty: boolean) => void;
-}) {
-  const toast = useToast();
-  const [draft, setDraft] = useState<LadderState | null>(
-    rules ? { standard: rules.standard, interrupt: rules.interrupt } : null,
-  );
-  const [saving, setSaving] = useState(false);
+  draft: LadderState | null;
+  dirty: NotificationUrgency[];
+  saving: boolean;
+  update: (urgency: NotificationUrgency, next: NotificationRule[]) => void;
+  discard: () => void;
+  save: () => Promise<void>;
+}
 
-  const options = useMemo(() => ladderOptions(methods), [methods]);
-  const unavailableSlack = methods.some((method) => method.kind === "slack" && !method.available);
+export function useLadderDraft(
+  rules: NotificationRules | null,
+  methods: ContactMethod[],
+  onSaved: () => Promise<void>,
+): LadderDraft {
+  const saved =
+    JSON.stringify(rules) +
+    methods.map((method) => `${method.id}:${method.verified}:${method.available}`).join(",");
+  const [draftOf, setDraftOf] = useState(saved);
+  const [draft, setDraft] = useState<LadderState | null>(ladderState(rules));
+  const [saving, setSaving] = useState(false);
+  if (draftOf !== saved) {
+    setDraftOf(saved);
+    setDraft(ladderState(rules));
+  }
 
   const dirty = useMemo(() => {
     if (!rules || !draft) return [] as NotificationUrgency[];
@@ -140,15 +141,6 @@ export function NotificationLadders({
     );
   }, [rules, draft]);
 
-  const anyDirty = dirty.length > 0;
-  useEffect(() => {
-    onDirtyChange?.(anyDirty);
-  }, [anyDirty, onDirtyChange]);
-
-  const discard = () => {
-    if (rules) setDraft({ standard: rules.standard, interrupt: rules.interrupt });
-  };
-
   const save = async () => {
     if (!draft || dirty.length === 0) return;
     setSaving(true);
@@ -156,26 +148,52 @@ export function NotificationLadders({
       for (const urgency of dirty) {
         await api.saveNotificationRules(urgency, sortRungs(draft[urgency]));
       }
-      toast.add({ type: "approve", title: "Notification rules saved" });
       await onSaved();
-    } catch (reason) {
-      toast.add({
-        type: "deny",
-        title: "Could not save your rules",
-        description: reason instanceof Error ? reason.message : undefined,
-      });
     } finally {
       setSaving(false);
     }
   };
 
-  const update = (urgency: NotificationUrgency, next: NotificationRule[]) =>
-    setDraft((current) => (current ? { ...current, [urgency]: next } : current));
+  return {
+    rules,
+    draft,
+    dirty,
+    saving,
+    update: (urgency, next) =>
+      setDraft((current) => (current ? { ...current, [urgency]: next } : current)),
+    discard: () => setDraft(ladderState(rules)),
+    save,
+  };
+}
 
-  if (!rules || !draft) {
+function ladderState(rules: NotificationRules | null): LadderState | null {
+  return rules ? { standard: rules.standard, interrupt: rules.interrupt } : null;
+}
+
+/* Both ladders over one draft. On a settings page each ladder is a
+ * section of its own, saved through LadderSaveBar; embedded in a card
+ * (the guided setup) each is a well, and the card's own way forward
+ * saves the draft. */
+export function NotificationLadders({
+  ladders,
+  methods,
+  onRetry,
+  embedded = false,
+}: {
+  ladders: LadderDraft;
+  methods: ContactMethod[];
+  /* Reloads the rules after they failed to load. */
+  onRetry: () => void;
+  embedded?: boolean;
+}) {
+  const { draft, update } = ladders;
+  const options = useMemo(() => ladderOptions(methods), [methods]);
+  const unavailableSlack = methods.some((method) => method.kind === "slack" && !method.available);
+
+  if (!ladders.rules || !draft) {
     return (
       <Callout tone="warn" title="Could not load your rules">
-        <Button size="sm" variant="ghost" onClick={() => void onSaved()}>
+        <Button size="sm" variant="ghost" onClick={onRetry}>
           Try again
         </Button>
       </Callout>
@@ -213,7 +231,33 @@ export function NotificationLadders({
           />
         </Frame>
       ))}
-      <SaveBar count={dirty.length} onDiscard={discard} onSave={() => void save()} saving={saving} />
+    </>
+  );
+}
+
+/* The settings page's way to save the ladders: one bar for both, and
+ * the guard on leaving with edits. */
+export function LadderSaveBar({ ladders }: { ladders: LadderDraft }) {
+  const toast = useToast();
+  const { dirty, saving, discard } = ladders;
+
+  const save = async () => {
+    try {
+      await ladders.save();
+      toast.add({ type: "approve", title: "Notification rules saved" });
+    } catch (reason) {
+      toast.add({
+        type: "deny",
+        title: "Could not save your rules",
+        description: reason instanceof Error ? reason.message : undefined,
+      });
+      throw reason;
+    }
+  };
+
+  return (
+    <>
+      <SaveBar count={dirty.length} onDiscard={discard} onSave={() => void save().catch(() => undefined)} saving={saving} />
       <UnsavedGuard dirty={dirty.length > 0} saving={saving} onSave={save} onDiscard={discard} />
     </>
   );

@@ -5,7 +5,7 @@ import { SettingsSection } from "@/ds/components/settings-section";
 import { PlusIcon } from "@/ds/icons";
 import { useNavigate, useRouter } from "@tanstack/react-router";
 import { ChannelRows, type ChannelsPage } from "./contact-channels";
-import { NotificationLadders } from "./notification-rules";
+import { LadderSaveBar, NotificationLadders, useLadderDraft } from "./notification-rules";
 import { useTitle } from "./use-title";
 
 /* Contact methods are self-service, so this page has no permission gate:
@@ -19,11 +19,7 @@ export function NotificationsScreen({ page }: { page: ChannelsPage }) {
   /* Every change is followed by a reload of the loader's page, so the
    * lists always show what the server holds. */
   const refresh = () => router.invalidate();
-
-  /* The rules are keyed on what the server holds, so a save or a change
-   * to the methods starts the ladders from a fresh draft. */
-  const rulesKey =
-    JSON.stringify(rules) + methods.map((method) => `${method.id}:${method.verified}:${method.available}`).join(",");
+  const ladders = useLadderDraft(rules, methods, refresh);
 
   return (
     <SettingsPage
@@ -53,7 +49,8 @@ export function NotificationsScreen({ page }: { page: ChannelsPage }) {
         <ChannelRows methods={methods} onChanged={refresh} />
       </SettingsSection>
 
-      <NotificationLadders key={rulesKey} rules={rules} methods={methods} onSaved={refresh} />
+      <NotificationLadders ladders={ladders} methods={methods} onRetry={() => void refresh()} />
+      <LadderSaveBar ladders={ladders} />
     </SettingsPage>
   );
 }

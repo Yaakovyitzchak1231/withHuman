@@ -13,7 +13,8 @@ export interface UnsavedGuardProps {
    * browser's native prompt. */
   dirty: boolean;
   saving?: boolean;
-  /* Commit the pending edits; navigation continues once it resolves. */
+  /* Commit the pending edits; navigation continues once it resolves
+   * and stays put if it rejects. */
   onSave: () => void | Promise<void>;
   onDiscard: () => void;
 }
@@ -34,10 +35,46 @@ export function UnsavedGuard({
   });
 
   return (
-    <Dialog
+    <UnsavedDialog
       open={status === "blocked"}
-      onOpenChange={(open) => {
-        if (!open) reset?.();
+      saving={saving}
+      onKeepEditing={() => reset?.()}
+      onDiscard={() => {
+        onDiscard();
+        proceed?.();
+      }}
+      onSave={() => {
+        void Promise.resolve(onSave()).then(
+          () => proceed?.(),
+          () => reset?.(),
+        );
+      }}
+    />
+  );
+}
+
+export interface UnsavedDialogProps {
+  open: boolean;
+  saving?: boolean;
+  onKeepEditing: () => void;
+  onDiscard: () => void;
+  onSave: () => void;
+}
+
+/* The choice UnsavedGuard offers, for a way out the router does not
+ * see: a step inside a flow, or an action that leaves once it is done. */
+export function UnsavedDialog({
+  open,
+  saving = false,
+  onKeepEditing,
+  onDiscard,
+  onSave,
+}: UnsavedDialogProps) {
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) onKeepEditing();
       }}
     >
       <DialogContent>
@@ -46,26 +83,13 @@ export function UnsavedGuard({
           Save or discard your changes before leaving.
         </DialogDescription>
         <DialogFooter>
-          <Button variant="ghost" disabled={saving} onClick={() => reset?.()}>
+          <Button variant="ghost" disabled={saving} onClick={onKeepEditing}>
             Keep editing
           </Button>
-          <Button
-            variant="neutral"
-            disabled={saving}
-            onClick={() => {
-              onDiscard();
-              proceed?.();
-            }}
-          >
+          <Button variant="neutral" disabled={saving} onClick={onDiscard}>
             Discard and leave
           </Button>
-          <Button
-            variant="primary"
-            loading={saving}
-            onClick={() => {
-              void Promise.resolve(onSave()).then(() => proceed?.());
-            }}
-          >
+          <Button variant="primary" loading={saving} onClick={onSave}>
             Save and leave
           </Button>
         </DialogFooter>
