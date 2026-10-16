@@ -390,8 +390,10 @@ export interface Session {
   assignments: RoleAssignment[];
   /* required is true while the organization has not finished (or
    * skipped) the guided setup and the caller holds every permission the
-   * flow needs; the app sends such a person to /welcome once per load. */
-  onboarding?: { required: boolean; completed_at?: string | null };
+   * flow needs; the app sends such a person to /welcome once per load.
+   * skipped is true while the setup was skipped and nobody has finished
+   * it since, for the same people; the sidebar offers it again. */
+  onboarding?: { required: boolean; skipped: boolean; completed_at?: string | null };
 }
 
 export interface Member {

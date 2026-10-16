@@ -56,6 +56,7 @@ import { definitionsFromStored } from "./pipeline-blocks";
 import { ladderLines } from "./notification-rules";
 import { OnboardingApprovals, useTestActivity, type TestActivity } from "./onboarding-approvals";
 import { OnboardingContactStep, OnboardingRulesStep } from "./onboarding-contacts";
+import { refreshSession } from "./session-store";
 import { useOnboardingSession } from "./use-onboarding-session";
 import { useRuntimeConfig } from "./use-runtime-config";
 import { useTitle } from "./use-title";
@@ -291,7 +292,10 @@ function OnboardingFlow({ page }: { page: ChannelsPage }) {
       await api.onboardingComplete(outcome);
       /* Finished or skipped, the workspace is theirs: open the sidebar
        * so the queue arrives with its navigation, whatever they had
-       * before the setup held it closed. */
+       * before the setup held it closed. The session learns the outcome,
+       * so a skip brings the sidebar's Finish setup card and a finish
+       * removes it. */
+      void refreshSession();
       sidebar?.reopen();
       void navigate({ to: "/queue" });
     } catch (reason) {
@@ -312,6 +316,7 @@ function OnboardingFlow({ page }: { page: ChannelsPage }) {
     try {
       if (status === "installed") setSession(await api.onboardingRecordTest(requestId));
       await api.onboardingComplete("finished");
+      void refreshSession();
       sidebar?.reopen();
       void navigate({ to: "/queue" });
     } catch (reason) {

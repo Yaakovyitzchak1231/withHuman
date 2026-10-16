@@ -311,7 +311,8 @@ func (s *Store) WaitOnboardingSession(ctx context.Context, input application.Wai
 }
 
 // CompleteOnboarding closes the member's open session with the outcome
-// and marks the organization done the first time. Finished requires the
+// and marks the organization done the first time, and finished the
+// first time someone finishes. Finished requires the
 // open session, when one exists, to have reached tested.
 func (s *Store) CompleteOnboarding(ctx context.Context, input application.CompleteOnboardingInput) error {
 	if err := input.Validate(); err != nil {
@@ -343,8 +344,10 @@ func (s *Store) CompleteOnboarding(ctx context.Context, input application.Comple
 			return err
 		}
 	}
-	if _, err := tx.Exec(ctx, `UPDATE organizations SET onboarding_completed_at = COALESCE(onboarding_completed_at, $2), updated_at = $2
-		WHERE id = $1`, input.OrganizationID, input.Now); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE organizations SET onboarding_completed_at = COALESCE(onboarding_completed_at, $2),
+		onboarding_finished_at = CASE WHEN $3 THEN COALESCE(onboarding_finished_at, $2) ELSE onboarding_finished_at END,
+		updated_at = $2
+		WHERE id = $1`, input.OrganizationID, input.Now, terminal == domain.OnboardingCompleted); err != nil {
 		return err
 	}
 	actor := input.ActorMembershipID

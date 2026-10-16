@@ -42,7 +42,8 @@ own.
   anatomy of a component that also carries a label (toast, timeline rail).
   The one dot that is not a status is `IconButton`'s `attention` mark
   (the to-do bell, and the collapsed sidebar's way back while the bell
-  has items): it says something behind the control wants the person,
+  has items or the Finish setup card is showing): it says something
+  behind the control wants the person,
   and the control's label says the same in words.
   The review queue shows no connection state: once a snapshot has loaded,
   a failed refresh or a dropped stream leaves it on screen without a
@@ -1077,6 +1078,11 @@ Examples:
   agent's job, through the skills and the MCP server.
   `organizations.onboarding_completed_at` drives the `/welcome` redirect
   through `/me`'s `onboarding.required`; finishing or skipping sets it.
+  Only finishing sets `onboarding_finished_at`: while an organization
+  has skipped and nobody has finished since, `/me`'s `onboarding.skipped`
+  puts a Finish setup card at the sidebar's foot (`app/setup-reminder.tsx`)
+  for the people who can run the setup, hidden per browser with its
+  close button.
   No adapter policy exists: every call an adapter or the gateway
   intercepts becomes a request, and the pipeline decides. The CLI checks
   a saved instance credential against `GET /api/v1/agent_instances/self`

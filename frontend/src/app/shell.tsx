@@ -53,6 +53,7 @@ import { NavGroupLabel, NavItem } from "./nav-item";
 import { useAccess } from "./authorization";
 import { useNotifiedPendingCount } from "./queue-store";
 import { SettingsNav } from "./settings-nav";
+import { SetupReminderCard, useSetupReminder } from "./setup-reminder";
 import { TodoBell } from "./todo-bell";
 import { useRuntimeConfig } from "./use-runtime-config";
 
@@ -125,7 +126,9 @@ export function Shell({
   /* What the person should do, under the bell in the sidebar header;
    * null when no edition can ever list anything, and then no bell. */
   const todos = useTodos();
-  const attention = todos !== null && todos.length > 0;
+  /* A skipped setup is offered again from a card at the sidebar's foot. */
+  const setupReminder = useSetupReminder();
+  const attention = (todos !== null && todos.length > 0) || setupReminder.visible;
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [sidebar, setSidebar] = useState<SidebarState>(readSidebarState);
   const [dragging, setDragging] = useState(false);
@@ -524,8 +527,13 @@ export function Shell({
            * page in the request flow, so it is reached from the account
            * menu, together with the theme and sign out. */}
           {!collapsed ? (
-            <div className="mt-auto px-2 pb-2" style={{ minWidth: MIN_WIDTH }}>
-              <DocsLink key={docs.href} {...docs} />
+            <div className="mt-auto flex flex-col gap-2 px-2 pb-2" style={{ minWidth: MIN_WIDTH }}>
+              {setupReminder.visible && !inSettings ? (
+                <SetupReminderCard onDismiss={setupReminder.dismiss} />
+              ) : null}
+              <div>
+                <DocsLink key={docs.href} {...docs} />
+              </div>
             </div>
           ) : null}
           <div
