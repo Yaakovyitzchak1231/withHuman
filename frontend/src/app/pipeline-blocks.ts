@@ -532,7 +532,7 @@ export function validateDrafts(drafts: BlockDraft[], { pipelineKey = "" }: { pip
       case "branch": {
         const problem = conditionProblem(block.when, label);
         if (problem) return problem;
-        if (block.blocks.length === 0) return `${label} needs at least one block.`;
+        if (block.blocks.length === 0) return `The branch ${label} needs at least one block under it.`;
         break;
       }
       case "edition": {
