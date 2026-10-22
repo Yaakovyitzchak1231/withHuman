@@ -956,8 +956,8 @@ Examples:
   is read once per product read in `API.present`, beside the
   presentation, and fills the optional `summary` (`text`,
   `generated_at`) on the queue representation, never the AAP one; a
-  failed read leaves it out. The web queue row titles a summarized
-  request by its summary with the tool underneath, and the request page
+  failed read leaves it out. The web queue row shows a summarized
+  request's summary alone over both lines, and the request page
   puts it above today's title under an "AI summary" label.
   `WorkerOptions.NotificationSummaries` (the same reader port, which the
   edition answers per organization) lets prompts and digests lead with

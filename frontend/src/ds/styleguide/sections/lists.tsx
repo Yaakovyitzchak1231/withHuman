@@ -28,7 +28,7 @@ const STATUS_TONE: Record<Request["status"], Tone> = {
 const REQUESTS: Request[] = [
   { id: "req_01", agent: "billing agent", summary: "Refund $420 to Acme Corp", tool: "stripe.refunds.create", status: "pending", age: "4m" },
   { id: "req_02", agent: "billing agent", summary: "Refund $89 to Northwind", tool: "stripe.refunds.create", status: "pending", age: "12m" },
-  { id: "req_03", agent: "support agent", summary: "Update CRM owner for Initech", tool: "crm.contacts.update", status: "pending", age: "26m" },
+  { id: "req_03", agent: "support agent", summary: "Move the Initech account to Dana Ruiz and hand her the open renewal due on 14 November", tool: "crm.contacts.update", status: "pending", age: "26m" },
   { id: "req_04", agent: "deploy bot", tool: "deploy.release", status: "pending", age: "41m" },
   { id: "req_05", agent: "support agent", summary: "Merge duplicate accounts for Globex", tool: "crm.accounts.merge", status: "approved", age: "2h" },
   { id: "req_06", agent: "billing agent", summary: "Refund $1,200 to Stark Industries", tool: "stripe.refunds.create", status: "denied", age: "5h" },
@@ -90,17 +90,8 @@ export function ListsSection() {
                     <span className="font-mono text-[12px]">{request.tool}</span>
                   )
                 }
-                description={
-                  request.summary ? (
-                    <>
-                      <span className="font-mono text-[11px]">{request.tool}</span>
-                      <span className="text-ink-faint"> · </span>
-                      {request.agent}
-                    </>
-                  ) : (
-                    request.agent
-                  )
-                }
+                titleLines={request.summary ? 2 : 1}
+                description={request.summary ? undefined : request.agent}
                 trailing={
                   <>
                     <ListCell width={96}>
@@ -127,9 +118,9 @@ export function ListsSection() {
           double-click opens.
         </KeyboardHint>
         <p className="mt-3 text-micro text-ink-faint">
-          A row leads with the request's AI summary in plain text when it has
-          one, with the tool in mono on the second line. Without one, the tool
-          is the title (the deploy bot rows here).
+          A request with an AI summary shows the summary alone, in plain text
+          over both lines (<code>titleLines</code> 2). Without one, the tool is
+          the title (the deploy bot rows here).
         </p>
         <p className="mt-3 text-micro text-ink-faint">
           Use <code>renderRow(item, props)</code> to add row behavior, such as

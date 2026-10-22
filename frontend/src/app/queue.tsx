@@ -137,18 +137,18 @@ function AgeCell({ request }: { request: ApprovalRequest }) {
   );
 }
 
-/* Rows lead with the request's summary when it has one, in plain text,
- * else the verified tool call, named by its presentation when one exists.
- * Under a summary or a presentation title the tool moves to the second
- * line, so a summary arriving later swaps the title in place; the agent
- * identity sits underneath. */
+/* A summarized row shows the summary alone, in plain text over both
+ * lines. Other rows lead with the verified tool call, named by its
+ * presentation when one exists, with the tool moving to the second line
+ * under a presentation title; the agent identity sits underneath. */
 export function rowText(request: ApprovalRequest) {
   const summary = request.summary?.text;
-  const title = summary ? null : renderTitle(request.presentation?.title, request.arguments);
+  if (summary) {
+    return { title: <span>{summary}</span>, titleLines: 2 as const };
+  }
+  const title = renderTitle(request.presentation?.title, request.arguments);
   return {
-    title: summary ? (
-      <span>{summary}</span>
-    ) : title ? (
+    title: title ? (
       <span>
         {title.map((segment, index) =>
           segment.kind === "value" ? (
@@ -165,7 +165,7 @@ export function rowText(request: ApprovalRequest) {
     ),
     description: (
       <>
-        {summary || title ? (
+        {title ? (
           <>
             <span className="font-mono text-[11px]">{request.tool}</span>
             <span className="text-ink-faint"> · </span>
