@@ -359,15 +359,19 @@ export function ListCell({
 }
 
 /* Standard row layout: leading marks, one or two text lines, trailing
- * metadata. */
+ * metadata. A title given both lines (titleLines 2, no description)
+ * wraps over them and keeps the two-line height; a one-line title
+ * centers, lining up with the leading and trailing marks. */
 export function ListRowContent({
   leading,
   title,
+  titleLines = 1,
   description,
   trailing,
 }: {
   leading?: ReactNode;
   title: ReactNode;
+  titleLines?: 1 | 2;
   description?: ReactNode;
   trailing?: ReactNode;
 }) {
@@ -379,7 +383,15 @@ export function ListRowContent({
         </span>
       ) : null}
       <span className="flex min-w-0 flex-1 flex-col py-1.5">
-        <span className="truncate text-body text-ink">{title}</span>
+        {titleLines === 2 ? (
+          <span className="flex min-h-10 items-center">
+            <span className="line-clamp-2 text-body break-words text-ink">
+              {title}
+            </span>
+          </span>
+        ) : (
+          <span className="truncate text-body text-ink">{title}</span>
+        )}
         {description ? (
           <span className="truncate text-body text-ink-muted">
             {description}

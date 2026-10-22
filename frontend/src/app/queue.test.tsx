@@ -281,15 +281,19 @@ describe("review queue row text", () => {
     return { titleLine, descriptionLine };
   }
 
-  it("leads with the summary in plain text and moves the tool to the second line", () => {
-    const { titleLine, descriptionLine } = renderRow({
+  it("gives the summary both lines in plain text, with nothing under it", () => {
+    const text = rowText({
+      ...refund,
+      summary: { text: "Refund $49.00 on charge ch_3N1x for a faulty bag", generated_at: "2026-09-21T10:00:03Z" },
+    });
+    expect(text.titleLines).toBe(2);
+    expect(text.description).toBeUndefined();
+    const { titleLine } = renderRow({
       ...refund,
       summary: { text: "Refund $49.00 on charge ch_3N1x for a faulty bag", generated_at: "2026-09-21T10:00:03Z" },
     });
     expect(titleLine.textContent).toBe("Refund $49.00 on charge ch_3N1x for a faulty bag");
     expect(titleLine.querySelector(".font-mono")).toBeNull();
-    expect(descriptionLine.querySelector(".font-mono")?.textContent).toBe("stripe.refunds.create");
-    expect(descriptionLine.textContent).toBe("stripe.refunds.create · Test agent · Test instance");
   });
 
   it("keeps the presentation title, or the tool, without a summary", () => {
