@@ -106,9 +106,11 @@ pause, be refused, or time out. That is the organization's policy working.
 
 - **Waiting.** The call is held until someone decides. Don't cancel and
   retry it; tell the user it is waiting for approval if they are around.
-- **Denied.** Don't try the same action another way: a different tool, a
-  script, a rephrased command or smaller pieces. Read any reviewer note,
-  tell the user, and ask how to continue.
+- **Denied.** Read the reviewer's note. If it asks for a change, make
+  exactly that change and send the same call again; it goes back for a
+  fresh review. Otherwise, tell the user and ask how to continue. Never
+  get around a denial another way: a different tool, a script, a
+  rephrased command or smaller pieces.
 - **Expired.** Nobody answered in time. It is not a denial, but don't retry
   on your own: tell the user so they can ask again or chase a reviewer.
 - **Already attempted.** Each approval runs its call once. If the adapter
