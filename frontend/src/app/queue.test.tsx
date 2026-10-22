@@ -8,11 +8,12 @@ import {
   Link,
   Outlet,
   RouterProvider,
+  useParams,
 } from "@tanstack/react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ToastProvider } from "@/ds/components/toast";
 import { TooltipProvider } from "@/ds/components/tooltip";
-import type { ApprovalRequest } from "../types";
+import type { ApprovalRequest, ApprovalStatus } from "../types";
 import { QueueScreen } from "./queue";
 import { validateQueueSearch, type QueueFilter } from "./queue-search";
 
@@ -21,7 +22,13 @@ vi.mock("./queue-store", () => ({
   useQueue: (scope: string) => useQueue(scope),
   refreshQueue: vi.fn(),
 }));
-vi.mock("./request-detail", () => ({ RequestDetail: () => null }));
+const detailProps = vi.fn();
+vi.mock("./request-detail", () => ({
+  RequestDetail: (props: unknown) => {
+    detailProps(props);
+    return null;
+  },
+}));
 
 const requests = ["pending", "pending", "approved"].map((status, index) => ({
   id: `request-${index}`,
@@ -255,5 +262,69 @@ describe("review queue load failure", () => {
     expect(screen.queryByRole("listbox", { name: "Review queue" })).toBeNull();
     useQueue.mockReset();
     useQueue.mockImplementation(() => ({ requests, loaded: true, loadFailed: false }));
+  });
+});
+
+describe("deciding from the open request", () => {
+  async function renderOpen(statuses: ApprovalStatus[], filter: QueueFilter = "pending") {
+    const listed = statuses.map((status, index) => ({ ...requests[0], id: `request-${index}`, status }));
+    useQueue.mockReturnValue({ requests: listed, loaded: true, loadFailed: false });
+    vi.stubGlobal("matchMedia", vi.fn(() => ({
+      matches: true,
+      addEventListener() {},
+      removeEventListener() {},
+    })));
+    const root = createRootRoute({
+      component: () => <ToastProvider><TooltipProvider><Outlet /></TooltipProvider></ToastProvider>,
+    });
+    const queue = createRoute({
+      getParentRoute: () => root,
+      path: "/queue",
+      validateSearch: validateQueueSearch,
+      component: () => <QueueScreen openID={null} preloaded={null} />,
+    });
+    const detail = createRoute({
+      getParentRoute: () => root,
+      path: "/queue/$requestId",
+      validateSearch: validateQueueSearch,
+      component: function Open() {
+        const { requestId } = useParams({ strict: false }) as { requestId: string };
+        return <QueueScreen openID={requestId} preloaded={null} />;
+      },
+    });
+    const search = filter === "pending" ? "" : `?filter=${filter}`;
+    const router = createRouter({
+      routeTree: root.addChildren([queue, detail]),
+      history: createMemoryHistory({ initialEntries: [`/queue/request-0${search}`] }),
+    });
+    await router.load();
+    render(<RouterProvider router={router} />);
+    await vi.waitFor(() => expect(detailProps).toHaveBeenCalled());
+    const props = detailProps.mock.lastCall?.[0] as { afterDecision: () => void };
+    await act(async () => props.afterDecision());
+    return router;
+  }
+
+  afterEach(() => {
+    useQueue.mockReset();
+    useQueue.mockImplementation(() => ({ requests, loaded: true, loadFailed: false }));
+    detailProps.mockReset();
+  });
+
+  it("closes the request when no other request is pending", async () => {
+    const router = await renderOpen(["approved", "denied"]);
+    expect(router.state.location.pathname).toBe("/queue");
+    expect(screen.getByText("Nothing waiting for you")).toBeTruthy();
+    expect(screen.queryByText("Select a request")).toBeNull();
+  });
+
+  it("keeps the request open while others are pending", async () => {
+    const router = await renderOpen(["approved", "pending"]);
+    expect(router.state.location.pathname).toBe("/queue/request-0");
+  });
+
+  it("keeps the request open when the list still shows it", async () => {
+    const router = await renderOpen(["approved"], "all");
+    expect(router.state.location.pathname).toBe("/queue/request-0");
   });
 });

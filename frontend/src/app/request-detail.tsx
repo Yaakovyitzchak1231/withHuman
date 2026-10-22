@@ -124,6 +124,7 @@ export function RequestDetail({
   request,
   onBack,
   onDecided,
+  afterDecision,
   nextPending,
   onOpenNext,
 }: {
@@ -131,6 +132,8 @@ export function RequestDetail({
   /* In split view the list stays visible, so there is no back. */
   onBack?: () => void;
   onDecided: () => Promise<unknown> | void;
+  /* Runs once this person's decision is saved and the queue refreshed. */
+  afterDecision?: () => void;
   /* How many other pending requests wait, and how to open the next one;
    * absent when this request was opened outside the queue. */
   nextPending?: number;
@@ -210,6 +213,7 @@ export function RequestDetail({
           title: `Request ${status}`,
           description: requestTitle(request),
         });
+        afterDecision?.();
       } catch (reason) {
         toast.add({
           type: "deny",
@@ -220,7 +224,7 @@ export function RequestDetail({
         setSaving(null);
       }
     },
-    [note, request.id, request.tool, onDecided, toast],
+    [note, request.id, request.tool, onDecided, afterDecision, toast],
   );
 
   /* The buttons and the shortcuts both land here. A denial needs its
