@@ -10,7 +10,9 @@ import { Section, Demo, KeyboardHint } from "../section";
 interface Request {
   id: string;
   agent: string;
-  summary: string;
+  /* The AI summary, when the request has one; rows without it lead
+   * with the tool name. */
+  summary?: string;
   tool: string;
   status: "pending" | "approved" | "denied" | "expired";
   age: string;
@@ -27,10 +29,10 @@ const REQUESTS: Request[] = [
   { id: "req_01", agent: "billing agent", summary: "Refund $420 to Acme Corp", tool: "stripe.refunds.create", status: "pending", age: "4m" },
   { id: "req_02", agent: "billing agent", summary: "Refund $89 to Northwind", tool: "stripe.refunds.create", status: "pending", age: "12m" },
   { id: "req_03", agent: "support agent", summary: "Update CRM owner for Initech", tool: "crm.contacts.update", status: "pending", age: "26m" },
-  { id: "req_04", agent: "deploy bot", summary: "Deploy billing-service v2.4.1", tool: "deploy.release", status: "pending", age: "41m" },
+  { id: "req_04", agent: "deploy bot", tool: "deploy.release", status: "pending", age: "41m" },
   { id: "req_05", agent: "support agent", summary: "Merge duplicate accounts for Globex", tool: "crm.accounts.merge", status: "approved", age: "2h" },
   { id: "req_06", agent: "billing agent", summary: "Refund $1,200 to Stark Industries", tool: "stripe.refunds.create", status: "denied", age: "5h" },
-  { id: "req_07", agent: "deploy bot", summary: "Rotate database credentials", tool: "vault.secrets.rotate", status: "approved", age: "1d" },
+  { id: "req_07", agent: "deploy bot", tool: "vault.secrets.rotate", status: "approved", age: "1d" },
   { id: "req_08", agent: "support agent", summary: "Export contact list for audit", tool: "crm.contacts.export", status: "expired", age: "3d" },
 ];
 
@@ -65,10 +67,10 @@ export function ListsSection() {
             selected={selected}
             onSelectedChange={setSelected}
             onOpen={(request) => {
-              setLastOpened(request.summary);
+              setLastOpened(request.summary ?? request.tool);
               toast.add({
                 title: "Request opened",
-                description: request.summary,
+                description: request.summary ?? request.tool,
               });
             }}
             aria-label="Review queue"
@@ -83,15 +85,24 @@ export function ListsSection() {
                     tooltip={false}
                   />
                 }
-                title={request.summary}
+                title={
+                  request.summary ?? (
+                    <span className="font-mono text-[12px]">{request.tool}</span>
+                  )
+                }
+                description={
+                  request.summary ? (
+                    <>
+                      <span className="font-mono text-[11px]">{request.tool}</span>
+                      <span className="text-ink-faint"> · </span>
+                      {request.agent}
+                    </>
+                  ) : (
+                    request.agent
+                  )
+                }
                 trailing={
                   <>
-                    <ListCell
-                      width={172}
-                      className="hidden font-mono text-[12px] text-ink-muted sm:block"
-                    >
-                      {request.tool}
-                    </ListCell>
                     <ListCell width={96}>
                       <Badge tone={STATUS_TONE[request.status]}>
                         {request.status}
@@ -115,6 +126,11 @@ export function ListsSection() {
           shift extends a range, mod+A selects all, Esc clears, Enter or
           double-click opens.
         </KeyboardHint>
+        <p className="mt-3 text-micro text-ink-faint">
+          A row leads with the request's AI summary in plain text when it has
+          one, with the tool in mono on the second line. Without one, the tool
+          is the title (the deploy bot rows here).
+        </p>
         <p className="mt-3 text-micro text-ink-faint">
           Use <code>renderRow(item, props)</code> to add row behavior, such as
           the review queue's route preloading on hover or focus. Forward the

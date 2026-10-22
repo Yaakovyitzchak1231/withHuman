@@ -128,6 +128,10 @@ type ServerOptions struct {
 	// through approvalblock.RegisterKind. The worker composes with the
 	// same list so both compile every revision the same way.
 	ApprovalBlocks []blockruntime.Runtime
+	// RequestSummaries reads the one-line summaries the edition writes for
+	// requests that reach a person (the hosted summarizer); product reads
+	// carry them as summary. Nil carries none.
+	RequestSummaries application.RequestSummaryReader
 	// AgentMCPServers are the MCP servers the edition offers every enrolled
 	// agent (the hosted gateway), reported by /api/runtime-config as
 	// agent_mcp_servers so the withhuman CLI registers them with each
@@ -401,7 +405,8 @@ func NewServer(ctx context.Context, options ServerOptions) (*Server, error) {
 		Auth: authService, Approvals: approvalService, Members: memberService, Teams: teamService, Contacts: contactService, Slack: slackService, Discord: discordService,
 		ToolCatalog: catalogService, WebhookEndpoints: webhookService, Onboarding: onboardingService, OrgSettings: orgSettingsService,
 		Installation: heartbeat.NewStatusReader(store, options.Version), ToolPresentations: toolPresentationService,
-		Identities: store, Roles: store, ApprovalRepo: store,
+		RequestSummaries: options.RequestSummaries,
+		Identities:       store, Roles: store, ApprovalRepo: store,
 		Orchestrator: orchestrator,
 		Pipelines:    pipelineService, CompiledPipelines: compiledPipelines,
 		Routing: routingService, RoutingSnapshots: store, TeamEscalation: teamEscalationService, MCPOAuth: mcpOAuthService, MCPTools: options.MCPTools,

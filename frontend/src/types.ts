@@ -118,6 +118,14 @@ export interface ApprovalRequest {
    * organization's tool presentations and the shipped catalog. Absent
    * when neither names the tool: the arguments then render by shape. */
   presentation?: ResolvedToolPresentation;
+  /* A one-line description a model wrote for a request that reached a
+   * person. Hosted edition only, and absent on many of its requests. */
+  summary?: RequestSummary;
+}
+
+export interface RequestSummary {
+  text: string;
+  generated_at: string;
 }
 
 /* How one argument renders. The vocabulary every client interprets;

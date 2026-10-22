@@ -942,6 +942,23 @@ Examples:
   planner is `frontend/src/app/tool-presentation.ts`; rendered HTML goes
   through `ds/components/html-preview.tsx`, a fully sandboxed frame that
   runs no script and loads nothing.
+- Request summaries are an edition's: core composes no model and writes
+  none. Two seams carry them. `WorkerOptions.HumanReviewHooks`
+  (`application.HumanReviewHook`) are told once a request's workflow
+  finds it waiting for a person, after `resumePipeline` and before
+  notification planning, through the `RunHumanReviewHooks` activity,
+  which the workflow starts and never waits on (two attempts, twenty
+  seconds each; a worker without hooks finishes it at once): a hook
+  cannot delay a prompt or a decision, and a request a pipeline decided
+  never reaches one. Adding that activity changed the workflow's command
+  sequence, so a release carrying it deploys at zero pending approvals.
+  `ServerOptions.RequestSummaries` (`application.RequestSummaryReader`)
+  is read once per product read in `API.present`, beside the
+  presentation, and fills the optional `summary` (`text`,
+  `generated_at`) on the queue representation, never the AAP one; a
+  failed read leaves it out. The web queue row titles a summarized
+  request by its summary with the tool underneath, and the request page
+  puts it above today's title under an "AI summary" label.
 - The chokepoint MCP gateway is the hosted edition's: core has
   no gateway process, no
   gateway routes, no `WITHHUMAN_GATEWAY_*` settings and no

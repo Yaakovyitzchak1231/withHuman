@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/withHumanAI/withHuman/application"
 	"github.com/withHumanAI/withHuman/domain"
 	"github.com/withHumanAI/withHuman/internal/toolpresentations"
 	"github.com/withHumanAI/withHuman/toolpresentation"
@@ -36,19 +37,42 @@ func newPresentationResponse(presentation toolpresentations.Presentation) *prese
 	return &presentationResponse{Source: presentation.Source, ID: presentation.ID, Title: presentation.Spec.Title, Fields: presentation.Spec.Fields}
 }
 
-// present attaches presentations to product request responses. A nil
-// service (tests that exercise other routes) presents nothing.
+// present attaches presentations and the edition's summaries to product
+// request responses. A nil service (tests that exercise other routes)
+// presents nothing.
 func (a *API) present(c *gin.Context, orgID domain.ID, responses []queueApprovalResponse, requests []domain.ApprovalRequest) []queueApprovalResponse {
-	if a.toolPresentations == nil {
-		return responses
-	}
-	presenter := a.toolPresentations.Presenter(c.Request.Context(), orgID)
-	for index := range responses {
-		if presentation, ok := presenter(requests[index]); ok {
-			responses[index].Presentation = newPresentationResponse(presentation)
+	if a.toolPresentations != nil {
+		presenter := a.toolPresentations.Presenter(c.Request.Context(), orgID)
+		for index := range responses {
+			if presentation, ok := presenter(requests[index]); ok {
+				responses[index].Presentation = newPresentationResponse(presentation)
+			}
 		}
 	}
+	a.summarize(c, orgID, responses, requests)
 	return responses
+}
+
+// summarize attaches the summaries the edition stored. A failed read
+// leaves them out: the presentation title still names every request.
+func (a *API) summarize(c *gin.Context, orgID domain.ID, responses []queueApprovalResponse, requests []domain.ApprovalRequest) {
+	if a.requestSummaries == nil || len(requests) == 0 {
+		return
+	}
+	ids := make([]domain.ID, len(requests))
+	for index, request := range requests {
+		ids[index] = request.ID
+	}
+	summaries, err := a.requestSummaries.RequestSummaries(c.Request.Context(), application.ReadRequestSummariesInput{OrganizationID: orgID, RequestIDs: ids})
+	if err != nil {
+		a.logger.WarnContext(c.Request.Context(), "request summaries unavailable", "error", err)
+		return
+	}
+	for index, request := range requests {
+		if summary, ok := summaries[request.ID]; ok {
+			responses[index].Summary = &requestSummaryResponse{Text: summary.Text, GeneratedAt: summary.GeneratedAt}
+		}
+	}
 }
 
 func (a *API) presentOne(c *gin.Context, request domain.ApprovalRequest, now time.Time) queueApprovalResponse {
