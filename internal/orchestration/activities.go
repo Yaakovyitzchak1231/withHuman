@@ -27,6 +27,7 @@ type Activities struct {
 	notified      application.ApprovalNotificationRecorder
 	windows       application.NotificationWindowRepository
 	reviewHooks   []application.HumanReviewHook
+	summaries     application.RequestSummaryReader
 }
 
 // PipelineResumer runs the asynchronous segment of a suspended pipeline
@@ -79,6 +80,37 @@ func WithHumanReviewHooks(hooks ...application.HumanReviewHook) ActivityOption {
 	return func(a *Activities) {
 		a.reviewHooks = hooks
 	}
+}
+
+// WithNotificationSummaries lets prompts and digests lead with the
+// summaries the edition allows notifications to carry. Without it they
+// name the tool.
+func WithNotificationSummaries(summaries application.RequestSummaryReader) ActivityOption {
+	return func(a *Activities) {
+		a.summaries = summaries
+	}
+}
+
+// notificationSummaries reads the summaries notifications may carry. A
+// failed read sends the prompt without them, never holds it.
+func (a *Activities) notificationSummaries(ctx context.Context, organizationID domain.ID, requests []domain.ApprovalRequest) map[domain.ID]string {
+	if a.summaries == nil || len(requests) == 0 {
+		return nil
+	}
+	ids := make([]domain.ID, len(requests))
+	for index, request := range requests {
+		ids[index] = request.ID
+	}
+	read, err := a.summaries.RequestSummaries(ctx, application.ReadRequestSummariesInput{OrganizationID: organizationID, RequestIDs: ids})
+	if err != nil {
+		activity.GetLogger(ctx).Warn("notification summaries unavailable; sending without them", "error", err.Error())
+		return nil
+	}
+	out := make(map[domain.ID]string, len(read))
+	for id, summary := range read {
+		out[id] = summary.Text
+	}
+	return out
 }
 
 // RunHumanReviewHooks calls every hook with the routed request. One
@@ -351,8 +383,9 @@ func (a *Activities) DeliverNotificationStep(ctx context.Context, loaded domain.
 		return holds, nil
 	}
 	logger.Info(fmt.Sprintf("sending approval notification step - %d recipients", len(recipients)), fields...)
+	summaries := a.notificationSummaries(ctx, request.OrganizationID, []domain.ApprovalRequest{request})
 	return holds, a.notifications.SendApprovalPrompt(ctx, application.SendApprovalPromptInput{
-		Request: request, RoutingOutcome: step.Outcome, Recipients: recipients,
+		Request: request, RoutingOutcome: step.Outcome, Recipients: recipients, Summary: summaries[request.ID],
 	})
 }
 
@@ -416,14 +449,17 @@ func (a *Activities) CloseNotificationWindow(ctx context.Context, organizationID
 		return nil
 	case 1:
 		activity.GetLogger(ctx).Info("notification window closed - sending the one held prompt", append(fields, "contact_kind", string(hold.Kind))...)
+		summaries := a.notificationSummaries(ctx, organizationID, closed.Requests)
 		return a.notifications.SendApprovalPrompt(ctx, application.SendApprovalPromptInput{
 			Request: closed.Requests[0], RoutingOutcome: hold.Outcome, Recipients: []application.NotificationRecipient{hold.Recipient},
+			Summary: summaries[closed.Requests[0].ID],
 		})
 	default:
 		activity.GetLogger(ctx).Info(fmt.Sprintf("notification window closed - sending a digest of %d requests", len(closed.Requests)),
 			append(fields, "contact_kind", string(hold.Kind), "request_count", len(closed.Requests))...)
 		return a.notifications.SendApprovalDigest(ctx, application.SendApprovalDigestInput{
 			OrganizationID: organizationID, Recipient: hold.Recipient, Requests: closed.Requests,
+			Summaries: a.notificationSummaries(ctx, organizationID, closed.Requests),
 		})
 	}
 }

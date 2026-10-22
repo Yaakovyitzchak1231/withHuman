@@ -48,7 +48,7 @@ func (c *SlackChannel) SendApprovalPrompt(ctx context.Context, input application
 	if err := input.Validate(); err != nil {
 		return err
 	}
-	text, blocks := approvalPromptBlocks(input.Request, c.publicOrigin+"/queue/"+string(input.Request.ID))
+	text, blocks := approvalPromptBlocks(approvalMessageFor(input.Request, input.Summary), c.publicOrigin+"/queue/"+string(input.Request.ID))
 	var failures []error
 	unavailable := &application.SlackUnavailableRecipients{}
 	for _, recipient := range input.Recipients {
@@ -128,7 +128,7 @@ func (c *SlackChannel) SendApprovalDigest(ctx context.Context, input application
 	if err != nil {
 		return err
 	}
-	text, blocks := approvalDigestBlocks(input.Requests, c.publicOrigin+"/queue")
+	text, blocks := approvalDigestBlocks(approvalMessagesFor(input.Requests, input.Summaries), c.publicOrigin+"/queue")
 	if err := c.messenger.PostDirectMessage(ctx, application.SlackDirectMessageInput{BotToken: delivery.BotToken, SlackUserID: recipient.SlackUserID, Text: text, Blocks: blocks}); err != nil {
 		return fmt.Errorf("slack digest to %s: %w", recipient.MembershipID, err)
 	}
@@ -140,22 +140,28 @@ func (c *SlackChannel) SendTransactional(context.Context, application.SendTransa
 }
 
 // approvalPromptBlocks renders the prompt as Block Kit. As with email, it
-// carries the tool, the agent, and the deadline, and never the request
-// arguments: a Slack message is searchable and forwardable, and the
-// reviewer decides in the product where authorization applies. The
-// URL button also sends an interaction callback, which the server acknowledges
-// without recording a decision.
-func approvalPromptBlocks(request domain.ApprovalRequest, requestURL string) (string, json.RawMessage) {
-	text := fmt.Sprintf("%s is waiting for your approval", request.Tool)
+// carries the request's summary when it has one, the tool, the agent, and
+// the deadline, and never the request arguments: a Slack message is
+// searchable and forwardable, and the reviewer decides in the product
+// where authorization applies. The URL button also sends an interaction
+// callback, which the server acknowledges without recording a decision.
+func approvalPromptBlocks(request approvalMessageRequest, requestURL string) (string, json.RawMessage) {
 	deadline := request.DeadlineAt.UTC().Format(time.RFC1123)
+	header, lead := "Approval needed", fmt.Sprintf("`%s` is waiting for your approval.", request.Tool)
+	fields := []map[string]any{
+		{"type": "mrkdwn", "text": fmt.Sprintf("*Agent*\n%s (%s)", request.AgentName, request.AgentInstanceName)},
+		{"type": "mrkdwn", "text": fmt.Sprintf("*Expires*\n%s", deadline)},
+	}
+	text := fmt.Sprintf("%s is waiting for your approval", request.Tool)
+	if request.Summary != "" {
+		header, lead = truncateRunes(request.Summary, slackHeaderLimit), "Waiting for your approval."
+		fields = []map[string]any{fields[0], {"type": "mrkdwn", "text": fmt.Sprintf("*Tool*\n`%s`", request.Tool)}, fields[1]}
+		text = fmt.Sprintf("%s is waiting for your approval", slackEscape(request.Summary))
+	}
 	blocks := []map[string]any{
-		{"type": "header", "text": map[string]any{"type": "plain_text", "text": "Approval needed"}},
-		{"type": "section", "text": map[string]any{"type": "mrkdwn",
-			"text": fmt.Sprintf("`%s` is waiting for your approval.", request.Tool)}},
-		{"type": "section", "fields": []map[string]any{
-			{"type": "mrkdwn", "text": fmt.Sprintf("*Agent*\n%s (%s)", request.AgentName, request.AgentInstanceName)},
-			{"type": "mrkdwn", "text": fmt.Sprintf("*Expires*\n%s", deadline)},
-		}},
+		{"type": "header", "text": map[string]any{"type": "plain_text", "text": header}},
+		{"type": "section", "text": map[string]any{"type": "mrkdwn", "text": lead}},
+		{"type": "section", "fields": fields},
 		{"type": "actions", "elements": []map[string]any{
 			{"type": "button", "text": map[string]any{"type": "plain_text", "text": "Open in withHuman"},
 				"url": requestURL, "style": "primary"},
@@ -170,12 +176,16 @@ func approvalPromptBlocks(request domain.ApprovalRequest, requestURL string) (st
 
 // approvalDigestBlocks renders a digest as one message: a line per
 // request linking to it, a count of the rest, and a button to the queue.
-func approvalDigestBlocks(requests []domain.ApprovalRequest, queueURL string) (string, json.RawMessage) {
+func approvalDigestBlocks(requests []approvalMessageRequest, queueURL string) (string, json.RawMessage) {
 	text := fmt.Sprintf("%d approvals waiting", len(requests))
 	shown, more := digestShown(requests)
 	lines := make([]string, 0, len(shown)+1)
 	for _, request := range shown {
-		lines = append(lines, fmt.Sprintf("• <%s/%s|`%s`> from %s (%s)", queueURL, request.ID, request.Tool, request.AgentName, request.AgentInstanceName))
+		label := fmt.Sprintf("`%s`", request.Tool)
+		if request.Summary != "" {
+			label = slackEscape(request.Summary)
+		}
+		lines = append(lines, fmt.Sprintf("• <%s/%s|%s> from %s (%s)", queueURL, request.ID, label, request.AgentName, request.AgentInstanceName))
 	}
 	if more > 0 {
 		lines = append(lines, fmt.Sprintf("And %d more.", more))
@@ -194,3 +204,11 @@ func approvalDigestBlocks(requests []domain.ApprovalRequest, queueURL string) (s
 	encoded, _ := json.Marshal(blocks)
 	return text, encoded
 }
+
+// slackHeaderLimit is the most characters a header block takes; Slack
+// rejects the whole message over it.
+const slackHeaderLimit = 150
+
+// slackEscape keeps a summary literal in mrkdwn, so it cannot form a link
+// or a mention.
+var slackEscape = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;").Replace

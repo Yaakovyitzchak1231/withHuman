@@ -81,6 +81,9 @@ type WorkerOptions struct {
 	// hosted summarizer). They run beside notification planning, never
 	// before it, and their failures are logged and dropped.
 	HumanReviewHooks []application.HumanReviewHook
+	// NotificationSummaries reads the summaries prompts and digests may
+	// carry, which the edition decides per organization. Nil sends none.
+	NotificationSummaries application.RequestSummaryReader
 }
 
 // WorkerContext is what an edition's extra workflows may build on: the
@@ -183,7 +186,8 @@ func RunWorker(ctx context.Context, options WorkerOptions) error {
 	approvalWorker.RegisterActivity(orchestration.NewActivities(store, store, store, notifier, clock,
 		orchestration.WithPipeline(pipelineExecution, routingEvaluation), orchestration.WithEscalation(store),
 		orchestration.WithNotificationRecords(store), orchestration.WithNotificationWindows(store),
-		orchestration.WithHumanReviewHooks(options.HumanReviewHooks...)))
+		orchestration.WithHumanReviewHooks(options.HumanReviewHooks...),
+		orchestration.WithNotificationSummaries(options.NotificationSummaries)))
 	approvalWorker.RegisterWorkflow(orchestration.OrganizationDeletionWorkflow)
 	approvalWorker.RegisterActivity(orchestration.NewTenantActivities(store, clock))
 	if options.RegisterExtra != nil {

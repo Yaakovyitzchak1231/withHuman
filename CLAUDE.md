@@ -959,6 +959,14 @@ Examples:
   failed read leaves it out. The web queue row titles a summarized
   request by its summary with the tool underneath, and the request page
   puts it above today's title under an "AI summary" label.
+  `WorkerOptions.NotificationSummaries` (the same reader port, which the
+  edition answers per organization) lets prompts and digests lead with
+  the summary (`SendApprovalPromptInput.Summary`,
+  `SendApprovalDigestInput.Summaries`). Each notification step waits for
+  the hooks' activity inside its own goroutine, at most
+  `humanReviewHookWait` (ten seconds) after the request started waiting,
+  so a first prompt usually carries it; the main loop never waits, so a
+  decision is never held. A failed read sends without it.
 - The chokepoint MCP gateway is the hosted edition's: core has
   no gateway process, no
   gateway routes, no `WITHHUMAN_GATEWAY_*` settings and no
@@ -1238,7 +1246,8 @@ Examples:
   members as direct messages through `notifications.SlackChannel`,
   registered in every composition root when Slack is configured; the
   message carries the tool, agent, deadline, and an "Open in withHuman"
-  link, never the arguments, and deciding still happens in the product.
+  link, never the arguments (a request summary is the one exception, see
+  notifications below), and deciding still happens in the product.
   Transactional mail stays email-only. Escalation paths reach people
   through their personal notification rules. Deciding from Slack is not built.
 - Slack URL buttons send signed callbacks to `/auth/slack/interactions`.
@@ -1275,7 +1284,8 @@ Examples:
   `purpose` is part of redemption so a link state can never complete an
   install. Approval prompts reach linked members as direct messages through
   `notifications.DiscordChannel` (an embed plus an "Open in withHuman" link
-  button, never the arguments); a member whose privacy settings block DMs
+  button, never the arguments apart from a request summary); a member
+  whose privacy settings block DMs
   is a logged delivery failure. Disconnecting removes every member's link
   with the guild and makes the bot leave. `deployment/discord/README.md`
   describes the application a self-hoster creates. The default interrupt
@@ -1326,7 +1336,12 @@ Examples:
   ladders into steps once; the workflow arms one timer per step, and a
   decision or any claim cancels the rest. A rung can only name a method
   the person holds; the store enforces it. Approval mail carries the tool, agent, deadline, and a link and
-  never the request arguments, which routinely hold customer data; the
+  never the request arguments, which routinely hold customer data. The one
+  exception is a request summary (`SendApprovalPromptInput.Summary`, a
+  digest's `Summaries`): the edition writes it and checks it against the
+  arguments, and passes it only when the organization allows summaries in
+  notifications. Email, Slack and Discord then lead with it and keep the
+  tool as a detail line; the logging channel never writes it. The
   invite link is a credential and appears only in the invitation email,
   never in logs. Recipients come from the pinned routing snapshot's reachable
   targets when a path is pinned, and otherwise from every active member
