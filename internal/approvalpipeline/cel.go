@@ -22,7 +22,7 @@ import (
 // ConditionEngineFingerprint versions the condition engine every branch
 // and delegate condition compiles with; their runtime fingerprints carry
 // it, so an engine change is a runtime change.
-const ConditionEngineFingerprint = "cel-go/v0.25.0;withhuman-conditions/v3;limits/v1"
+const ConditionEngineFingerprint = "cel-go/v0.25.0;withhuman-conditions/v3;limits/v2"
 
 // conditionBudget is the budget key every condition evaluation spends,
 // whichever block the condition belongs to.
@@ -61,6 +61,9 @@ func (when compiledWhen) evaluate(ctx context.Context, input RequestApprovalBloc
 	defer cancel()
 
 	root, err := buildSafeInput(input)
+	if errors.Is(err, errRequestInputTooLarge) {
+		return false, BlockEvidence{}, executionError(ErrorInputTooLarge, err)
+	}
 	if err != nil {
 		return false, BlockEvidence{}, executionError(ErrorInvalidInput, err)
 	}
@@ -120,7 +123,7 @@ func (compiler *conditionCompiler) compile(condition approvalblock.Condition, re
 			}
 		}
 		node.source = leafExpression(condition.Operator)
-		node.program, err = compileLeafProgram(node.source, operatorBinding(condition.Operator, compiledRegex))
+		node.program, err = compileLeafProgram(node.source, operatorBinding(condition.Operator, compiledRegex), stringBytesPerCostUnit(condition.Operator))
 		if err != nil {
 			return nil, fmt.Errorf("condition %q CEL: %w", condition.ID, err)
 		}
@@ -192,7 +195,7 @@ func leafExpression(operator approvalblock.Operator) string {
 	}
 }
 
-func compileLeafProgram(expression string, binding func(ref.Val, ref.Val) ref.Val) (cel.Program, error) {
+func compileLeafProgram(expression string, binding func(ref.Val, ref.Val) ref.Val, bytesPerCostUnit uint64) (cel.Program, error) {
 	environment, err := cel.NewEnv(
 		cel.ClearMacros(),
 		cel.CrossTypeNumericComparisons(true),
@@ -218,28 +221,42 @@ func compileLeafProgram(expression string, binding func(ref.Val, ref.Val) ref.Va
 	}
 	return environment.Program(
 		ast,
-		cel.CostTracking(operationCostEstimator{}),
+		cel.CostTracking(operationCostEstimator{bytesPerCostUnit: bytesPerCostUnit}),
 		cel.CostLimit(approvalblock.MaximumEvaluationCost),
 	)
 }
 
-type operationCostEstimator struct{}
+// stringBytesPerCostUnit is how many bytes of a string one cost unit pays
+// for. Substring, prefix and equality checks read a KiB in well under a
+// microsecond, so a whole maximum-size request costs a tenth of the
+// budget. A regular expression can take a hundred times longer on the
+// same text, so it pays per 16 bytes and reads at most about 160 KB.
+func stringBytesPerCostUnit(operator approvalblock.Operator) uint64 {
+	if operator == approvalblock.Regex {
+		return 16
+	}
+	return 1024
+}
 
-func (operationCostEstimator) CallCost(function, overloadID string, args []ref.Val, _ ref.Val) *uint64 {
+type operationCostEstimator struct {
+	bytesPerCostUnit uint64
+}
+
+func (estimator operationCostEstimator) CallCost(function, overloadID string, args []ref.Val, _ ref.Val) *uint64 {
 	if function != "wh_eval" || overloadID != "withhuman_eval_dyn_dyn" {
 		return nil
 	}
 	cost := uint64(1)
 	for _, argument := range args {
-		cost += valueCost(argument)
+		cost += valueCost(argument, estimator.bytesPerCostUnit)
 	}
 	return &cost
 }
 
-func valueCost(value ref.Val) uint64 {
+func valueCost(value ref.Val, bytesPerCostUnit uint64) uint64 {
 	switch typed := value.(type) {
 	case types.String:
-		return uint64(len(typed))
+		return (uint64(len(typed)) + bytesPerCostUnit - 1) / bytesPerCostUnit
 	case traits.Sizer:
 		size := typed.Size()
 		if integer, ok := size.(types.Int); ok && integer > 0 {
@@ -610,22 +627,28 @@ func (state *evaluationState) resolve(node *compiledCondition, current any) (any
 	return resolvePointer(state.root, node.path)
 }
 
+var errRequestInputTooLarge = fmt.Errorf("request input exceeds %d bytes", approvalblock.MaximumRequestInputBytes)
+
+// conditionArgumentsKey is the budget key under which the request's
+// decoded arguments are kept, so every condition of an evaluation shares
+// one decode.
+const conditionArgumentsKey = "condition_arguments"
+
 func buildSafeInput(input RequestApprovalBlockInput) (map[string]any, error) {
 	inputBytes := len(input.Request.Tool) + len(input.Request.Server) + len(input.Request.Arguments) + len(input.Agent.Slug) + len(input.Agent.Name)
 	if inputBytes > approvalblock.MaximumRequestInputBytes {
-		return nil, fmt.Errorf("request input exceeds %d bytes", approvalblock.MaximumRequestInputBytes)
+		return nil, errRequestInputTooLarge
 	}
 	if input.Request.Tool == "" || input.Agent.Slug == "" || input.Agent.Name == "" {
 		return nil, errors.New("request tool and canonical agent fields are required")
 	}
-	arguments, err := decodeJSON(input.Request.Arguments)
+	arguments, err := input.Budget.Derive(conditionArgumentsKey, func() (any, error) {
+		return decodeArgumentObject(input.Request.Arguments)
+	})
 	if err != nil {
-		return nil, fmt.Errorf("request arguments: %w", err)
+		return nil, err
 	}
-	argumentObject, ok := arguments.(map[string]any)
-	if !ok {
-		return nil, errors.New("request arguments must be a JSON object")
-	}
+	argumentObject := arguments.(map[string]any)
 	previous, err := nestPreviousMetadata(input.PreviousMetadata)
 	if err != nil {
 		return nil, err
@@ -640,6 +663,18 @@ func buildSafeInput(input RequestApprovalBlockInput) (map[string]any, error) {
 		"agent":             map[string]any{"slug": input.Agent.Slug, "name": input.Agent.Name},
 		"previous_metadata": previous,
 	}, nil
+}
+
+func decodeArgumentObject(raw json.RawMessage) (any, error) {
+	arguments, err := decodeJSON(raw)
+	if err != nil {
+		return nil, fmt.Errorf("request arguments: %w", err)
+	}
+	argumentObject, ok := arguments.(map[string]any)
+	if !ok {
+		return nil, errors.New("request arguments must be a JSON object")
+	}
+	return argumentObject, nil
 }
 
 // nestPreviousMetadata exposes earlier blocks' metadata to conditions as

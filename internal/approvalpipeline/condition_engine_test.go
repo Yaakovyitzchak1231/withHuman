@@ -251,10 +251,10 @@ func TestConditionEachLeafOperator(t *testing.T) {
 }
 
 func TestConditionCompilationRejectsInvalidSyntaxTypesAndFields(t *testing.T) {
-	if _, err := compileLeafProgram(")", operatorBinding(approvalblock.Equals, nil)); err == nil {
+	if _, err := compileLeafProgram(")", operatorBinding(approvalblock.Equals, nil), 1); err == nil {
 		t.Fatal("invalid CEL syntax unexpectedly compiled")
 	}
-	if _, err := compileLeafProgram("1 + 1", operatorBinding(approvalblock.Equals, nil)); err == nil || !strings.Contains(err.Error(), "must be bool") {
+	if _, err := compileLeafProgram("1 + 1", operatorBinding(approvalblock.Equals, nil), 1); err == nil || !strings.Contains(err.Error(), "must be bool") {
 		t.Fatalf("got %v, want CEL result type error", err)
 	}
 
@@ -274,7 +274,7 @@ func TestConditionResourceLimitsFailClosed(t *testing.T) {
 		block := mustCompile(t, conditionDefinition(approvalblock.Field("/request/arguments/value").Contains("x")))
 		arguments, _ := json.Marshal(map[string]any{"value": strings.Repeat("x", approvalblock.MaximumRequestInputBytes)})
 		result := execute(t, block, blockInput(string(arguments)))
-		if result.Outcome != BlockHuman || result.ErrorCode != ErrorInvalidInput {
+		if result.Outcome != BlockHuman || result.ErrorCode != ErrorInputTooLarge {
 			t.Fatalf("got %+v, want request-size handoff", result)
 		}
 	})
@@ -284,7 +284,7 @@ func TestConditionResourceLimitsFailClosed(t *testing.T) {
 		input := blockInput(`{}`)
 		input.Request.Server = strings.Repeat("s", approvalblock.MaximumRequestInputBytes)
 		result := execute(t, block, input)
-		if result.Outcome != BlockHuman || result.ErrorCode != ErrorInvalidInput {
+		if result.Outcome != BlockHuman || result.ErrorCode != ErrorInputTooLarge {
 			t.Fatalf("got %+v, want request-size handoff", result)
 		}
 	})
@@ -300,8 +300,8 @@ func TestConditionResourceLimitsFailClosed(t *testing.T) {
 	})
 
 	t.Run("evaluation cost", func(t *testing.T) {
-		block := mustCompile(t, conditionDefinition(approvalblock.Field("/request/arguments/value").Contains("needle")))
-		arguments, _ := json.Marshal(map[string]any{"value": strings.Repeat("a", approvalblock.MaximumEvaluationCost+1)})
+		block := mustCompile(t, conditionDefinition(approvalblock.Field("/request/arguments/value").Regex("needle")))
+		arguments, _ := json.Marshal(map[string]any{"value": strings.Repeat("a", 16*approvalblock.MaximumEvaluationCost+1)})
 		result := execute(t, block, blockInput(string(arguments)))
 		if result.Outcome != BlockHuman || result.ErrorCode != ErrorCostLimit {
 			t.Fatalf("got %+v, want cost-limit handoff", result)
@@ -331,6 +331,49 @@ func TestConditionResourceLimitsFailClosed(t *testing.T) {
 		result := execute(t, block, input)
 		if result.Outcome != BlockHuman || result.ErrorCode != ErrorResourceLimit {
 			t.Fatalf("got %+v, want condition-budget handoff", result)
+		}
+	})
+}
+
+// A coding agent writing a whole file is one long call; the conditions
+// that read it must still decide it rather than send it to a person.
+func TestConditionDecidesLongToolCalls(t *testing.T) {
+	long := strings.Repeat("echo hello world | grep -v foo; ", 900_000/32)
+	arguments, _ := json.Marshal(map[string]any{"command": long + "rm -rf /tmp/build"})
+	input := blockInput(string(arguments))
+	input.Request.Tool = "Bash"
+	input.Budget = &BlockExecutionBudget{}
+	conditions := map[string]approvalblock.Condition{
+		"tool":        approvalblock.Field("/request/tool").Equals("Bash"),
+		"contains":    approvalblock.Field("/request/arguments/command").Contains("rm -rf"),
+		"starts_with": approvalblock.Field("/request/arguments/command").StartsWith("echo "),
+		"ends_with":   approvalblock.Field("/request/arguments/command").EndsWith("/tmp/build"),
+	}
+	for name, condition := range conditions {
+		t.Run(name, func(t *testing.T) {
+			result := execute(t, mustCompile(t, conditionDefinition(condition)), input)
+			if result.Outcome != BlockEnter || result.ErrorCode != "" {
+				t.Fatalf("got %+v, want a match", result)
+			}
+		})
+	}
+
+	t.Run("regex", func(t *testing.T) {
+		arguments, _ := json.Marshal(map[string]any{"command": strings.Repeat("x", 150_000) + " git push"})
+		block := mustCompile(t, conditionDefinition(approvalblock.Field("/request/arguments/command").Regex(`git (push|commit)`)))
+		if result := execute(t, block, blockInput(string(arguments))); result.Outcome != BlockEnter || result.ErrorCode != "" {
+			t.Fatalf("got %+v, want a match", result)
+		}
+	})
+
+	t.Run("malformed arguments fail every condition sharing the budget", func(t *testing.T) {
+		input := blockInput(`[1]`)
+		input.Budget = &BlockExecutionBudget{}
+		block := mustCompile(t, conditionDefinition(approvalblock.Field("/request/tool").Equals("stripe.refund")))
+		for range 2 {
+			if result := execute(t, block, input); result.Outcome != BlockHuman || result.ErrorCode != ErrorInvalidInput {
+				t.Fatalf("got %+v, want invalid-input handoff", result)
+			}
 		}
 	})
 }
