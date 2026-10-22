@@ -393,6 +393,12 @@ export function QueueScreen({
     [requests, openID],
   );
   const openNext = otherPending.length > 0 ? () => openRequest(otherPending[0].id) : undefined;
+  /* Deciding the last pending request empties the list, so the detail
+   * closes with it rather than keep a request the list no longer shows. */
+  const afterDecision = () => {
+    if (filter !== "pending" || otherPending.length > 0) return;
+    void navigate({ to: "/queue", search: queueSearch(scope, filter), replace: true });
+  };
 
   const split = useMediaQuery("(min-width: 1280px)");
 
@@ -512,10 +518,11 @@ export function QueueScreen({
             <RequestDetail
               request={open}
               onDecided={refresh}
+              afterDecision={afterDecision}
               nextPending={otherPending.length}
               onOpenNext={openNext}
             />
-          ) : (
+          ) : visible.length === 0 ? null : (
             <div className="flex h-full items-center justify-center">
               <EmptyState
                 icon={<InboxIcon />}
@@ -536,6 +543,7 @@ export function QueueScreen({
         request={open}
         onBack={closeRequest}
         onDecided={refresh}
+        afterDecision={afterDecision}
         nextPending={otherPending.length}
         onOpenNext={openNext}
       />

@@ -306,7 +306,7 @@ describe("branch blocks", () => {
     expect(validateDrafts([{ ...delegate, pipelineKey: "entry" }])).toBe("Billing cannot hand requests to the entry pipeline.");
     expect(validateDrafts([{ ...delegate, pipelineKey: "payments" }], { pipelineKey: "payments" })).toBe("Billing cannot hand requests to this pipeline itself.");
     expect(validateDrafts([{ ...delegate, pipelineKey: "payments" }], { pipelineKey: "entry" })).toBeNull();
-    expect(validateDrafts([branch("empty", [], "Empty")])).toBe("Empty needs at least one block.");
+    expect(validateDrafts([branch("empty", [], "Empty")])).toBe("The branch Empty needs at least one block under it.");
     /* A branch's reason is optional; the server generates one. */
     expect(validateDrafts([{ ...branch("refunds", [approve("small")], "Refunds"), reason: " " }])).toBeNull();
     expect(validateDrafts([{ ...branch("refunds", [approve("small")], "Refunds"), when: { id: "w", all: [leaf("l", "", "x")] } }]))

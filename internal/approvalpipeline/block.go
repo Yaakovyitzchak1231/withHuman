@@ -35,6 +35,7 @@ const (
 
 const (
 	ErrorInvalidInput        = blockruntime.InvalidInput
+	ErrorInputTooLarge       = blockruntime.InputTooLarge
 	ErrorEvaluation          = blockruntime.Evaluation
 	ErrorCostLimit           = blockruntime.CostLimit
 	ErrorResourceLimit       = blockruntime.ResourceLimit
@@ -52,7 +53,7 @@ const (
 // coreErrorCodes are the codes core's kinds report; a registered runtime
 // adds its own through Runtime.ErrorCodes.
 var coreErrorCodes = map[BlockErrorCode]bool{
-	ErrorInvalidInput: true, ErrorEvaluation: true, ErrorCostLimit: true, ErrorResourceLimit: true,
+	ErrorInvalidInput: true, ErrorInputTooLarge: true, ErrorEvaluation: true, ErrorCostLimit: true, ErrorResourceLimit: true,
 	ErrorTimeout: true, ErrorInvalidBlockOutput: true, ErrorInternal: true, ErrorProvider: true,
 	ErrorEndpointUnreachable: true, ErrorEndpointError: true, ErrorEndpointRejected: true,
 	ErrorOutcomeNotAllowed: true, ErrorEndpointUnavailable: true,

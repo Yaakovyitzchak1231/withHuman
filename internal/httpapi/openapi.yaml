@@ -7189,7 +7189,7 @@ components:
         reason: { type: string, description: The note the block recorded. }
         metadata: { type: object, additionalProperties: true, description: "The metadata the block returned, if any." }
         cost: { type: integer, format: int64, minimum: 0, description: The cost the block recorded. }
-        error_code: { type: string, description: "Why the block failed, if it did: `invalid_input`, `evaluation_error`, `cost_limit_exceeded`, `resource_limit_exceeded`, `timeout`, `invalid_block_output`, `internal_error`, `provider_error`, `endpoint_unreachable`, `endpoint_error`, `endpoint_rejected`, `outcome_not_allowed`, `endpoint_unavailable`, or a code a kind the edition adds reports (the hosted judge's `model_unavailable`)." }
+        error_code: { type: string, description: "Why the block failed, if it did: `invalid_input`, `input_too_large`, `evaluation_error`, `cost_limit_exceeded`, `resource_limit_exceeded`, `timeout`, `invalid_block_output`, `internal_error`, `provider_error`, `endpoint_unreachable`, `endpoint_error`, `endpoint_rejected`, `outcome_not_allowed`, `endpoint_unavailable`, or a code a kind the edition adds reports (the hosted judge's `model_unavailable`)." }
         delivery:
           type: object
           additionalProperties: false

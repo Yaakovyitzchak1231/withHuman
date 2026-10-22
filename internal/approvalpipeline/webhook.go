@@ -21,7 +21,7 @@ import (
 // WebhookRuntimeFingerprint covers the payload shape, the signature scheme,
 // the answer contract, and the limits. Any change to those changes the
 // compiled cache key.
-const WebhookRuntimeFingerprint = "withhuman-webhook/v1;delivery/v1;limits/v1"
+const WebhookRuntimeFingerprint = "withhuman-webhook/v1;delivery/v1;limits/v2"
 
 const webhookConfigVersion = 1
 
@@ -140,7 +140,7 @@ func (block *CompiledWebhookBlock) Evaluate(ctx context.Context, input RequestAp
 		return RequestApprovalBlockResult{}, executionError(ErrorInvalidInput, errors.New("request tool and canonical agent fields are required"))
 	}
 	if size := block.inputSize(input); size > approvalblock.MaximumRequestInputBytes {
-		return RequestApprovalBlockResult{}, executionError(ErrorInvalidInput, fmt.Errorf("request input exceeds %d bytes", approvalblock.MaximumRequestInputBytes))
+		return RequestApprovalBlockResult{}, executionError(ErrorInputTooLarge, fmt.Errorf("request input exceeds %d bytes", approvalblock.MaximumRequestInputBytes))
 	}
 
 	// A key with no active revision (archived, or never activated) is an

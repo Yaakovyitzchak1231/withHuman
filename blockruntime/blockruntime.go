@@ -39,7 +39,9 @@ const (
 type ErrorCode string
 
 const (
-	InvalidInput  ErrorCode = "invalid_input"
+	InvalidInput ErrorCode = "invalid_input"
+	// InputTooLarge is a request bigger than the block will read.
+	InputTooLarge ErrorCode = "input_too_large"
 	Evaluation    ErrorCode = "evaluation_error"
 	CostLimit     ErrorCode = "cost_limit_exceeded"
 	ResourceLimit ErrorCode = "resource_limit_exceeded"
@@ -149,10 +151,17 @@ type NodeTrace struct {
 }
 
 // Budget is shared by every block evaluating one request. It enforces
-// request-wide per-kind limits without exposing pipeline state to a block.
+// request-wide per-kind limits without exposing pipeline state to a block,
+// and keeps what blocks derive from the request so it is derived once.
 type Budget struct {
-	mu     sync.Mutex
-	counts map[approvalblock.BlockType]uint32
+	mu      sync.Mutex
+	counts  map[approvalblock.BlockType]uint32
+	derived map[string]derivation
+}
+
+type derivation struct {
+	value any
+	err   error
 }
 
 // Consume counts one more block of the kind against its per-request
@@ -172,6 +181,28 @@ func (budget *Budget) Consume(kind approvalblock.BlockType, limit uint32) error 
 		return fmt.Errorf("%s block count exceeded", kind)
 	}
 	return nil
+}
+
+// Derive returns what build derives from the request under key, building
+// it on the first call only, a failure included: the request is fixed for
+// the evaluation, so every block reading it gets the same answer. The
+// value is shared and must not be modified. A nil budget builds every
+// time.
+func (budget *Budget) Derive(key string, build func() (any, error)) (any, error) {
+	if budget == nil {
+		return build()
+	}
+	budget.mu.Lock()
+	defer budget.mu.Unlock()
+	if derived, ok := budget.derived[key]; ok {
+		return derived.value, derived.err
+	}
+	value, err := build()
+	if budget.derived == nil {
+		budget.derived = make(map[string]derivation)
+	}
+	budget.derived[key] = derivation{value: value, err: err}
+	return value, err
 }
 
 // executionError carries the safe code of a failed evaluation alongside
