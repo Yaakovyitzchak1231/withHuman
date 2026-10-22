@@ -19,12 +19,15 @@ const (
 	DefaultTimeout = 50 * time.Millisecond
 	MaximumTimeout = time.Second
 
-	MaximumConditionDepth       = 12
-	MaximumConditionNodes       = 128
-	MaximumBlockDocumentBytes   = 64 * 1024
-	MaximumExpressionBytes      = 4 * 1024
-	MaximumRegexBytes           = 512
-	MaximumRequestInputBytes    = 64 * 1024
+	MaximumConditionDepth     = 12
+	MaximumConditionNodes     = 128
+	MaximumBlockDocumentBytes = 64 * 1024
+	MaximumExpressionBytes    = 4 * 1024
+	MaximumRegexBytes         = 512
+	// MaximumRequestInputBytes bounds the tool, server, arguments and agent
+	// a condition or webhook reads. Agents write whole files in one call,
+	// so it is well above a typical call; a bigger one goes to a person.
+	MaximumRequestInputBytes    = 1 << 20
 	MaximumComprehensionEntries = 1_000
 	MaximumEvaluationCost       = 10_000
 	// MaximumConditionsPerRequest bounds the condition evaluations one run

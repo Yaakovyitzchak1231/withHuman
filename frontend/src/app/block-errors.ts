@@ -7,6 +7,7 @@ import { extensions } from "./extensions";
  * adds labels the codes only it reports through its registry entry. */
 const BLOCK_ERROR_LABEL: Record<string, string> = {
   invalid_input: "the request could not be read",
+  input_too_large: "the request is too large to check",
   evaluation_error: "a condition could not be evaluated",
   cost_limit_exceeded: "the conditions cost too much to evaluate",
   resource_limit_exceeded: "the conditions exceeded a resource limit",
