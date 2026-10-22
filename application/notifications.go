@@ -187,6 +187,10 @@ type SendApprovalPromptInput struct {
 	Request        domain.ApprovalRequest
 	RoutingOutcome domain.RoutingOutcome
 	Recipients     []NotificationRecipient
+	// Summary is the edition's one-line description of the request, when
+	// one was written and the organization lets notifications carry it.
+	// Channels lead with it in place of the tool name; empty means none.
+	Summary string
 }
 
 func (input SendApprovalPromptInput) Validate() error {
@@ -204,11 +208,15 @@ func (input SendApprovalPromptInput) Validate() error {
 // SendApprovalDigestInput tells one person, on the one kind the recipient
 // is narrowed to, that several requests are waiting: the held requests a
 // notification window handed back, newest first. A digest summarises and
-// links; it never carries a decision or the request arguments.
+// links; it never carries a decision or the request arguments, only the
+// summaries the edition allows notifications to carry.
 type SendApprovalDigestInput struct {
 	OrganizationID domain.ID
 	Recipient      NotificationRecipient
 	Requests       []domain.ApprovalRequest
+	// Summaries are the requests' summaries notifications may carry, by
+	// request ID; a request without one is named by its tool.
+	Summaries map[domain.ID]string
 }
 
 func (input SendApprovalDigestInput) Validate() error {

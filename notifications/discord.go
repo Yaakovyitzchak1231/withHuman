@@ -59,7 +59,7 @@ func (c *DiscordChannel) SendApprovalPrompt(ctx context.Context, input applicati
 	if err != nil {
 		return err
 	}
-	content, embeds, components := discordPromptMessage(input.Request, c.publicOrigin+"/queue/"+string(input.Request.ID))
+	content, embeds, components := discordPromptMessage(approvalMessageFor(input.Request, input.Summary), c.publicOrigin+"/queue/"+string(input.Request.ID))
 	var failures []error
 	for _, recipient := range input.Recipients {
 		if recipient.DiscordUserID == "" {
@@ -90,7 +90,7 @@ func (c *DiscordChannel) SendApprovalDigest(ctx context.Context, input applicati
 	if err != nil {
 		return err
 	}
-	content, embeds, components := discordDigestMessage(input.Requests, c.publicOrigin+"/queue")
+	content, embeds, components := discordDigestMessage(approvalMessagesFor(input.Requests, input.Summaries), c.publicOrigin+"/queue")
 	if err := c.messenger.SendDirectMessage(ctx, application.DiscordDirectMessageInput{
 		DiscordUserID: input.Recipient.DiscordUserID, Content: content, Embeds: embeds, Components: components,
 	}); err != nil {
@@ -104,18 +104,23 @@ func (c *DiscordChannel) SendTransactional(context.Context, application.SendTran
 }
 
 // discordPromptMessage renders the prompt as one embed and a link button.
-// As with email and Slack, it carries the tool, the agent, and the
-// deadline, and never the request arguments: a direct message is
-// searchable and forwardable, and the reviewer decides in the product
-// where authorization applies. The button is a link (style 5), not an
-// interaction: deciding from Discord is a later question with its own
-// authentication answer.
-func discordPromptMessage(request domain.ApprovalRequest, requestURL string) (string, json.RawMessage, json.RawMessage) {
+// As with email and Slack, it carries the request's summary when it has
+// one, the tool, the agent, and the deadline, and never the request
+// arguments: a direct message is searchable and forwardable, and the
+// reviewer decides in the product where authorization applies. The button
+// is a link (style 5), not an interaction: deciding from Discord is a later
+// question with its own authentication answer.
+func discordPromptMessage(request approvalMessageRequest, requestURL string) (string, json.RawMessage, json.RawMessage) {
 	content := fmt.Sprintf("%s is waiting for your approval", request.Tool)
+	title, description := "Approval needed", fmt.Sprintf("`%s` is waiting for your approval.", request.Tool)
+	if request.Summary != "" {
+		content = fmt.Sprintf("%s is waiting for your approval", discordEscape(request.Summary))
+		title, description = truncateRunes(request.Summary, discordTitleLimit), "Waiting for your approval."
+	}
 	deadline := strconv.FormatInt(request.DeadlineAt.Unix(), 10)
 	embeds := []map[string]any{{
-		"title":       "Approval needed",
-		"description": fmt.Sprintf("`%s` is waiting for your approval.", request.Tool),
+		"title":       title,
+		"description": description,
 		"fields": []map[string]any{
 			{"name": "Tool", "value": request.Tool, "inline": true},
 			{"name": "Agent", "value": fmt.Sprintf("%s (%s)", request.AgentName, request.AgentInstanceName), "inline": true},
@@ -134,12 +139,16 @@ func discordPromptMessage(request domain.ApprovalRequest, requestURL string) (st
 
 // discordDigestMessage renders a digest as one embed listing the waiting
 // requests, each linking to itself, and a link button to the queue.
-func discordDigestMessage(requests []domain.ApprovalRequest, queueURL string) (string, json.RawMessage, json.RawMessage) {
+func discordDigestMessage(requests []approvalMessageRequest, queueURL string) (string, json.RawMessage, json.RawMessage) {
 	content := fmt.Sprintf("%d approvals waiting", len(requests))
 	shown, more := digestShown(requests)
 	lines := make([]string, 0, len(shown)+1)
 	for _, request := range shown {
-		lines = append(lines, fmt.Sprintf("- [`%s`](%s/%s) from %s (%s)", request.Tool, queueURL, request.ID, request.AgentName, request.AgentInstanceName))
+		label := fmt.Sprintf("`%s`", request.Tool)
+		if request.Summary != "" {
+			label = discordEscape(request.Summary)
+		}
+		lines = append(lines, fmt.Sprintf("- [%s](%s/%s) from %s (%s)", label, queueURL, request.ID, request.AgentName, request.AgentInstanceName))
 	}
 	if more > 0 {
 		lines = append(lines, fmt.Sprintf("And %d more.", more))
@@ -157,6 +166,17 @@ func discordDigestMessage(requests []domain.ApprovalRequest, queueURL string) (s
 	}}
 	return content, marshalForDiscord(embeds), marshalForDiscord(components)
 }
+
+// discordTitleLimit is the most characters an embed title takes; Discord
+// rejects the whole message over it.
+const discordTitleLimit = 256
+
+// discordEscape keeps a summary literal in Discord markdown, so it cannot
+// form a link, a mention or formatting.
+var discordEscape = strings.NewReplacer(
+	`\`, `\\`, "*", `\*`, "_", `\_`, "~", `\~`, "`", "\\`", "|", `\|`,
+	"[", `\[`, "]", `\]`, "<", `\<`, ">", `\>`,
+).Replace
 
 // marshalForDiscord keeps Discord's <t:...> timestamp markup readable:
 // the default encoder escapes angle brackets for HTML, which Discord

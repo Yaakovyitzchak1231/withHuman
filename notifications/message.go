@@ -20,12 +20,13 @@ type mailMessage struct {
 
 // approvalPromptMessage renders the reviewer prompt.
 //
-// The body deliberately carries the tool name, the agent that asked, and
-// the deadline, but never the request arguments: mail is forwardable and
-// long-lived, while arguments routinely hold customer data. The reviewer
-// follows the link and decides in the product, where authorization applies
-// and the decision joins the audit trail.
-func approvalPromptMessage(request approvalMailRequest, recipient application.NotificationRecipient, address, queueURL string) mailMessage {
+// The body deliberately carries the request's summary when it has one, the
+// tool name, the agent that asked, and the deadline, but never the request
+// arguments: mail is forwardable and long-lived, while arguments routinely
+// hold customer data. The reviewer follows the link and decides in the
+// product, where authorization applies and the decision joins the audit
+// trail.
+func approvalPromptMessage(request approvalMessageRequest, recipient application.NotificationRecipient, address, queueURL string) mailMessage {
 	greeting := "Hello,"
 	if name := strings.TrimSpace(recipient.DisplayName); name != "" {
 		greeting = fmt.Sprintf("Hello %s,", name)
@@ -33,19 +34,24 @@ func approvalPromptMessage(request approvalMailRequest, recipient application.No
 	lines := []string{
 		greeting,
 		"",
-		fmt.Sprintf("%s is waiting for your approval.", request.Tool),
+		fmt.Sprintf("%s is waiting for your approval.", request.headline()),
 		"",
 		fmt.Sprintf("Agent: %s (%s)", request.AgentName, request.AgentInstanceName),
+	}
+	if request.Summary != "" {
+		lines = append(lines, fmt.Sprintf("Tool: %s", request.Tool))
+	}
+	lines = append(lines,
 		fmt.Sprintf("Expires: %s", request.DeadlineAt.UTC().Format(time.RFC1123)),
 		"",
 		"Review it here:",
 		queueURL,
 		"",
 		"The request details are in the app, where your decision is recorded.",
-	}
+	)
 	return mailMessage{
 		To:      address,
-		Subject: fmt.Sprintf("Approval needed: %s", request.Tool),
+		Subject: fmt.Sprintf("Approval needed: %s", request.headline()),
 		Body:    strings.Join(lines, "\r\n"),
 	}
 }
@@ -56,7 +62,7 @@ const digestListLimit = 10
 
 // digestShown splits a digest's requests into the ones it names and how
 // many more it only counts.
-func digestShown(requests []domain.ApprovalRequest) ([]domain.ApprovalRequest, int) {
+func digestShown[T any](requests []T) ([]T, int) {
 	if len(requests) <= digestListLimit {
 		return requests, 0
 	}
@@ -64,23 +70,24 @@ func digestShown(requests []domain.ApprovalRequest) ([]domain.ApprovalRequest, i
 }
 
 // approvalDigestMessage renders a notification window's digest: one line
-// per request with its link, then the queue. Like the prompt it names the
-// tool, the agent and the deadline, never the arguments.
-func approvalDigestMessage(input application.SendApprovalDigestInput, address string, requestURL func(domain.ID) string, queueURL string) mailMessage {
+// per request with its link, then the queue. Like the prompt it names each
+// request by its summary or its tool, with the agent and the deadline, and
+// never the arguments.
+func approvalDigestMessage(recipient application.NotificationRecipient, requests []approvalMessageRequest, address string, requestURL func(domain.ID) string, queueURL string) mailMessage {
 	greeting := "Hello,"
-	if name := strings.TrimSpace(input.Recipient.DisplayName); name != "" {
+	if name := strings.TrimSpace(recipient.DisplayName); name != "" {
 		greeting = fmt.Sprintf("Hello %s,", name)
 	}
-	shown, more := digestShown(input.Requests)
+	shown, more := digestShown(requests)
 	lines := []string{
 		greeting,
 		"",
-		fmt.Sprintf("%d requests are waiting for your approval:", len(input.Requests)),
+		fmt.Sprintf("%d requests are waiting for your approval:", len(requests)),
 		"",
 	}
 	for _, request := range shown {
 		lines = append(lines,
-			fmt.Sprintf("- %s from %s (%s), expires %s", request.Tool, request.AgentName, request.AgentInstanceName, request.DeadlineAt.UTC().Format(time.RFC1123)),
+			fmt.Sprintf("- %s from %s (%s), expires %s", request.headline(), request.AgentName, request.AgentInstanceName, request.DeadlineAt.UTC().Format(time.RFC1123)),
 			"  "+requestURL(request.ID))
 	}
 	if more > 0 {
@@ -95,7 +102,7 @@ func approvalDigestMessage(input application.SendApprovalDigestInput, address st
 	)
 	return mailMessage{
 		To:      address,
-		Subject: fmt.Sprintf("%d approvals waiting", len(input.Requests)),
+		Subject: fmt.Sprintf("%d approvals waiting", len(requests)),
 		Body:    strings.Join(lines, "\r\n"),
 	}
 }
@@ -236,14 +243,56 @@ func (m mailMessage) encode(from string, now time.Time) []byte {
 	return []byte(builder.String())
 }
 
-// approvalMailRequest is the subset of an approval request the email needs.
-// Keeping it explicit is what stops the arguments from drifting into the
-// message body later.
-type approvalMailRequest struct {
+// approvalMessageRequest is the subset of an approval request that email,
+// Slack and Discord messages carry. Keeping it explicit is what stops the
+// arguments from drifting into a message later. Summary is the one
+// exception that carries argument values: the edition writes it and checks
+// it against the arguments, and it is only passed when the organization
+// allows summaries in notifications.
+type approvalMessageRequest struct {
+	ID                domain.ID
 	Tool              string
+	Summary           string
 	AgentName         string
 	AgentInstanceName string
 	DeadlineAt        time.Time
+}
+
+// approvalMessageFor copies what a message may carry out of the request.
+// The summary is folded onto one line, so it can never break a mail header
+// or a chat message's layout.
+func approvalMessageFor(request domain.ApprovalRequest, summary string) approvalMessageRequest {
+	return approvalMessageRequest{
+		ID: request.ID, Tool: request.Tool, Summary: strings.Join(strings.Fields(summary), " "),
+		AgentName: request.AgentName, AgentInstanceName: request.AgentInstanceName, DeadlineAt: request.DeadlineAt,
+	}
+}
+
+// approvalMessagesFor is approvalMessageFor over a digest's requests.
+func approvalMessagesFor(requests []domain.ApprovalRequest, summaries map[domain.ID]string) []approvalMessageRequest {
+	messages := make([]approvalMessageRequest, 0, len(requests))
+	for _, request := range requests {
+		messages = append(messages, approvalMessageFor(request, summaries[request.ID]))
+	}
+	return messages
+}
+
+// headline names the request: its summary when it has one, else its tool.
+func (r approvalMessageRequest) headline() string {
+	if r.Summary != "" {
+		return r.Summary
+	}
+	return r.Tool
+}
+
+// truncateRunes shortens text to at most limit characters, for chat fields
+// that reject longer values outright.
+func truncateRunes(text string, limit int) string {
+	runes := []rune(text)
+	if len(runes) <= limit {
+		return text
+	}
+	return string(runes[:limit-1]) + "…"
 }
 
 func validAddress(address string) bool {

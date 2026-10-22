@@ -76,10 +76,7 @@ func (c *SMTPChannel) SendApprovalPrompt(ctx context.Context, input application.
 	if err := input.Validate(); err != nil {
 		return err
 	}
-	request := approvalMailRequest{
-		Tool: input.Request.Tool, AgentName: input.Request.AgentName,
-		AgentInstanceName: input.Request.AgentInstanceName, DeadlineAt: input.Request.DeadlineAt,
-	}
+	request := approvalMessageFor(input.Request, input.Summary)
 	queueURL := c.requestURL(input.Request.ID)
 	var failures []error
 	for _, recipient := range input.Recipients {
@@ -101,12 +98,13 @@ func (c *SMTPChannel) SendApprovalDigest(ctx context.Context, input application.
 	if err := input.Validate(); err != nil {
 		return err
 	}
+	requests := approvalMessagesFor(input.Requests, input.Summaries)
 	var failures []error
 	for _, address := range input.Recipient.Emails {
 		if !validAddress(address) {
 			continue
 		}
-		if err := c.send(approvalDigestMessage(input, address, c.requestURL, c.queueURL())); err != nil {
+		if err := c.send(approvalDigestMessage(input.Recipient, requests, address, c.requestURL, c.queueURL())); err != nil {
 			failures = append(failures, err)
 		}
 	}

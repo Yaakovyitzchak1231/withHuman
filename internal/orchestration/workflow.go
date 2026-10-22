@@ -91,13 +91,15 @@ func ApprovalWorkflow(ctx workflow.Context, input ApprovalWorkflowInput) error {
 	// notification planning and are never waited on: their result cannot
 	// delay a prompt, and a decision that lands first ends the workflow
 	// without them.
-	startHumanReviewHooks(ctx, request)
+	hooks := startHumanReviewHooks(ctx, request)
 
 	// Notification delivery never controls the request outcome. Each step
 	// fires on its own timer and delivers in a detached goroutine, so a
 	// slow or failing send cannot delay a decision. A decision or any
-	// claim cancels the steps still to come.
-	steps := &stepRunner{ctx: ctx, request: request}
+	// claim cancels the steps still to come. A step due before the hooks
+	// finish waits for them, at most humanReviewHookWait from now, so a
+	// summary they write can reach the first prompt.
+	steps := &stepRunner{ctx: ctx, request: request, hooks: hooks, hooksBy: workflow.Now(ctx).Add(humanReviewHookWait)}
 
 	// An escalated request walks its pinned path level by level; the
 	// program is loaded once and the machine replays deterministically
@@ -324,6 +326,30 @@ type stepRunner struct {
 	request domain.ApprovalRequest
 	cancels []workflow.CancelFunc
 	pending []*pendingNotification
+	// hooks is the human review hooks' activity, which a step waits for
+	// until hooksBy before it delivers.
+	hooks   workflow.Future
+	hooksBy time.Time
+}
+
+// awaitHooks holds a step until the hooks finish or hooksBy passes,
+// whichever is first; it reports false when the step was cancelled while
+// waiting.
+func (r *stepRunner) awaitHooks(ctx workflow.Context) bool {
+	if r.hooks == nil || r.hooks.IsReady() {
+		return true
+	}
+	remaining := r.hooksBy.Sub(workflow.Now(ctx))
+	if remaining <= 0 {
+		return true
+	}
+	timerCtx, cancelTimer := workflow.WithCancel(ctx)
+	defer cancelTimer()
+	selector := workflow.NewSelector(ctx)
+	selector.AddFuture(r.hooks, func(workflow.Future) {})
+	selector.AddFuture(workflow.NewTimer(timerCtx, remaining), func(workflow.Future) {})
+	selector.Select(ctx)
+	return ctx.Err() == nil
 }
 
 type pendingNotification struct {
@@ -345,6 +371,9 @@ func (r *stepRunner) spawn(steps []application.NotificationStep) {
 				if err := workflow.Sleep(stepContext, step.Delay); err != nil {
 					return
 				}
+			}
+			if !r.awaitHooks(stepContext) {
+				return
 			}
 			pending.fired = true
 			if len(pending.step.Recipients) == 0 {
@@ -561,13 +590,18 @@ func resumePipeline(ctx workflow.Context, request domain.ApprovalRequest) (domai
 	return resumed, nil
 }
 
+// humanReviewHookWait is the longest a prompt waits for the edition's
+// human review hooks; past it the prompt goes out without what they write.
+const humanReviewHookWait = 10 * time.Second
+
 // startHumanReviewHooks starts the hooks' activity with a small budget of
-// its own (two attempts, twenty seconds each) and does not wait for it. A
-// worker without hooks finishes it at once.
-func startHumanReviewHooks(ctx workflow.Context, request domain.ApprovalRequest) {
+// its own (two attempts, twenty seconds each). Only notification steps
+// wait for it, and only up to humanReviewHookWait. A worker without hooks
+// finishes it at once.
+func startHumanReviewHooks(ctx workflow.Context, request domain.ApprovalRequest) workflow.Future {
 	hookCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 		StartToCloseTimeout: 20 * time.Second,
 		RetryPolicy:         &temporal.RetryPolicy{InitialInterval: time.Second, MaximumAttempts: 2},
 	})
-	workflow.ExecuteActivity(hookCtx, (*Activities).RunHumanReviewHooks, request)
+	return workflow.ExecuteActivity(hookCtx, (*Activities).RunHumanReviewHooks, request)
 }
