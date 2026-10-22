@@ -522,7 +522,7 @@ export function QueueScreen({
               nextPending={otherPending.length}
               onOpenNext={openNext}
             />
-          ) : visible.length === 0 ? null : (
+          ) : (
             <div className="flex h-full items-center justify-center">
               <EmptyState
                 icon={<InboxIcon />}
