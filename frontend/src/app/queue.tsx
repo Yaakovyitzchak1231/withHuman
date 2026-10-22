@@ -137,13 +137,18 @@ function AgeCell({ request }: { request: ApprovalRequest }) {
   );
 }
 
-/* Rows lead with the verified tool call, named by its presentation when
- * one exists (the tool itself then moves to the second line); the agent
+/* Rows lead with the request's summary when it has one, in plain text,
+ * else the verified tool call, named by its presentation when one exists.
+ * Under a summary or a presentation title the tool moves to the second
+ * line, so a summary arriving later swaps the title in place; the agent
  * identity sits underneath. */
-function rowText(request: ApprovalRequest) {
-  const title = renderTitle(request.presentation?.title, request.arguments);
+export function rowText(request: ApprovalRequest) {
+  const summary = request.summary?.text;
+  const title = summary ? null : renderTitle(request.presentation?.title, request.arguments);
   return {
-    title: title ? (
+    title: summary ? (
+      <span>{summary}</span>
+    ) : title ? (
       <span>
         {title.map((segment, index) =>
           segment.kind === "value" ? (
@@ -160,7 +165,7 @@ function rowText(request: ApprovalRequest) {
     ),
     description: (
       <>
-        {title ? (
+        {summary || title ? (
           <>
             <span className="font-mono text-[11px]">{request.tool}</span>
             <span className="text-ink-faint"> · </span>

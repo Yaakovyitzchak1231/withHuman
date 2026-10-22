@@ -26,6 +26,7 @@ type Activities struct {
 	escalation    application.EscalationRepository
 	notified      application.ApprovalNotificationRecorder
 	windows       application.NotificationWindowRepository
+	reviewHooks   []application.HumanReviewHook
 }
 
 // PipelineResumer runs the asynchronous segment of a suspended pipeline
@@ -70,6 +71,27 @@ func WithNotificationWindows(windows application.NotificationWindowRepository) A
 	return func(a *Activities) {
 		a.windows = windows
 	}
+}
+
+// WithHumanReviewHooks tells the edition's hooks when a request starts
+// waiting for a person. Without any the activity does nothing.
+func WithHumanReviewHooks(hooks ...application.HumanReviewHook) ActivityOption {
+	return func(a *Activities) {
+		a.reviewHooks = hooks
+	}
+}
+
+// RunHumanReviewHooks calls every hook with the routed request. One
+// failing hook does not stop the others; the joined error lets Temporal
+// retry within the workflow's small budget, so hooks must be idempotent.
+func (a *Activities) RunHumanReviewHooks(ctx context.Context, request domain.ApprovalRequest) error {
+	var failures []error
+	for _, hook := range a.reviewHooks {
+		if err := hook.HumanReviewRequested(ctx, application.HumanReviewRequestedInput{Request: request}); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	return errors.Join(failures...)
 }
 
 // recordNotified writes the people a plan addressed, before reachability

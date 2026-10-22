@@ -104,7 +104,10 @@ type Dependencies struct {
 	// ToolPresentations resolves how each request's arguments are shown
 	// and manages the organization's own presentations.
 	ToolPresentations *toolpresentations.Service
-	Identities        application.IdentityRepository
+	// RequestSummaries reads the edition's one-line request summaries;
+	// nil carries none.
+	RequestSummaries application.RequestSummaryReader
+	Identities       application.IdentityRepository
 	// Roles resolves role rows and assignments for the views that show
 	// them: /me, invitation grants, and the domain's JIT default role.
 	Roles             application.RoleRepository
@@ -150,6 +153,7 @@ type API struct {
 	orgSettings        *orgsettings.Service
 	installation       *heartbeat.StatusReader
 	toolPresentations  *toolpresentations.Service
+	requestSummaries   application.RequestSummaryReader
 	roles              application.RoleRepository
 	permissionPolicies application.PermissionPolicyRepository
 	identities         application.IdentityRepository
@@ -190,7 +194,8 @@ func newAPI(dependencies Dependencies) *API {
 		teams:    dependencies.Teams,
 		webhooks: dependencies.WebhookEndpoints, onboarding: dependencies.Onboarding, orgSettings: dependencies.OrgSettings, installation: dependencies.Installation,
 		toolPresentations: dependencies.ToolPresentations, toolCatalog: dependencies.ToolCatalog,
-		identities: dependencies.Identities, roles: dependencies.Roles, approvalRepo: dependencies.ApprovalRepo,
+		requestSummaries: dependencies.RequestSummaries,
+		identities:       dependencies.Identities, roles: dependencies.Roles, approvalRepo: dependencies.ApprovalRepo,
 		orchestrator:      dependencies.Orchestrator,
 		pipelines:         dependencies.Pipelines,
 		compiledPipelines: dependencies.CompiledPipelines, routing: dependencies.Routing,

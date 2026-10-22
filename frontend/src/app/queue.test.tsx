@@ -13,7 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ToastProvider } from "@/ds/components/toast";
 import { TooltipProvider } from "@/ds/components/tooltip";
 import type { ApprovalRequest } from "../types";
-import { QueueScreen } from "./queue";
+import { QueueScreen, rowText } from "./queue";
 import { validateQueueSearch, type QueueFilter } from "./queue-search";
 
 const useQueue = vi.fn((_scope: string) => ({ requests, loaded: true, loadFailed: false }));
@@ -255,5 +255,45 @@ describe("review queue load failure", () => {
     expect(screen.queryByRole("listbox", { name: "Review queue" })).toBeNull();
     useQueue.mockReset();
     useQueue.mockImplementation(() => ({ requests, loaded: true, loadFailed: false }));
+  });
+});
+
+describe("review queue row text", () => {
+  const refund = {
+    ...requests[0],
+    tool: "stripe.refunds.create",
+    arguments: { amount: 4900 },
+    presentation: { source: "built_in", title: "Refund {{/amount}}", fields: [] },
+  } as ApprovalRequest;
+
+  function renderRow(request: ApprovalRequest) {
+    const { title, description } = rowText(request);
+    const view = render(<><p data-testid="title">{title}</p><p data-testid="description">{description}</p></>);
+    const titleLine = view.getByTestId("title");
+    const descriptionLine = view.getByTestId("description");
+    return { titleLine, descriptionLine };
+  }
+
+  it("leads with the summary in plain text and moves the tool to the second line", () => {
+    const { titleLine, descriptionLine } = renderRow({
+      ...refund,
+      summary: { text: "Refund $49.00 on charge ch_3N1x for a faulty bag", generated_at: "2026-09-21T10:00:03Z" },
+    });
+    expect(titleLine.textContent).toBe("Refund $49.00 on charge ch_3N1x for a faulty bag");
+    expect(titleLine.querySelector(".font-mono")).toBeNull();
+    expect(descriptionLine.querySelector(".font-mono")?.textContent).toBe("stripe.refunds.create");
+    expect(descriptionLine.textContent).toBe("stripe.refunds.create · Test agent · Test instance");
+  });
+
+  it("keeps the presentation title, or the tool, without a summary", () => {
+    const presented = renderRow(refund);
+    expect(presented.titleLine.textContent).toBe("Refund 4900");
+    expect(presented.titleLine.querySelector(".font-mono")?.textContent).toBe("4900");
+    expect(presented.descriptionLine.textContent).toBe("stripe.refunds.create · Test agent · Test instance");
+    cleanup();
+
+    const bare = renderRow({ ...refund, presentation: undefined });
+    expect(bare.titleLine.textContent).toBe("stripe.refunds.create");
+    expect(bare.descriptionLine.textContent).toBe("Test agent · Test instance");
   });
 });

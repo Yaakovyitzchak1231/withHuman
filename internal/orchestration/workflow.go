@@ -87,6 +87,12 @@ func ApprovalWorkflow(ctx workflow.Context, input ApprovalWorkflowInput) error {
 		return nil
 	}
 
+	// The edition's human review hooks (the hosted summarizer) run beside
+	// notification planning and are never waited on: their result cannot
+	// delay a prompt, and a decision that lands first ends the workflow
+	// without them.
+	startHumanReviewHooks(ctx, request)
+
 	// Notification delivery never controls the request outcome. Each step
 	// fires on its own timer and delivers in a detached goroutine, so a
 	// slow or failing send cannot delay a decision. A decision or any
@@ -553,4 +559,15 @@ func resumePipeline(ctx workflow.Context, request domain.ApprovalRequest) (domai
 		return domain.ApprovalRequest{}, err
 	}
 	return resumed, nil
+}
+
+// startHumanReviewHooks starts the hooks' activity with a small budget of
+// its own (two attempts, twenty seconds each) and does not wait for it. A
+// worker without hooks finishes it at once.
+func startHumanReviewHooks(ctx workflow.Context, request domain.ApprovalRequest) {
+	hookCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		StartToCloseTimeout: 20 * time.Second,
+		RetryPolicy:         &temporal.RetryPolicy{InitialInterval: time.Second, MaximumAttempts: 2},
+	})
+	workflow.ExecuteActivity(hookCtx, (*Activities).RunHumanReviewHooks, request)
 }

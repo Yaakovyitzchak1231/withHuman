@@ -47,7 +47,7 @@ import { cn } from "@/ds/lib/cn";
 import { api } from "../api";
 import { AddReviewerMenu } from "./add-reviewer-menu";
 import { ArgumentView } from "./argument-view";
-import { planArguments, renderTitle, titleText } from "./tool-presentation";
+import { planArguments, renderTitle, titleText, type TitleSegment } from "./tool-presentation";
 import { useAccess } from "./authorization";
 import { auditLinkProps, extensions, useAuditLinks } from "./extensions";
 import { preloadedReview } from "./queue-store";
@@ -220,7 +220,7 @@ export function RequestDetail({
         setSaving(null);
       }
     },
-    [note, request.id, request.tool, onDecided, toast],
+    [note, request, onDecided, toast],
   );
 
   /* The buttons and the shortcuts both land here. A denial needs its
@@ -306,6 +306,7 @@ export function RequestDetail({
     () => renderTitle(request.presentation?.title, request.arguments),
     [request.presentation, request.arguments],
   );
+  const summary = request.summary?.text;
   const showSummary = argumentsView === "summary";
   const payloadJSON = JSON.stringify(request.arguments, null, 2);
   const canEditPresentations = holdsAnywhere("organization.settings.write");
@@ -319,19 +320,25 @@ export function RequestDetail({
           The exact tool name lives in the history's detail list. */}
       <PageHeader back={onBack ? <PageBackButton onClick={onBack}>Queue</PageBackButton> : undefined}>
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-          <h1 className="text-title-lg text-ink">
-            {title
-              ? title.map((segment, index) =>
-                  segment.kind === "value" ? (
-                    <span key={index} className="font-mono text-[0.82em] text-ink-secondary">
-                      {segment.text}
-                    </span>
-                  ) : (
-                    <Fragment key={index}>{segment.text}</Fragment>
-                  ),
-                )
-              : humanizeTool(request.tool)}
-          </h1>
+          {/* A summary takes the title's place, marked as written by AI;
+              the verified title stays visible underneath it. */}
+          {summary ? (
+            <div className="flex w-full flex-col gap-0.5">
+              <p className="text-micro text-ink-faint">AI summary</p>
+              <h1 className="text-title-lg text-ink">{summary}</h1>
+              <p className="text-body text-ink-muted">
+                {title ? <TitleSegments segments={title} /> : humanizeTool(request.tool)}
+              </p>
+            </div>
+          ) : (
+            <h1 className="text-title-lg text-ink">
+              {title ? (
+                <TitleSegments segments={title} valueClassName="text-ink-secondary" />
+              ) : (
+                humanizeTool(request.tool)
+              )}
+            </h1>
+          )}
           <span className="flex flex-wrap items-center gap-1 text-label text-ink-muted">
             by
             <Referenced
@@ -1209,11 +1216,32 @@ function Details({ request, review }: { request: ApprovalRequest; review: Approv
   );
 }
 
-/* The request's name for a toast or a tab: the presentation's title
- * with its values, else the humanised tool name. */
-function requestTitle(request: ApprovalRequest): string {
+/* The request's name for a toast or a tab: its summary when it has one,
+ * else the presentation's title with its values, else the humanised
+ * tool name. */
+export function requestTitle(request: ApprovalRequest): string {
+  if (request.summary?.text) return request.summary.text;
   const segments = renderTitle(request.presentation?.title, request.arguments);
   return segments ? titleText(segments) : humanizeTool(request.tool);
+}
+
+/* A presentation title with its argument values set in mono. */
+function TitleSegments({
+  segments,
+  valueClassName,
+}: {
+  segments: TitleSegment[];
+  valueClassName?: string;
+}) {
+  return segments.map((segment, index) =>
+    segment.kind === "value" ? (
+      <span key={index} className={cn("font-mono text-[0.82em]", valueClassName)}>
+        {segment.text}
+      </span>
+    ) : (
+      <Fragment key={index}>{segment.text}</Fragment>
+    ),
+  );
 }
 
 /* Where the call came from, for the presentation editor to bind to: the

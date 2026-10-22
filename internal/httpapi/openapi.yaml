@@ -7720,6 +7720,15 @@ components:
             presentation:
               description: "How to show the arguments: the resolved tool presentation, from the organization's own entries or the shipped catalog. Absent when neither names the tool, in which case the client renders the arguments by their shape. A reading aid only: the arguments stay the complete description of the action, and a presentation never hides one."
               $ref: "#/components/schemas/ResolvedToolPresentation"
+            summary:
+              description: "A one-line description of the request written for reviewers, on editions that write them, for requests that reached a person. Absent until one is written. A reading aid only, like the presentation."
+              $ref: "#/components/schemas/RequestSummary"
+    RequestSummary:
+      type: object
+      required: [text, generated_at]
+      properties:
+        text: { type: string, maxLength: 140, example: "Refund $49.00 on charge ch_3N1x for a faulty bag" }
+        generated_at: { type: string, format: date-time, example: "2026-09-08T12:00:03Z" }
     Claim:
       type: object
       description: "A reviewer's claim on a pending request: an advisory marker that they are looking at it. Absent once released, lapsed, or the request is no longer pending."

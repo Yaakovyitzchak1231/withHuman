@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 import type { ApprovalRequest } from "../types";
-import { requestMoments } from "./request-detail";
+import { humanizeTool } from "./format";
+import { requestMoments, requestTitle } from "./request-detail";
 
 const approved = {
   id: "request-1",
@@ -41,5 +42,27 @@ describe("requestMoments", () => {
     expect(result.tone).toBe("deny");
     expect(result.title).toBe("Call failed");
     expect(result.detail).toBe("Card declined");
+  });
+});
+
+describe("requestTitle", () => {
+  const refund = {
+    ...approved,
+    tool: "stripe.refunds.create",
+    arguments: { amount: 4900 },
+    presentation: { source: "built_in", title: "Refund {{/amount}}", fields: [] },
+  } as ApprovalRequest;
+
+  it("names the request by its summary when it has one", () => {
+    const summarized = {
+      ...refund,
+      summary: { text: "Refund $49.00 on charge ch_3N1x for a faulty bag", generated_at: "2026-09-21T10:00:03Z" },
+    };
+    expect(requestTitle(summarized)).toBe("Refund $49.00 on charge ch_3N1x for a faulty bag");
+  });
+
+  it("falls back to the presentation title, then the tool", () => {
+    expect(requestTitle(refund)).toBe("Refund 4900");
+    expect(requestTitle({ ...refund, presentation: undefined })).toBe(humanizeTool("stripe.refunds.create"));
   });
 });

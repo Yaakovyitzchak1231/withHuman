@@ -77,6 +77,10 @@ type WorkerOptions struct {
 	// server composes with, so the worker resumes suspended pipelines
 	// through the same runtimes.
 	ApprovalBlocks []blockruntime.Runtime
+	// HumanReviewHooks are told once a request waits for a person (the
+	// hosted summarizer). They run beside notification planning, never
+	// before it, and their failures are logged and dropped.
+	HumanReviewHooks []application.HumanReviewHook
 }
 
 // WorkerContext is what an edition's extra workflows may build on: the
@@ -178,7 +182,8 @@ func RunWorker(ctx context.Context, options WorkerOptions) error {
 	routingEvaluation := reviewrouting.NewEvaluationService(store, clock, logger)
 	approvalWorker.RegisterActivity(orchestration.NewActivities(store, store, store, notifier, clock,
 		orchestration.WithPipeline(pipelineExecution, routingEvaluation), orchestration.WithEscalation(store),
-		orchestration.WithNotificationRecords(store), orchestration.WithNotificationWindows(store)))
+		orchestration.WithNotificationRecords(store), orchestration.WithNotificationWindows(store),
+		orchestration.WithHumanReviewHooks(options.HumanReviewHooks...)))
 	approvalWorker.RegisterWorkflow(orchestration.OrganizationDeletionWorkflow)
 	approvalWorker.RegisterActivity(orchestration.NewTenantActivities(store, clock))
 	if options.RegisterExtra != nil {

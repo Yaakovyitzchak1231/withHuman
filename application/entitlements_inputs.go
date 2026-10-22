@@ -42,6 +42,11 @@ const (
 	// DimensionLLMJudgeTokens counts the input and output tokens they used.
 	DimensionLLMJudgeEvaluations Dimension = "llm_judge_evaluations"
 	DimensionLLMJudgeTokens      Dimension = "llm_judge_tokens"
+	// DimensionRequestSummaries counts the summaries an edition writes for
+	// requests that reach a person; DimensionRequestSummaryTokens counts
+	// the model tokens they used.
+	DimensionRequestSummaries     Dimension = "request_summaries"
+	DimensionRequestSummaryTokens Dimension = "request_summary_tokens"
 	// DimensionWebhookDeliveries counts every delivery attempt a webhook
 	// block makes.
 	DimensionWebhookDeliveries Dimension = "webhook_deliveries"

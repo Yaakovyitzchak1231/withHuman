@@ -399,6 +399,15 @@ type queueApprovalResponse struct {
 	// when neither names the tool, and the client renders by shape.
 	// Product-only: it is a reading aid, never part of the action.
 	Presentation *presentationResponse `json:"presentation,omitempty"`
+	// Summary is the edition's one-line description of the request, for
+	// requests that reached a person. Absent in the open edition and
+	// until one is written. Product-only, like the presentation.
+	Summary *requestSummaryResponse `json:"summary,omitempty"`
+}
+
+type requestSummaryResponse struct {
+	Text        string    `json:"text"`
+	GeneratedAt time.Time `json:"generated_at"`
 }
 
 // newQueueApprovalResponse renders an expired claim as absent. Read-time
