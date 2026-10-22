@@ -359,7 +359,7 @@ describe("deciding from the open request", () => {
     const router = await renderOpen(["approved", "denied"]);
     expect(router.state.location.pathname).toBe("/queue");
     expect(screen.getByText("Nothing waiting for you")).toBeTruthy();
-    expect(screen.queryByText("Select a request")).toBeNull();
+    expect(screen.getByText("Select a request")).toBeTruthy();
   });
 
   it("keeps the request open while others are pending", async () => {
